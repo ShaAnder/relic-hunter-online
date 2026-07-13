@@ -20,7 +20,7 @@ Long-term goal: a commercial-grade platform with seasons, cosmetic monetization,
 
 ---
 
-## Tech Stack
+## Tech Stack (Locked)
 
 - **Client Rendering**: PixiJS v8.19.0 (WebGL-powered 2D)
 - **Gameplay Networking**: Colyseus (authoritative game server)
@@ -32,19 +32,55 @@ Full architecture decisions and rationale are in `docs/01-tech-stack-decision.md
 
 ---
 
+## Monorepo & npm Workspaces Setup
+
+We use **npm workspaces** to manage the three packages in this repository (`client`, `server`, and `shared`).
+
+### Why We Set This Up
+
+Before workspaces, importing from `shared` required fragile relative paths like:
+
+```ts
+import { Card } from "../../../shared/src/types/card";
+```
+
+By using npm workspaces, we gain:
+
+- Clean imports using `@relic-hunter/shared`
+- Proper dependency management and deduplication
+- Development symlinks so changes in `shared/` are instantly available to both `client` and `server`
+- A clean foundation for sharing pure game logic between client and server (important for future offline/singleplayer support)
+
+---
+
+## Current Architecture (Client)
+
+We are currently building the client-side foundation using a **Scene-based architecture**:
+
+- `Game` — Owns the PixiJS `Application`, the render loop, and the `SceneManager`.
+- `SceneManager` — Handles scene transitions safely (with race condition protection and proper lifecycle management).
+- `Scene` — Interface that all screens (Lobby, Dungeon, etc.) implement.
+
+This design keeps game logic decoupled from rendering and makes it easier to later move logic to the authoritative server in Phase 3.
+
+---
+
 ## Project Structure
 
 ```
 relic-hunter-online/
-├── client/                 # PixiJS frontend (Vite)
+├── package.json                 # Root workspace file
+├── client/
 │   ├── src/
-│   │   ├── game/           # Core game logic & classes
-│   │   ├── scenes/         # Game scenes (BattleScene, etc.)
-│   │   └── assets/
-│   ├── public/
+│   │   ├── core/
+│   │   │   ├── Game.ts          # Main game controller + render loop
+│   │   │   ├── SceneManager.ts  # Scene transition & lifecycle manager
+│   │   │   └── Scene.ts         # Scene interface
+│   │   ├── scenes/              # Individual scenes (LobbyScene, DungeonScene, etc.)
+│   │   └── main.ts
 │   └── package.json
-├── server/                 # Colyseus authoritative game server
-├── shared/                 # Shared types, schemas, utilities
+├── server/
+├── shared/
 ├── docs/
 │   ├── 01-tech-stack-decision.md
 │   └── 02-development-roadmap.md
@@ -59,28 +95,21 @@ relic-hunter-online/
 ### Prerequisites
 
 - Node.js ≥ 20
-- npm or pnpm
 
-### 1. Clone & Install
+### Install
 
 ```bash
-git clone https://github.com/shaAnder/relic-hunter-online.git
-cd relic-hunter-online
-
-# Install all workspaces
 npm install
 ```
 
-### 2. Run the Client (Development)
+### Run Client
 
 ```bash
 cd client
 npm run dev
 ```
 
-Open `http://localhost:5173` — you should see the Vite starter (we’ll replace this with the actual game soon).
-
-### 3. Run the Server (when we reach Phase 3)
+### Run Server (later)
 
 ```bash
 cd server
@@ -91,29 +120,10 @@ npm run dev
 
 ## Development Roadmap
 
-The full phased plan lives in:
+See `docs/02-development-roadmap.md`
 
-**`docs/02-development-roadmap.md`**
-
-We are currently completing **Phase 0 (Foundation)** and will move into **Phase 1 (Single-Player Core Loop)** immediately after.
-
-Key rule we will follow: **All competitive mechanics become authoritative on the server from Phase 3 onward.** No client-trusted logic for movement, combat, or relic claims.
+We are currently in **Phase 1** — building the client-side scene system and core game loop foundation.
 
 ---
 
-## Contributing / Development Notes
-
-- We follow the roadmap strictly.
-- All major architecture decisions are documented in `docs/`.
-- Before starting new features, check which phase they belong to.
-- Rapid iteration is encouraged, but technical debt that affects future monetization, scalability, or fairness will be called out and fixed early.
-
----
-
-## License
-
-TBD (will be decided before any public release).
-
----
-
-**Status**: Active development — Phase 0 → Phase 1 transition in progress.
+**Status**: Active development — Building client-side `Game` + `SceneManager` system.
