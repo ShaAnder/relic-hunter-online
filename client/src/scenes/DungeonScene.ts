@@ -1,7 +1,12 @@
 import { Container, Graphics } from "pixi.js";
 import type { Scene } from "../core/Scene";
 import type { Game } from "../core/Game";
-import { Grid, TileType, type GridCoord } from "@relic-hunter/shared";
+import {
+	generateDungeon,
+	Grid,
+	TileType,
+	type GridCoord,
+} from "@relic-hunter/shared";
 
 /**
  * DungeonScene renders the grid using isometric projection.
@@ -20,6 +25,7 @@ export class DungeonScene implements Scene {
 	// (e.g. client/src/constants/rendering.ts) so other scenes can use the same values.
 	private readonly TILE_WIDTH = 64;
 	private readonly TILE_HEIGHT = 32;
+	private readonly ZOOM = 0.8;
 
 	private readonly TILE_COLORS: Record<TileType, number> = {
 		[TileType.Floor]: 0x3a3a3a,
@@ -34,6 +40,7 @@ export class DungeonScene implements Scene {
 
 	onEnter(): void {
 		this.renderGrid();
+		this.boardContainer.scale.set(this.ZOOM);
 		this.centerBoard();
 	}
 
@@ -53,14 +60,20 @@ export class DungeonScene implements Scene {
 	 * Creates a small test grid with some walls and an exit.
 	 * This is temporary — real dungeon generation will replace this.
 	 */
+
 	private buildTestGrid(): Grid {
-		const grid = new Grid(8, 8);
-		grid.setTileType({ x: 3, y: 2 }, TileType.Wall);
-		grid.setTileType({ x: 3, y: 3 }, TileType.Wall);
-		grid.setTileType({ x: 3, y: 4 }, TileType.Wall);
-		grid.setTileType({ x: 7, y: 7 }, TileType.Exit);
-		return grid;
+		return generateDungeon(24, 24, { seed: 1337, roomCount: 8 });
 	}
+
+	// old grid, for testing
+	// private buildTestGrid(): Grid {
+	// 	const grid = new Grid(8, 8);
+	// 	grid.setTileType({ x: 3, y: 2 }, TileType.Wall);
+	// 	grid.setTileType({ x: 3, y: 3 }, TileType.Wall);
+	// 	grid.setTileType({ x: 3, y: 4 }, TileType.Wall);
+	// 	grid.setTileType({ x: 7, y: 7 }, TileType.Exit);
+	// 	return grid;
+	// }
 
 	/**
 	 * Converts grid coordinates to screen (pixel) coordinates using isometric projection.
@@ -123,12 +136,17 @@ export class DungeonScene implements Scene {
 	/**
 	 * Centers the entire board on screen.
 	 * Uses boardContainer so we can move the whole grid as one unit.
+	 * Now also uses local bounds + calculation to account for the zoom
 	 */
 	private centerBoard(): void {
+		const bounds = this.boardContainer.getLocalBounds();
 		const screenWidth = this.game.app.screen.width;
 		const screenHeight = this.game.app.screen.height;
 
-		this.boardContainer.x = screenWidth / 2;
-		this.boardContainer.y = screenHeight / 4; // Slight offset so it doesn't feel too low
+		const boundsCenterX = bounds.x + bounds.width / 2;
+		const boundsCenterY = bounds.y + bounds.height / 2;
+
+		this.boardContainer.x = screenWidth / 2 - boundsCenterX * this.ZOOM;
+		this.boardContainer.y = screenHeight / 2 - boundsCenterY * this.ZOOM;
 	}
 }
