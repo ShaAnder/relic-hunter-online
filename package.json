@@ -1,9 +1,15 @@
 {
 	"name": "relic-hunter-online",
 	"private": true,
+	"version": "0.1.0",
 	"workspaces": [
 		"client",
-		"server",
-		"shared"
-	]
+		"shared",
+		"server"
+	],
+	"scripts": {
+		"dev:client": "npm run dev --workspace=client",
+		"build:shared": "npm run build --workspace=@relic-hunter/shared",
+		"dev": "npm run dev:client"
+	}
 }
