@@ -1,11 +1,12 @@
-import { Container, Graphics } from "pixi.js";
+import { Container, Graphics, Text } from "pixi.js";
 import type { Scene } from "../core/Scene";
 import type { Game } from "../core/Game";
+import { Camera } from "../core/Camera";
 import {
-	generateDungeon,
 	Grid,
 	TileType,
 	type GridCoord,
+	generateDungeon,
 } from "@relic-hunter/shared";
 
 /**
@@ -17,136 +18,240 @@ import {
 export class DungeonScene implements Scene {
 	readonly view = new Container();
 
+	// The grid data structure that holds all tile information (walls, floors, exit, etc.)
 	private grid: Grid;
+
+	// Container that holds all the visual tile graphics. This is what gets panned and zoomed.
 	private boardContainer = new Container();
 
-	// Tile dimensions — these are rendering-specific constants.
-	// Eventually we should move them to a shared constants file
-	// (e.g. client/src/constants/rendering.ts) so other scenes can use the same values.
+	// Camera controller responsible for panning and zooming the boardContainer.
+	private camera: Camera;
+
+	// Text object that displays performance stats and controls in the top-left corner.
+	private statsText: Text;
+
+	// Width and height of each isometric tile in pixels.
 	private readonly TILE_WIDTH = 64;
 	private readonly TILE_HEIGHT = 32;
-	private readonly ZOOM = 0.8;
 
+	// Dimensions of the dungeon in tiles.
+	private readonly DUNGEON_WIDTH = 50;
+	private readonly DUNGEON_HEIGHT = 50;
+
+	// Controls how many rooms get generated based on map size.
+	private readonly ROOM_DENSITY = 1 / 50;
+	private readonly ROOM_COUNT = Math.floor(
+		this.DUNGEON_WIDTH * this.DUNGEON_HEIGHT * this.ROOM_DENSITY,
+	);
+
+	// Seed used for dungeon generation. Changing this produces a different map.
+	private dungeonSeed = 133283;
+
+	// Color mapping for different tile types.
 	private readonly TILE_COLORS: Record<TileType, number> = {
 		[TileType.Floor]: 0x3a3a3a,
 		[TileType.Wall]: 0x1a1a1a,
 		[TileType.Exit]: 0xd4af37,
 	};
 
+	// Performance tracking variables.
+	private tileCount = 0;
+	private lastGenerationMs = 0;
+	private lastRenderMs = 0;
+	private fpsRefreshAccumulator = 0;
+
 	constructor(private game: Game) {
-		this.grid = this.buildTestGrid();
+		// Generate the dungeon data using the procedural generator.
+		this.grid = this.buildDungeon();
+
+		// Add the container that will hold all tile graphics.
 		this.view.addChild(this.boardContainer);
+
+		// Initialize the camera and pass it the boardContainer so it can move and scale it.
+		this.camera = new Camera(this.boardContainer, {
+			initialZoom: 1.75,
+			minZoom: 0.75,
+			maxZoom: 3,
+			panSpeed: 700,
+		});
+
+		// Create the stats text in the top-left corner.
+		this.statsText = new Text({
+			text: "",
+			style: { fill: 0xffffff, fontSize: 14, fontFamily: "monospace" },
+		});
+		this.statsText.x = 12;
+		this.statsText.y = 12;
+		this.view.addChild(this.statsText);
 	}
 
 	onEnter(): void {
+		// Draw all the tiles for the first time.
 		this.renderGrid();
-		this.boardContainer.scale.set(this.ZOOM);
-		this.centerBoard();
+
+		// Center the camera on the generated map.
+		this.centerCameraOnBoard();
+
+		// Attach camera input listeners (mouse drag + wheel).
+		this.camera.attach(this.game.app.canvas);
+
+		// Listen for the R key to regenerate the dungeon.
+		window.addEventListener("keydown", this.handleKeyDown);
 	}
 
 	onExit(): void {
+		// Clean up tile graphics and camera listeners when leaving the scene.
 		this.boardContainer.removeChildren();
+		this.camera.detach(this.game.app.canvas);
+		window.removeEventListener("keydown", this.handleKeyDown);
 	}
 
-	update(_deltaTime: number): void {
-		// No per-frame logic yet (movement/animation will go here later)
+	update(deltaTime: number): void {
+		// Update camera position and zoom based on input.
+		this.camera.update(
+			deltaTime,
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
+
+		// Refresh the stats text roughly twice per second.
+		this.fpsRefreshAccumulator += deltaTime;
+		if (this.fpsRefreshAccumulator >= 30) {
+			this.fpsRefreshAccumulator = 0;
+			this.refreshStatsText();
+		}
 	}
 
 	onResize(): void {
-		this.centerBoard();
+		// Intentionally left empty.
+		// We do not want to fight the player’s current camera position on resize.
 	}
 
-	/**
-	 * Creates a small test grid with some walls and an exit.
-	 * This is temporary — real dungeon generation will replace this.
-	 */
+	private buildDungeon(): Grid {
+		// Record start time for performance measurement.
+		const start = performance.now();
 
-	private buildTestGrid(): Grid {
-		return generateDungeon(24, 24, { seed: 1337, roomCount: 8 });
+		// Generate the grid data.
+		const grid = generateDungeon(this.DUNGEON_WIDTH, this.DUNGEON_HEIGHT, {
+			seed: this.dungeonSeed,
+			roomCount: this.ROOM_COUNT,
+		});
+
+		// Store how long generation took.
+		this.lastGenerationMs = performance.now() - start;
+
+		return grid;
 	}
 
-	// old grid, for testing
-	// private buildTestGrid(): Grid {
-	// 	const grid = new Grid(8, 8);
-	// 	grid.setTileType({ x: 3, y: 2 }, TileType.Wall);
-	// 	grid.setTileType({ x: 3, y: 3 }, TileType.Wall);
-	// 	grid.setTileType({ x: 3, y: 4 }, TileType.Wall);
-	// 	grid.setTileType({ x: 7, y: 7 }, TileType.Exit);
-	// 	return grid;
-	// }
+	private handleKeyDown = (event: KeyboardEvent): void => {
+		// Regenerate the dungeon when R is pressed.
+		if (event.key === "r" || event.key === "R") {
+			this.dungeonSeed = Math.floor(Math.random() * 1_000_000);
+			this.grid = this.buildDungeon();
+			this.renderGrid();
+			this.centerCameraOnBoard();
+		}
+	};
 
 	/**
-	 * Converts grid coordinates to screen (pixel) coordinates using isometric projection.
-	 *
-	 * This is the key math that gives the diagonal "from above" look.
+	 * Converts a grid coordinate into screen pixel coordinates.
+	 * Uses the standard isometric projection formula.
 	 */
 	private gridToScreen(coord: GridCoord): { x: number; y: number } {
+		// Isometric projection math.
+		// x position moves right when x increases and left when y increases.
+		// y position moves down when either x or y increases.
 		return {
 			x: (coord.x - coord.y) * (this.TILE_WIDTH / 2),
 			y: (coord.x + coord.y) * (this.TILE_HEIGHT / 2),
 		};
 	}
 
-	/**
-	 * Renders every tile in the grid as a diamond shape.
-	 * Clears previous tiles first so we can safely re-render if the grid changes.
-	 */
 	private renderGrid(): void {
+		// Record start time for performance measurement.
+		const start = performance.now();
+
+		// Clear any previously drawn tiles.
 		this.boardContainer.removeChildren();
 
+		let count = 0;
+
+		// Loop through every tile position in the grid.
 		for (let x = 0; x < this.grid.width; x++) {
 			for (let y = 0; y < this.grid.height; y++) {
+				// Get the tile data at this position.
 				const tile = this.grid.getTile({ x, y });
 				if (!tile) continue;
 
-				const screenPos = this.gridToScreen(tile.coord);
-				const diamond = this.drawTileDiamond(this.TILE_COLORS[tile.type]);
+				count++;
 
+				// Convert grid position to screen position.
+				const screenPos = this.gridToScreen(tile.coord);
+
+				// Create the visual diamond for this tile.
+				const diamond = this.drawTileDiamond(this.TILE_COLORS[tile.type]);
 				diamond.x = screenPos.x;
 				diamond.y = screenPos.y;
+
+				// Add the tile graphic to the board container.
 				this.boardContainer.addChild(diamond);
 			}
 		}
+
+		// Store performance data.
+		this.tileCount = count;
+		this.lastRenderMs = performance.now() - start;
+
+		// Update the stats display immediately after rendering.
+		this.refreshStatsText();
 	}
 
-	/**
-	 * Draws a single isometric diamond tile using Graphics.
-	 * Uses a polygon with 4 points to create the diamond shape.
-	 */
+	private refreshStatsText(): void {
+		// Update the on-screen stats text with current information.
+		this.statsText.text = [
+			`Map: ${this.DUNGEON_WIDTH}x${this.DUNGEON_HEIGHT} Rooms: ${this.ROOM_COUNT} Seed: ${this.dungeonSeed}`,
+			`Tiles: ${this.tileCount}`,
+			`Generation: ${this.lastGenerationMs.toFixed(1)}ms Tile-build: ${this.lastRenderMs.toFixed(1)}ms`,
+			`FPS: ${Math.round(this.game.app.ticker.FPS)}`,
+			`WASD pan · wheel zoom · [R] regenerate`,
+		].join("\n");
+	}
+
 	private drawTileDiamond(color: number): Graphics {
+		// Create a new Graphics object to draw one tile.
 		const g = new Graphics();
 
+		// Draw a diamond shape using four points (top, right, bottom, left).
+		// The points are calculated using TILE_WIDTH and TILE_HEIGHT to maintain the isometric ratio.
 		g.poly([
 			0,
-			-this.TILE_HEIGHT / 2, // Top
+			-this.TILE_HEIGHT / 2, // Top point of the diamond
 			this.TILE_WIDTH / 2,
-			0, // Right`
+			0, // Right point of the diamond
 			0,
-			this.TILE_HEIGHT / 2, // Bottom
+			this.TILE_HEIGHT / 2, // Bottom point of the diamond
 			-this.TILE_WIDTH / 2,
-			0, // Left
+			0, // Left point of the diamond
 		]);
 
+		// Fill the diamond with the appropriate color.
 		g.fill(color);
+
+		// Add a subtle dark outline so adjacent tiles are easier to distinguish.
 		g.stroke({ width: 1, color: 0x000000, alpha: 0.3 });
 
 		return g;
 	}
 
-	/**
-	 * Centers the entire board on screen.
-	 * Uses boardContainer so we can move the whole grid as one unit.
-	 * Now also uses local bounds + calculation to account for the zoom
-	 */
-	private centerBoard(): void {
+	private centerCameraOnBoard(): void {
+		// Get the bounding box of all the tiles that were just drawn.
 		const bounds = this.boardContainer.getLocalBounds();
-		const screenWidth = this.game.app.screen.width;
-		const screenHeight = this.game.app.screen.height;
 
-		const boundsCenterX = bounds.x + bounds.width / 2;
-		const boundsCenterY = bounds.y + bounds.height / 2;
-
-		this.boardContainer.x = screenWidth / 2 - boundsCenterX * this.ZOOM;
-		this.boardContainer.y = screenHeight / 2 - boundsCenterY * this.ZOOM;
+		// Calculate the center point of the entire drawn map.
+		this.camera.centerOn(
+			{ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
 	}
 }
