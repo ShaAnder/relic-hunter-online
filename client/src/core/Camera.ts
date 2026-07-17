@@ -18,14 +18,12 @@ const DEFAULTS: Required<CameraOptions> = {
 
 /**
  * Controls pan (WASD) and zoom (mouse wheel) for a Pixi Container acting as
- * a "camera" — here, DungeonScene's boardContainer.
+ * a "camera"
  *
  * Two modes:
  *  - Free: player can pan/zoom freely. Default, and the only mode right now.
  *  - Locked: camera snaps to and follows a given world position every frame,
- *    ignoring pan input. Not wired to anything yet — there's no turn system
- *    or hunter positions to lock onto. Call lockTo()/unlock() once that
- *    exists; nothing else in this file needs to change.
+ *    ignoring pan input.
  */
 export class Camera {
 	private target: Container;
@@ -105,7 +103,7 @@ export class Camera {
 		if (this.heldKeys.has("d")) this.target.x -= distance;
 	}
 
-	// handle key events
+	// handle key events - down, up, scroll wheel
 	private handleKeyDown = (event: KeyboardEvent): void => {
 		this.heldKeys.add(event.key.toLowerCase());
 	};
@@ -126,9 +124,7 @@ export class Camera {
 		);
 
 		// Zoom in place: anchor on the screen's CENTER instead of the cursor,
-		// so zooming never shifts what's in view — it only scales it. Pan
-		// (WASD) is the only thing that moves the camera; zoom just scales
-		// whatever is already centered, in place.
+		// so zooming never shifts what's in view — it only scales it.
 		const centerX = this.screenWidth / 2;
 		const centerY = this.screenHeight / 2;
 

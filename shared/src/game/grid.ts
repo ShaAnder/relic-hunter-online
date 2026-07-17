@@ -28,6 +28,11 @@ export interface GridCoord {
 	y: number;
 }
 
+// exported coord key fucntion for SST coord
+export function coordKey(coord: GridCoord): string {
+	return `${coord.x},${coord.y}`;
+}
+
 /**
  * A single tile on the grid.
  * Kept minimal on purpose — additional state (traps, hunters standing here, etc.)
@@ -74,7 +79,7 @@ export class Grid {
 	 * Private because this is an implementation detail.
 	 */
 	private static key(coord: GridCoord): string {
-		return `${coord.x},${coord.y}`;
+		return coordKey(coord);
 	}
 
 	/**
@@ -120,7 +125,6 @@ export class Grid {
 
 	/**
 	 * Returns the four orthogonal neighbors that are inside the grid bounds.
-	 * Only 4 directions (not diagonal) because Battle Hunter-style movement is orthogonal.
 	 */
 	getNeighbors(coord: GridCoord): GridCoord[] {
 		const candidates: GridCoord[] = [
@@ -131,4 +135,21 @@ export class Grid {
 		];
 		return candidates.filter((c) => this.isInBounds(c));
 	}
+}
+
+/**
+ * Find the first walkable tile looping through the grid map, to spawn test mercenary, if no
+ * tile found (map not loaded) return null instead.
+ *
+ * @param grid Grid map
+ * @returns grid coordinate or null
+ */
+export function findFirstWalkableTile(grid: Grid): GridCoord | null {
+	for (let x = 0; x < grid.width; x++) {
+		for (let y = 0; y < grid.height; y++) {
+			const coord = { x, y };
+			if (grid.isWalkable(coord)) return coord;
+		}
+	}
+	return null;
 }
