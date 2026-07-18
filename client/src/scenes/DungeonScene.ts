@@ -21,19 +21,31 @@ import {
 	type MercenaryState,
 } from "@relic-hunter/shared";
 
+/**
+ * Main gameplay scene: renders the dungeon grid, hosts the mercenary,
+ * and coordinates move mode, the camera, and the minimal turn system.
+ *
+ * The turn system is a single flag for now (one Move per turn, [E] ends
+ * the turn) and grows into a real TurnManager once dice and cards land.
+ * Camera lock/follow is driven from update() so it can track the
+ * mercenary's visual position through the whole move animation.
+ */
 export class DungeonScene implements Scene {
 	readonly view = new Container();
 
+	// Board layers
 	private grid: Grid;
 	private boardContainer = new Container();
 	private tilesContainer = new Container();
 	private mercenaryContainer = new Container();
 
+	// Systems + UI
 	private camera: Camera;
 	private statsText: Text;
 	private moveButton: MoveButton;
 	private moveController: MoveController;
 
+	// Dungeon config
 	private readonly DUNGEON_WIDTH = 50;
 	private readonly DUNGEON_HEIGHT = 50;
 	private readonly ROOM_DENSITY = 1 / 50;
@@ -48,10 +60,15 @@ export class DungeonScene implements Scene {
 		[TileType.Exit]: 0xd4af37,
 	};
 
+	// Player state
 	private mercState: MercenaryState;
 	private mercenary: Mercenary;
 	private movementRemaining = 0;
 
+	// Minimal turn system — one Move per turn, reset by endTurn()
+	private hasMovedThisTurn = false;
+
+	// Stats overlay
 	private tileCount = 0;
 	private lastGenerationMs = 0;
 	private lastRenderMs = 0;
@@ -60,6 +77,7 @@ export class DungeonScene implements Scene {
 	constructor(private game: Game) {
 		this.grid = this.buildDungeon();
 
+		// Board layer order: tiles under mercenary
 		this.boardContainer.addChild(this.tilesContainer);
 		this.boardContainer.addChild(this.mercenaryContainer);
 		this.view.addChild(this.boardContainer);
@@ -71,22 +89,17 @@ export class DungeonScene implements Scene {
 			panSpeed: 700,
 		});
 
+		// Spawn the player mercenary
 		this.mercState = this.spawnMercenary();
 		this.movementRemaining = this.mercState.stats.speed;
 		this.mercenary = new Mercenary(this.mercState.coord);
 		this.mercenaryContainer.addChild(this.mercenary.view);
 
 		// MoveController owns range + path preview rendering
-		this.moveController = new MoveController({
-			grid: this.grid,
-			camera: this.camera,
-			mercenary: this.mercenary,
-			getMercenaryCoord: () => this.mercState.coord,
-			getMovementRemaining: () => this.movementRemaining,
-			onMoveCommitted: (target, path) => this.onMoveCommitted(target, path),
-		});
+		this.moveController = this.createMoveController();
 		this.boardContainer.addChild(this.moveController.view);
 
+		// Stats overlay
 		this.statsText = new Text({
 			text: "",
 			style: { fill: 0xffffff, fontSize: 14, fontFamily: "monospace" },
@@ -95,11 +108,13 @@ export class DungeonScene implements Scene {
 		this.statsText.y = 12;
 		this.view.addChild(this.statsText);
 
+		// Move button
 		this.moveButton = new MoveButton();
 		this.view.addChild(this.moveButton.view);
 		this.positionMoveButton();
 	}
 
+	/** Render the board, center the camera, and wire up input. */
 	onEnter(): void {
 		this.renderGrid();
 		this.centerCameraOnBoard();
@@ -110,6 +125,7 @@ export class DungeonScene implements Scene {
 		this.game.app.canvas.addEventListener("mousemove", this.handleMouseMove);
 	}
 
+	/** Tear down visuals and input listeners. */
 	onExit(): void {
 		this.moveController.exit();
 		this.boardContainer.removeChildren();
@@ -119,6 +135,7 @@ export class DungeonScene implements Scene {
 		this.game.app.canvas.removeEventListener("mousemove", this.handleMouseMove);
 	}
 
+	/** Per-frame tick: camera, mercenary animation, follow logic, stats. */
 	update(deltaTime: number): void {
 		this.camera.update(
 			deltaTime,
@@ -127,6 +144,18 @@ export class DungeonScene implements Scene {
 		);
 		this.mercenary.update(deltaTime);
 
+		// Camera lock + follow: while aiming or animating, track the
+		// mercenary's VISUAL position — the logical coord jumps to the
+		// destination instantly on commit, the sphere doesn't.
+		if (this.moveController.active || this.mercenary.isAnimating) {
+			this.camera.lockTo({
+				x: this.mercenary.view.x,
+				y: this.mercenary.view.y,
+			});
+		} else if (this.camera.isLocked) {
+			this.camera.unlock();
+		}
+
 		this.fpsRefreshAccumulator += deltaTime;
 		if (this.fpsRefreshAccumulator >= 30) {
 			this.fpsRefreshAccumulator = 0;
@@ -134,28 +163,58 @@ export class DungeonScene implements Scene {
 		}
 	}
 
+	/** Keep UI anchored on window resize. */
 	onResize(): void {
 		this.positionMoveButton();
 	}
 
 	// ---------- Move mode integration ----------
 
+	/**
+	 * Apply a committed move: update logical state, spend the turn's Move,
+	 * and play the path animation. Resolves when the animation finishes.
+	 */
 	private async onMoveCommitted(
 		target: GridCoord,
 		path: GridCoord[],
 	): Promise<void> {
 		this.mercState.coord = target;
-		this.movementRemaining -= path.length;
 
-		// Clear visuals immediately
+		// Movement is one committed action — leftover budget isn't
+		// spendable this turn, so zero it rather than decrement
+		this.movementRemaining = 0;
+
+		// Spend the turn's single Move
+		this.hasMovedThisTurn = true;
+		this.moveButton.setActive(false);
+		this.moveButton.setEnabled(false);
+
+		// exit() unlocks the camera, but update() re-locks next frame
+		// because isAnimating is true — the camera stays on the hunter
 		this.moveController.exit();
 
 		await this.mercenary.moveAlongPath(path);
 		this.refreshStatsText();
 	}
 
+	/**
+	 * Reset the Move allowance and movement budget.
+	 * No-ops mid-animation so turn state can't desync from the visuals.
+	 */
+	private endTurn(): void {
+		if (this.mercenary.isAnimating) return;
+
+		this.hasMovedThisTurn = false;
+		this.movementRemaining = this.mercState.stats.speed;
+		this.moveController.exit();
+		this.moveButton.setEnabled(true);
+		this.moveButton.setActive(false);
+		this.refreshStatsText();
+	}
+
 	// ---------- Input ----------
 
+	/** [Esc] cancel aim · [E] end turn · [R] regenerate. */
 	private handleKeyDown = (event: KeyboardEvent): void => {
 		if (event.key === "Escape") {
 			this.moveController.exit();
@@ -163,58 +222,39 @@ export class DungeonScene implements Scene {
 			return;
 		}
 
+		if (event.key === "e" || event.key === "E") {
+			this.endTurn();
+			return;
+		}
+
 		if (event.key === "r" || event.key === "R") {
-			this.moveController.exit();
-			this.moveButton.setActive(false);
-
-			this.dungeonSeed = Math.floor(Math.random() * 1_000_000);
-			this.grid = this.buildDungeon();
-			this.mercState = this.spawnMercenary();
-			this.movementRemaining = this.mercState.stats.speed;
-
-			this.mercenaryContainer.removeChildren();
-			this.mercenary = new Mercenary(this.mercState.coord);
-			this.mercenaryContainer.addChild(this.mercenary.view);
-
-			// Re-create controller with new grid reference
-			this.boardContainer.removeChild(this.moveController.view);
-			this.moveController = new MoveController({
-				grid: this.grid,
-				camera: this.camera,
-				mercenary: this.mercenary,
-				getMercenaryCoord: () => this.mercState.coord,
-				getMovementRemaining: () => this.movementRemaining,
-				onMoveCommitted: (target, path) => this.onMoveCommitted(target, path),
-			});
-			this.boardContainer.addChild(this.moveController.view);
-
-			this.renderGrid();
-			this.centerCameraOnBoard();
-			this.refreshStatsText();
+			this.regenerateDungeon();
 		}
 	};
 
+	/** Route clicks to the Move button or, in move mode, to a commit. */
 	private handleClick = (event: MouseEvent): void => {
 		const { screenX, screenY } = this.getScreenPoint(event);
 
-		// Toggle Move button
+		// Move button toggle (hitTest returns false while disabled)
 		if (this.moveButton.hitTest(screenX, screenY)) {
 			if (this.moveController.active) {
 				this.moveController.exit();
 				this.moveButton.setActive(false);
 			} else {
 				this.moveController.enter();
-				this.moveButton.setActive(true);
+				// enter() can refuse — only light the button if it engaged
+				this.moveButton.setActive(this.moveController.active);
 			}
 			return;
 		}
 
-		// Commit move if in move mode
 		if (this.moveController.active) {
 			this.moveController.tryCommit();
 		}
 	};
 
+	/** Feed hovered tiles to the path preview while aiming. */
 	private handleMouseMove = (event: MouseEvent): void => {
 		if (!this.moveController.active) return;
 
@@ -225,6 +265,58 @@ export class DungeonScene implements Scene {
 
 	// ---------- Helpers ----------
 
+	/**
+	 * Single construction point for MoveController wiring — constructor
+	 * and [R] regen both use this so the config can't drift.
+	 */
+	private createMoveController(): MoveController {
+		return new MoveController({
+			grid: this.grid,
+			camera: this.camera,
+			mercenary: this.mercenary,
+			getMercenaryCoord: () => this.mercState.coord,
+			getMovementRemaining: () => this.movementRemaining,
+			getCanMove: () => !this.hasMovedThisTurn,
+			onMoveCommitted: (target, path) => this.onMoveCommitted(target, path),
+		});
+	}
+
+	/**
+	 * Rebuild the dungeon with a fresh seed and reset turn state.
+	 * No-ops mid-animation — discarding the mercenary mid-move would
+	 * leave onMoveCommitted awaiting a promise that never resolves.
+	 */
+	private regenerateDungeon(): void {
+		if (this.mercenary.isAnimating) return;
+
+		this.moveController.exit();
+		this.moveButton.setActive(false);
+
+		this.dungeonSeed = Math.floor(Math.random() * 1_000_000);
+		this.grid = this.buildDungeon();
+		this.mercState = this.spawnMercenary();
+		this.movementRemaining = this.mercState.stats.speed;
+
+		// Fresh map = fresh turn
+		this.hasMovedThisTurn = false;
+		this.moveButton.setEnabled(true);
+
+		// Replace the mercenary token
+		this.mercenaryContainer.removeChildren();
+		this.mercenary = new Mercenary(this.mercState.coord);
+		this.mercenaryContainer.addChild(this.mercenary.view);
+
+		// Re-create controller with new grid + mercenary references
+		this.boardContainer.removeChild(this.moveController.view);
+		this.moveController = this.createMoveController();
+		this.boardContainer.addChild(this.moveController.view);
+
+		this.renderGrid();
+		this.centerCameraOnBoard();
+		this.refreshStatsText();
+	}
+
+	/** Convert a mouse event to canvas-local screen coordinates. */
 	private getScreenPoint(event: MouseEvent) {
 		const rect = this.game.app.canvas.getBoundingClientRect();
 		return {
@@ -233,6 +325,7 @@ export class DungeonScene implements Scene {
 		};
 	}
 
+	/** Convert canvas-local screen coordinates to a grid tile. */
 	private screenPointToGrid(screenX: number, screenY: number): GridCoord {
 		const localX =
 			(screenX - this.boardContainer.x) / this.boardContainer.scale.x;
@@ -241,11 +334,13 @@ export class DungeonScene implements Scene {
 		return screenToGrid(localX, localY);
 	}
 
+	/** Anchor the Move button to the bottom-left of the screen. */
 	private positionMoveButton(): void {
 		this.moveButton.view.x = 20;
 		this.moveButton.view.y = this.game.app.screen.height - 60;
 	}
 
+	/** Generate the dungeon grid, timing it for the stats overlay. */
 	private buildDungeon(): Grid {
 		const start = performance.now();
 		const grid = generateDungeon(this.DUNGEON_WIDTH, this.DUNGEON_HEIGHT, {
@@ -256,6 +351,7 @@ export class DungeonScene implements Scene {
 		return grid;
 	}
 
+	/** Create the player's mercenary on the first walkable tile. */
 	private spawnMercenary(): MercenaryState {
 		const spawnCoord = findFirstWalkableTile(this.grid) ?? { x: 0, y: 0 };
 		return createMercenary("player", spawnCoord, {
@@ -266,6 +362,7 @@ export class DungeonScene implements Scene {
 		});
 	}
 
+	/** Draw every tile diamond, timing the build for the stats overlay. */
 	private renderGrid(): void {
 		const start = performance.now();
 		this.tilesContainer.removeChildren();
@@ -290,6 +387,7 @@ export class DungeonScene implements Scene {
 		this.refreshStatsText();
 	}
 
+	/** Build one iso diamond tile graphic in the given color. */
 	private drawTileDiamond(color: number): Graphics {
 		const g = new Graphics();
 		g.poly([
@@ -307,6 +405,7 @@ export class DungeonScene implements Scene {
 		return g;
 	}
 
+	/** Snap the camera to the middle of the generated board. */
 	private centerCameraOnBoard(): void {
 		const bounds = this.boardContainer.getLocalBounds();
 		this.camera.centerOn(
@@ -316,13 +415,14 @@ export class DungeonScene implements Scene {
 		);
 	}
 
+	/** Rebuild the debug/stats overlay text. */
 	private refreshStatsText(): void {
 		this.statsText.text = [
 			`Map: ${this.DUNGEON_WIDTH}x${this.DUNGEON_HEIGHT} Rooms: ${this.ROOM_COUNT} Seed: ${this.dungeonSeed}`,
 			`Tiles: ${this.tileCount} Gen: ${this.lastGenerationMs.toFixed(1)}ms Build: ${this.lastRenderMs.toFixed(1)}ms`,
 			`FPS: ${Math.round(this.game.app.ticker.FPS)}`,
-			`Movement remaining: ${this.movementRemaining}`,
-			`[Move] to aim · click tile to confirm · [Esc] cancel · [R] regenerate`,
+			`Movement: ${this.movementRemaining}  |  Move used: ${this.hasMovedThisTurn ? "YES" : "no"}`,
+			`[Move] aim · click confirm · [Esc] cancel · [E] end turn · [R] regenerate`,
 		].join("\n");
 	}
 }

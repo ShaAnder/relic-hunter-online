@@ -3,21 +3,27 @@ import { GridCoord } from "@relic-hunter/shared";
 import { gridToScreen } from "../math/isoGridMath";
 
 const SPHERE_RADIUS = 12;
-const MOVE_DURATION_PER_TILE_MS = 200;
+const MOVE_DURATION_PER_TILE_MS = 180;
 
 /**
- * Animated on-screen token for a hunter.
- * Visual representation only — authoritative position lives in MercenaryState.
+ * Animated on-screen token for a hunter. Visual representation only —
+ * authoritative position lives in MercenaryState.
+ *
+ * Movement plays as one continuous ease-in/out across the whole committed
+ * path rather than easing tile-by-tile, so the token glides instead of
+ * pausing at every step. In Phase 3 the server-validated path feeds into
+ * moveAlongPath unchanged.
  */
 export class Mercenary {
 	readonly view = new Container();
 
+	// Animation state — polyline is [startPos, ...pathTiles]
 	private currentScreenPos: { x: number; y: number };
-	private moveQueue: GridCoord[] = [];
-	private tileStartPos: { x: number; y: number } | null = null;
-	private tileTargetPos: { x: number; y: number } | null = null;
-	private tileProgressMs = 0;
+	private animPoints: { x: number; y: number }[] = [];
+	private animElapsedMs = 0;
+	private animDurationMs = 0;
 	private onPathComplete: (() => void) | null = null;
+	private _isAnimating = false;
 
 	constructor(initialCoord: GridCoord) {
 		this.currentScreenPos = gridToScreen(initialCoord);
@@ -25,81 +31,72 @@ export class Mercenary {
 		this.syncPosition();
 	}
 
-	/** True while a move animation is in progress — blocks new input */
+	/** True while a move animation is in progress — blocks new input. */
 	get isAnimating(): boolean {
-		return this.tileTargetPos !== null;
+		return this._isAnimating;
 	}
 
 	/**
-	 * Animate stepping through each tile in the path.
+	 * Animate smoothly across the entire path with one ease curve.
 	 * Resolves once the final tile is visually reached.
 	 */
 	moveAlongPath(path: GridCoord[]): Promise<void> {
 		return new Promise((resolve) => {
-			if (path.length === 0) {
+			// Empty path or double-call: resolve immediately rather than
+			// leaving a promise hanging forever.
+			if (path.length === 0 || this._isAnimating) {
 				resolve();
 				return;
 			}
 
-			this.moveQueue = [...path];
+			this.animPoints = [
+				{ ...this.currentScreenPos },
+				...path.map(gridToScreen),
+			];
+			this.animElapsedMs = 0;
+			this.animDurationMs = path.length * MOVE_DURATION_PER_TILE_MS;
+			this._isAnimating = true;
 			this.onPathComplete = resolve;
-			this.moveToNextTile();
 		});
 	}
 
+	/** Advance the animation; call once per frame from the scene. */
 	update(deltaTime: number): void {
-		if (!this.tileStartPos || !this.tileTargetPos) return;
+		if (!this._isAnimating || this.animPoints.length < 2) return;
 
 		// Convert deltaTime (frames) into milliseconds so timing stays consistent
-		this.tileProgressMs += (deltaTime / 60) * 1000;
+		this.animElapsedMs += (deltaTime / 60) * 1000;
 
-		const time = Math.min(this.tileProgressMs / MOVE_DURATION_PER_TILE_MS, 1);
-		const eased = easeInEaseOut(time);
+		const t = Math.min(this.animElapsedMs / this.animDurationMs, 1);
+		const eased = easeInOutCubic(t);
 
-		this.currentScreenPos = {
-			x:
-				this.tileStartPos.x +
-				(this.tileTargetPos.x - this.tileStartPos.x) * eased,
-			y:
-				this.tileStartPos.y +
-				(this.tileTargetPos.y - this.tileStartPos.y) * eased,
-		};
-
+		this.currentScreenPos = interpolatePolyline(this.animPoints, eased);
 		this.syncPosition();
 
-		// Finished this tile → start the next one
-		if (time >= 1) {
-			this.moveToNextTile();
-		}
-	}
+		if (t >= 1) {
+			// Snap exactly onto the final tile to kill float drift
+			const final = this.animPoints[this.animPoints.length - 1];
+			this.currentScreenPos = { x: final.x, y: final.y };
+			this.syncPosition();
 
-	private moveToNextTile(): void {
-		const next = this.moveQueue.shift();
-
-		if (!next) {
-			// Path completely finished
-			this.tileStartPos = null;
-			this.tileTargetPos = null;
-			this.tileProgressMs = 0;
+			this._isAnimating = false;
+			this.animPoints = [];
+			this.animElapsedMs = 0;
+			this.animDurationMs = 0;
 
 			const cb = this.onPathComplete;
 			this.onPathComplete = null;
 			cb?.();
-			return;
 		}
-
-		// Begin moving toward the next tile
-		this.tileStartPos = { ...this.currentScreenPos };
-		this.tileTargetPos = gridToScreen(next);
-		this.tileProgressMs = 0;
 	}
 
+	/** Push the tracked screen position onto the Pixi view. */
 	private syncPosition(): void {
 		this.view.x = this.currentScreenPos.x;
 		this.view.y = this.currentScreenPos.y;
 	}
 
-	/** Simple fake-3D sphere for testing */
+	/** Simple fake-3D sphere placeholder until the sprite sheet lands. */
 	private drawSphere(): Graphics {
 		const g = new Graphics();
 
@@ -119,15 +116,53 @@ export class Mercenary {
 	}
 }
 
+/** Cubic ease-in-out: slow start, fast middle, slow finish. */
+function easeInOutCubic(t: number): number {
+	return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
 /**
- * Quadratic ease-in-out.
- * Starts slow, accelerates through the middle, then decelerates at the end.
+ * Position along a polyline at normalized t, travelling at constant speed.
+ * Maps t to distance via cumulative segment lengths so uneven segments
+ * don't change the apparent speed — any speed variation comes from easing
+ * t before it gets here.
  */
-function easeInEaseOut(time: number): number {
-	if (time < 0.5) {
-		return 2 * time ** 2;
-	} else {
-		const remaining = 1 - time;
-		return 1 - 2 * remaining ** 2;
+function interpolatePolyline(
+	points: { x: number; y: number }[],
+	t: number,
+): { x: number; y: number } {
+	if (points.length === 0) return { x: 0, y: 0 };
+	if (t <= 0) return { ...points[0] };
+	if (t >= 1) return { ...points[points.length - 1] };
+
+	// Cumulative distance along the line
+	const lengths: number[] = [0];
+	let total = 0;
+	for (let i = 1; i < points.length; i++) {
+		const dx = points[i].x - points[i - 1].x;
+		const dy = points[i].y - points[i - 1].y;
+		total += Math.sqrt(dx * dx + dy * dy);
+		lengths.push(total);
 	}
+
+	if (total === 0) return { ...points[0] };
+
+	const targetDist = t * total;
+
+	// Find the segment targetDist lands in, then lerp inside it
+	for (let i = 1; i < lengths.length; i++) {
+		if (targetDist <= lengths[i]) {
+			const segStart = lengths[i - 1];
+			const segLen = lengths[i] - segStart;
+			const localT = segLen === 0 ? 0 : (targetDist - segStart) / segLen;
+			const a = points[i - 1];
+			const b = points[i];
+			return {
+				x: a.x + (b.x - a.x) * localT,
+				y: a.y + (b.y - a.y) * localT,
+			};
+		}
+	}
+
+	return { ...points[points.length - 1] };
 }
