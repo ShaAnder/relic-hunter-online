@@ -127,20 +127,23 @@ export class TurnManager {
 	 */
 	beginMovement(cardType: string, cardValue: number): boolean {
 		if (!this.canMove) return false;
-		let movementRemaining = this.baseAP;
-		if (cardType === "blue") {
-			if (this._blueCardUsedThisTurn) return false;
-			movementRemaining += cardValue;
-			this._blueCardUsedThisTurn = true;
-		}
 
+		if (this._movementPressesUsed === 0) {
+			let budget = this._baseAp;
+
+			if (cardType === "blue" && !this._blueCardUsedThisTurn) {
+				budget += cardValue;
+				this._blueCardUsedThisTurn = true;
+			}
+
+			this._movementRemaining = budget;
+		}
 		this._apRemaining -= 1;
 		this._movementPressesUsed += 1;
-		this._movementRemaining = movementRemaining; // for now it will be card value but for later should be base speed + cv
+
 		this.onChanged();
 		return true;
 	}
-
 	/**
 	 * Commit the move: update the logical position and zero the movement
 	 * budget. The card value was already applied in beginMove().

@@ -52,6 +52,8 @@ export class MapScene implements Scene {
 	// UI
 	private buttonBar: ButtonBar;
 	private statsText: Text;
+	private feedbackText: Text;
+	private feedbackTimer = 0;
 
 	// Map config
 	private readonly MAP_WIDTH = 50;
@@ -115,6 +117,14 @@ export class MapScene implements Scene {
 		this.statsText.x = 12;
 		this.statsText.y = 12;
 		this.view.addChild(this.statsText);
+
+		// Action feedback line — hidden until showFeedback() is called
+		this.feedbackText = new Text({
+			text: "",
+			style: { fill: 0xffd700, fontSize: 16, fontWeight: "bold" },
+		});
+		this.feedbackText.visible = false;
+		this.view.addChild(this.feedbackText);
 	}
 
 	/** Render the map, center the camera, and wire up input. */
@@ -161,6 +171,14 @@ export class MapScene implements Scene {
 			});
 		} else if (this.camera.isLocked) {
 			this.camera.unlock();
+		}
+
+		// Fade out action feedback after its timer expires
+		if (this.feedbackTimer > 0) {
+			this.feedbackTimer -= deltaTime;
+			if (this.feedbackTimer <= 0) {
+				this.feedbackText.visible = false;
+			}
 		}
 
 		this.fpsAccumulator += deltaTime;
@@ -223,6 +241,7 @@ export class MapScene implements Scene {
 		this.moveController.exit();
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
+		this.showFeedback("⚔ Attack! (combat phase coming soon)");
 		// TODO Phase 2: open combat resolver
 	}
 
@@ -232,6 +251,7 @@ export class MapScene implements Scene {
 		this.moveController.exit();
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
+		this.showFeedback("💤 Rested — card draw coming with the hand system");
 		// TODO Phase 1 card system: draw up to 2 cards
 	}
 
@@ -241,6 +261,7 @@ export class MapScene implements Scene {
 		this.moveController.exit();
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
+		this.showFeedback("↩ Disengaged (ZoC escape coming soon)");
 		// TODO ZoC system: trigger restricted 1–2 tile disengage move
 	}
 
@@ -316,8 +337,26 @@ export class MapScene implements Scene {
 
 	// ---------- UI ----------
 
-	/** Sync ButtonBar and stats overlay to current TurnManager state. */
+	/**
+	 * Show a temporary feedback message centered near the top of the screen.
+	 * Auto-hides after ~2.5 seconds via the update loop timer.
+	 */
+	private showFeedback(message: string): void {
+		this.feedbackText.text = message;
+		this.feedbackText.visible = true;
+		this.feedbackText.x =
+			(this.game.app.screen.width - this.feedbackText.width) / 2;
+		this.feedbackText.y = 60;
+		this.feedbackTimer = 150; // ~2.5s at 60fps frame units
+	}
+
+	/**
+	 * Sync ButtonBar and stats overlay to current TurnManager state.
+	 * Guarded against calls during construction — TurnManager fires
+	 * onChanged from its own constructor, before buttonBar exists.
+	 */
 	private syncUI(): void {
+		if (!this.buttonBar || !this.turnManager) return;
 		this.buttonBar.sync(this.turnManager);
 		this.refreshStatsText();
 	}
@@ -332,7 +371,6 @@ export class MapScene implements Scene {
 			mercenary: this.mercenary,
 			getMercenaryCoord: () => this.mercState.coord,
 			getMovementRemaining: () => this.turnManager.movementRemaining,
-			getCanMove: () => this.turnManager.canMove,
 			onMoveCommitted: (target, path) => this.onMoveCommitted(target, path),
 		});
 	}

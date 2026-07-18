@@ -44,7 +44,7 @@ export class ActionButton {
 	private disengageLabel!: Text;
 
 	// Which direction the sub-menu expands
-	private submenuDirection: "up" | "left" = "up";
+	private submenuDirection: "up" | "left" | "right" = "up";
 
 	constructor() {
 		// Main button label
@@ -101,9 +101,9 @@ export class ActionButton {
 
 	/**
 	 * Set which direction the sub-menu expands and reposition items.
-	 * Call with "left" when this button lives in a right-edge sidebar.
+	 * "left" for right-edge sidebars, "right" for left-edge sidebars.
 	 */
-	setSubmenuDirection(dir: "up" | "left"): void {
+	setSubmenuDirection(dir: "up" | "left" | "right"): void {
 		this.submenuDirection = dir;
 		this.repositionSubMenu();
 	}
@@ -140,12 +140,12 @@ export class ActionButton {
 	private buildSubMenu(): void {
 		const items: Array<{ bg: Graphics; label: Text; text: string }> = [
 			{
-				bg: this.attackBg,
-				label: (this.attackLabel = new Text({
-					text: "Attack (2AP)",
+				bg: this.disengageBg,
+				label: (this.disengageLabel = new Text({
+					text: "Disengage (1AP)",
 					style: { fill: 0xffffff, fontSize: 13 },
 				})),
-				text: "Attack (2AP)",
+				text: "Disengage (1AP)",
 			},
 			{
 				bg: this.restBg,
@@ -156,12 +156,12 @@ export class ActionButton {
 				text: "Rest (1AP)",
 			},
 			{
-				bg: this.disengageBg,
-				label: (this.disengageLabel = new Text({
-					text: "Disengage (1AP)",
+				bg: this.attackBg,
+				label: (this.attackLabel = new Text({
+					text: "Attack (2AP)",
 					style: { fill: 0xffffff, fontSize: 13 },
 				})),
-				text: "Disengage (1AP)",
+				text: "Attack (2AP)",
 			},
 		];
 
@@ -182,8 +182,8 @@ export class ActionButton {
 	 * "left" — items stack to the left, vertically from top.
 	 */
 	private repositionSubMenu(): void {
-		const bgs = [this.attackBg, this.restBg, this.disengageBg];
-		const labels = [this.attackLabel, this.restLabel, this.disengageLabel];
+		const bgs = [this.disengageBg, this.restBg, this.attackBg];
+		const labels = [this.disengageLabel, this.restLabel, this.attackLabel];
 
 		bgs.forEach((bg, i) => {
 			const { x, y } = this.subItemPosition(i);
@@ -207,6 +207,12 @@ export class ActionButton {
 		if (this.submenuDirection === "left") {
 			return {
 				x: -(SUB_WIDTH + SUB_GAP),
+				y: index * (SUB_HEIGHT + SUB_GAP),
+			};
+		}
+		if (this.submenuDirection === "right") {
+			return {
+				x: BTN_WIDTH + SUB_GAP,
 				y: index * (SUB_HEIGHT + SUB_GAP),
 			};
 		}

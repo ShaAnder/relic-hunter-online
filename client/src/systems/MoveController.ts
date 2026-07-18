@@ -18,8 +18,6 @@ interface MoveControllerOptions {
 	getMercenaryCoord: () => GridCoord;
 	/** Returns the movement budget remaining this turn. */
 	getMovementRemaining: () => number;
-	/** Turn gate — false once the single Move of the turn is spent. */
-	getCanMove: () => boolean;
 	/** Called when the player commits a move; scene applies it. */
 	onMoveCommitted: (target: GridCoord, path: GridCoord[]) => void;
 }
@@ -60,14 +58,14 @@ export class MoveController {
 
 	/**
 	 * Engage move mode.
-	 * Refuses while animating, with no movement budget, or after the
-	 * turn's Move is spent — callers should check active afterwards.
+	 * Refuses while animating or with no movement budget. The turn gate
+	 * (AP, press count, lockout) is the scene's job via beginMovement —
+	 * this controller only owns the aiming state machine.
 	 */
 	enter(): void {
 		if (this.isActive) return;
 		if (this.options.mercenary.isAnimating) return;
 		if (this.options.getMovementRemaining() <= 0) return;
-		if (!this.options.getCanMove()) return;
 
 		this.isActive = true;
 
