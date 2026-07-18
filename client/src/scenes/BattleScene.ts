@@ -22,7 +22,7 @@ import {
 } from "@relic-hunter/shared";
 
 /**
- * Main gameplay scene: renders the dungeon grid, hosts the mercenary,
+ * Tactical battle scene: renders the map grid, hosts the mercenary,
  * and coordinates move mode, the camera, and the minimal turn system.
  *
  * The turn system is a single flag for now (one Move per turn, [E] ends
@@ -30,7 +30,7 @@ import {
  * Camera lock/follow is driven from update() so it can track the
  * mercenary's visual position through the whole move animation.
  */
-export class DungeonScene implements Scene {
+export class BattleScene implements Scene {
 	readonly view = new Container();
 
 	// Board layers
@@ -45,14 +45,14 @@ export class DungeonScene implements Scene {
 	private moveButton: MoveButton;
 	private moveController: MoveController;
 
-	// Dungeon config
-	private readonly DUNGEON_WIDTH = 50;
-	private readonly DUNGEON_HEIGHT = 50;
+	// Map config
+	private readonly MAP_WIDTH = 50;
+	private readonly MAP_HEIGHT = 50;
 	private readonly ROOM_DENSITY = 1 / 50;
 	private readonly ROOM_COUNT = Math.floor(
-		this.DUNGEON_WIDTH * this.DUNGEON_HEIGHT * this.ROOM_DENSITY,
+		this.MAP_WIDTH * this.MAP_HEIGHT * this.ROOM_DENSITY,
 	);
-	private dungeonSeed = 42;
+	private mapSeed = 42;
 
 	private readonly TILE_COLORS: Record<TileType, number> = {
 		[TileType.Floor]: 0x3a3a3a,
@@ -75,7 +75,7 @@ export class DungeonScene implements Scene {
 	private fpsRefreshAccumulator = 0;
 
 	constructor(private game: Game) {
-		this.grid = this.buildDungeon();
+		this.grid = this.buildMap();
 
 		// Board layer order: tiles under mercenary
 		this.boardContainer.addChild(this.tilesContainer);
@@ -114,10 +114,10 @@ export class DungeonScene implements Scene {
 		this.positionMoveButton();
 	}
 
-	/** Render the board, center the camera, and wire up input. */
+	/** Render the map, center the camera, and wire up input. */
 	onEnter(): void {
-		this.renderGrid();
-		this.centerCameraOnBoard();
+		this.renderMap();
+		this.centerCameraOnMap();
 		this.camera.attach(this.game.app.canvas);
 
 		window.addEventListener("keydown", this.handleKeyDown);
@@ -146,7 +146,7 @@ export class DungeonScene implements Scene {
 
 		// Camera lock + follow: while aiming or animating, track the
 		// mercenary's VISUAL position — the logical coord jumps to the
-		// destination instantly on commit, the sphere doesn't.
+		// destination instantly on commit, the token doesn't.
 		if (this.moveController.active || this.mercenary.isAnimating) {
 			this.camera.lockTo({
 				x: this.mercenary.view.x,
@@ -164,8 +164,9 @@ export class DungeonScene implements Scene {
 	}
 
 	/** Keep UI anchored on window resize. */
-	onResize(): void {
-		this.positionMoveButton();
+	onResize(_width: number, height: number): void {
+		this.moveButton.view.x = 20;
+		this.moveButton.view.y = height - 60;
 	}
 
 	// ---------- Move mode integration ----------
@@ -214,7 +215,7 @@ export class DungeonScene implements Scene {
 
 	// ---------- Input ----------
 
-	/** [Esc] cancel aim · [E] end turn · [R] regenerate. */
+	/** [Esc] cancel aim · [E] end turn · [R] regenerate map. */
 	private handleKeyDown = (event: KeyboardEvent): void => {
 		if (event.key === "Escape") {
 			this.moveController.exit();
@@ -228,7 +229,7 @@ export class DungeonScene implements Scene {
 		}
 
 		if (event.key === "r" || event.key === "R") {
-			this.regenerateDungeon();
+			this.regenerateMap();
 		}
 	};
 
@@ -282,18 +283,18 @@ export class DungeonScene implements Scene {
 	}
 
 	/**
-	 * Rebuild the dungeon with a fresh seed and reset turn state.
+	 * Rebuild the map with a fresh seed and reset turn state.
 	 * No-ops mid-animation — discarding the mercenary mid-move would
 	 * leave onMoveCommitted awaiting a promise that never resolves.
 	 */
-	private regenerateDungeon(): void {
+	private regenerateMap(): void {
 		if (this.mercenary.isAnimating) return;
 
 		this.moveController.exit();
 		this.moveButton.setActive(false);
 
-		this.dungeonSeed = Math.floor(Math.random() * 1_000_000);
-		this.grid = this.buildDungeon();
+		this.mapSeed = Math.floor(Math.random() * 1_000_000);
+		this.grid = this.buildMap();
 		this.mercState = this.spawnMercenary();
 		this.movementRemaining = this.mercState.stats.speed;
 
@@ -311,8 +312,8 @@ export class DungeonScene implements Scene {
 		this.moveController = this.createMoveController();
 		this.boardContainer.addChild(this.moveController.view);
 
-		this.renderGrid();
-		this.centerCameraOnBoard();
+		this.renderMap();
+		this.centerCameraOnMap();
 		this.refreshStatsText();
 	}
 
@@ -340,18 +341,18 @@ export class DungeonScene implements Scene {
 		this.moveButton.view.y = this.game.app.screen.height - 60;
 	}
 
-	/** Generate the dungeon grid, timing it for the stats overlay. */
-	private buildDungeon(): Grid {
+	/** Generate the map grid, timing it for the stats overlay. */
+	private buildMap(): Grid {
 		const start = performance.now();
-		const grid = generateDungeon(this.DUNGEON_WIDTH, this.DUNGEON_HEIGHT, {
-			seed: this.dungeonSeed,
+		const grid = generateDungeon(this.MAP_WIDTH, this.MAP_HEIGHT, {
+			seed: this.mapSeed,
 			roomCount: this.ROOM_COUNT,
 		});
 		this.lastGenerationMs = performance.now() - start;
 		return grid;
 	}
 
-	/** Create the player's mercenary on the first walkable tile. */
+	/** Place the player mercenary on the first walkable tile. */
 	private spawnMercenary(): MercenaryState {
 		const spawnCoord = findFirstWalkableTile(this.grid) ?? { x: 0, y: 0 };
 		return createMercenary("player", spawnCoord, {
@@ -363,7 +364,7 @@ export class DungeonScene implements Scene {
 	}
 
 	/** Draw every tile diamond, timing the build for the stats overlay. */
-	private renderGrid(): void {
+	private renderMap(): void {
 		const start = performance.now();
 		this.tilesContainer.removeChildren();
 
@@ -405,8 +406,8 @@ export class DungeonScene implements Scene {
 		return g;
 	}
 
-	/** Snap the camera to the middle of the generated board. */
-	private centerCameraOnBoard(): void {
+	/** Snap the camera to the middle of the map. */
+	private centerCameraOnMap(): void {
 		const bounds = this.boardContainer.getLocalBounds();
 		this.camera.centerOn(
 			{ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
@@ -418,7 +419,7 @@ export class DungeonScene implements Scene {
 	/** Rebuild the debug/stats overlay text. */
 	private refreshStatsText(): void {
 		this.statsText.text = [
-			`Map: ${this.DUNGEON_WIDTH}x${this.DUNGEON_HEIGHT} Rooms: ${this.ROOM_COUNT} Seed: ${this.dungeonSeed}`,
+			`Map: ${this.MAP_WIDTH}x${this.MAP_HEIGHT} Rooms: ${this.ROOM_COUNT} Seed: ${this.mapSeed}`,
 			`Tiles: ${this.tileCount} Gen: ${this.lastGenerationMs.toFixed(1)}ms Build: ${this.lastRenderMs.toFixed(1)}ms`,
 			`FPS: ${Math.round(this.game.app.ticker.FPS)}`,
 			`Movement: ${this.movementRemaining}  |  Move used: ${this.hasMovedThisTurn ? "YES" : "no"}`,
