@@ -21,6 +21,8 @@ import {
 	createMercenary,
 	type MercenaryState,
 } from "@relic-hunter/shared";
+import { Hand } from "../ui/Hand";
+import { CardData } from "../entities/Card";
 
 /**
  * Tactical map scene: renders the isometric grid, hosts the mercenary,
@@ -54,6 +56,9 @@ export class MapScene implements Scene {
 	private statsText: Text;
 	private feedbackText: Text;
 	private feedbackTimer = 0;
+
+	// Cards
+	private hand: Hand;
 
 	// Map config
 	private readonly MAP_WIDTH = 50;
@@ -96,6 +101,10 @@ export class MapScene implements Scene {
 		this.mercenary = new Mercenary(this.mercState.coord);
 		this.mercenaryContainer.addChild(this.mercenary.view);
 
+		// add hand
+		this.hand = new Hand((card: CardData) => this.handleCardPlayed(card));
+		this.view.addChild(this.hand.view);
+
 		// TurnManager fires syncUI on every state change
 		this.turnManager = new TurnManager(
 			() => this.mercState,
@@ -136,6 +145,9 @@ export class MapScene implements Scene {
 			this.game.app.screen.width,
 			this.game.app.screen.height,
 		);
+		this.hand.initStarterHand();
+		this.hand.resize(this.game.app.screen.width, this.game.app.screen.height);
+
 		this.syncUI();
 
 		window.addEventListener("keydown", this.handleKeyDown);
@@ -184,13 +196,14 @@ export class MapScene implements Scene {
 		this.fpsAccumulator += deltaTime;
 		if (this.fpsAccumulator >= 30) {
 			this.fpsAccumulator = 0;
-			this.refreshStatsText();
+			// this.refreshStatsText();
 		}
 	}
 
 	/** Reposition UI on window resize. */
 	onResize(_width: number, height: number): void {
 		this.buttonBar.resize(this.game.app.screen.width, height);
+		this.hand.resize(this.game.app.screen.width, this.game.app.screen.height);
 	}
 
 	// ---------- Move ----------
@@ -358,7 +371,36 @@ export class MapScene implements Scene {
 	private syncUI(): void {
 		if (!this.buttonBar || !this.turnManager) return;
 		this.buttonBar.sync(this.turnManager);
-		this.refreshStatsText();
+		// this.refreshStatsText();
+	}
+
+	// ---------- Cards ----------
+	private handleCardPlayed(card: CardData): void {
+		if (this.mercenary.isAnimating) return;
+
+		switch (card.actionType) {
+			case "move":
+				// Blue card — start movement with bonus
+				if (this.turnManager.beginMovement(card.color, card.value)) {
+					this.moveController.enter();
+					this.buttonBar.setMoveActive(this.moveController.active);
+				}
+				break;
+
+			case "attack":
+				this.handleAttack(); // reuse existing handler
+				break;
+
+			case "defense":
+				this.showFeedback("🛡️ Defense +" + card.value + " (coming soon)");
+				// TODO: implement defense buff
+				break;
+
+			case "stun":
+				this.showFeedback("🌟 Stun! (coming soon)");
+				// TODO: stun enemy
+				break;
+		}
 	}
 
 	// ---------- Helpers ----------
@@ -394,6 +436,7 @@ export class MapScene implements Scene {
 		this.mercenary = new Mercenary(this.mercState.coord);
 		this.mercenaryContainer.addChild(this.mercenary.view);
 
+		this.hand.initStarterHand();
 		this.turnManager.reset();
 
 		this.boardContainer.removeChild(this.moveController.view);
@@ -497,16 +540,16 @@ export class MapScene implements Scene {
 		);
 	}
 
-	/** Rebuild the debug/stats overlay text. */
-	private refreshStatsText(): void {
-		const tm = this.turnManager;
-		this.statsText.text = [
-			`Map: ${this.MAP_WIDTH}x${this.MAP_HEIGHT} Rooms: ${this.ROOM_COUNT} Seed: ${this.mapSeed}`,
-			`Tiles: ${this.tileCount} Gen: ${this.lastGenerationMs.toFixed(1)}ms Build: ${this.lastRenderMs.toFixed(1)}ms`,
-			`FPS: ${Math.round(this.game.app.ticker.FPS)}`,
-			`AP: ${tm.apRemaining}/${tm.baseAP}  |  Moves: ${tm.movePressesUsed}/2  |  Locked: ${tm.moveLocked ? "YES" : "no"}`,
-			`Attacked: ${tm.hasAttackedThisTurn ? "YES" : "no"}  |  Rested: ${tm.hasRestedThisTurn ? "YES" : "no"}  |  Pool: ${tm.movementRemaining}`,
-			`[Esc] cancel  ·  [E] end turn  ·  [R] regenerate`,
-		].join("\n");
-	}
+	// /** Rebuild the debug/stats overlay text. */
+	// private refreshStatsText(): void {
+	// 	const tm = this.turnManager;
+	// 	this.statsText.text = [
+	// 		`Map: ${this.MAP_WIDTH}x${this.MAP_HEIGHT} Rooms: ${this.ROOM_COUNT} Seed: ${this.mapSeed}`,
+	// 		`Tiles: ${this.tileCount} Gen: ${this.lastGenerationMs.toFixed(1)}ms Build: ${this.lastRenderMs.toFixed(1)}ms`,
+	// 		`FPS: ${Math.round(this.game.app.ticker.FPS)}`,
+	// 		`AP: ${tm.apRemaining}/${tm.baseAP}  |  Moves: ${tm.movePressesUsed}/2  |  Locked: ${tm.moveLocked ? "YES" : "no"}`,
+	// 		`Attacked: ${tm.hasAttackedThisTurn ? "YES" : "no"}  |  Rested: ${tm.hasRestedThisTurn ? "YES" : "no"}  |  Pool: ${tm.movementRemaining}`,
+	// 		`[Esc] cancel  ·  [E] end turn  ·  [R] regenerate`,
+	// 	].join("\n");
+	// }
 }

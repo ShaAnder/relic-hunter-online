@@ -125,25 +125,42 @@ export class TurnManager {
 	 * @param cardValue - value of the card (only useful for movement if blue)
 	 * @returns - boolean
 	 */
-	beginMovement(cardType: string, cardValue: number): boolean {
+	beginMovement(cardType: string, cardValue: string | number): boolean {
 		if (!this.canMove) return false;
 
+		// Convert card value to number (handles face cards)
+		const getValue = (val: string | number): number => {
+			if (typeof val === "number") return val;
+			const upper = val.toUpperCase();
+			if (upper === "J") return 11;
+			if (upper === "Q") return 12;
+			if (upper === "K") return 13;
+			if (upper === "A") return 14;
+			return parseInt(upper, 10) || 0; // fallback
+		};
+
+		const valueNum = getValue(cardValue);
+
+		// First move press of the turn — allow blue card once
 		if (this._movementPressesUsed === 0) {
 			let budget = this._baseAp;
 
 			if (cardType === "blue" && !this._blueCardUsedThisTurn) {
-				budget += cardValue;
+				budget += valueNum;
 				this._blueCardUsedThisTurn = true;
 			}
 
 			this._movementRemaining = budget;
 		}
+		// Subsequent moves reuse remaining pool
+
 		this._apRemaining -= 1;
 		this._movementPressesUsed += 1;
 
 		this.onChanged();
 		return true;
 	}
+
 	/**
 	 * Commit the move: update the logical position and zero the movement
 	 * budget. The card value was already applied in beginMove().
