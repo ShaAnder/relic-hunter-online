@@ -1,5 +1,5 @@
 import { Game } from "./core/Game";
-import { BattleScene } from "./scenes/BattleScene";
+import { MapScene } from "./scenes/MapScene";
 import "./style.css";
 
 async function bootStrap() {
@@ -9,7 +9,7 @@ async function bootStrap() {
 	}
 
 	const game = await Game.create(container);
-	await game.start(new BattleScene(game));
+	await game.start(new MapScene(game));
 }
 
 bootStrap().catch(console.error);

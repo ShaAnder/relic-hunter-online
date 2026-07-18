@@ -20,7 +20,7 @@ interface InputHandlerOptions {
 }
 
 /**
- * Attaches and detaches all keyboard and mouse listeners for DungeonScene.
+ * Attaches and detaches all keyboard and mouse listeners for BattleScene.
  *
  * Translates raw DOM events into named game actions via callbacks so the scene
  * itself never touches event objects or coordinate math. The Move button hit

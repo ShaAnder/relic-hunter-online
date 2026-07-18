@@ -22,7 +22,7 @@ import {
 } from "@relic-hunter/shared";
 
 /**
- * Tactical battle scene: renders the map grid, hosts the mercenary,
+ * Tactical map scene — the grid exploration layer: renders the map grid, hosts the mercenary,
  * and coordinates move mode, the camera, and the minimal turn system.
  *
  * The turn system is a single flag for now (one Move per turn, [E] ends
@@ -30,7 +30,7 @@ import {
  * Camera lock/follow is driven from update() so it can track the
  * mercenary's visual position through the whole move animation.
  */
-export class BattleScene implements Scene {
+export class MapScene implements Scene {
 	readonly view = new Container();
 
 	// Board layers

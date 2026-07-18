@@ -22,7 +22,7 @@ const TILE_COLORS: Record<TileType, number> = {
  * drawing iso diamond shapes, and centering the camera on the board.
  *
  * Pure rendering concern — holds no game state. Accepts a Grid and writes
- * into the provided Container. BattleScene calls build() on enter and on
+ * into the provided Container. MapScene calls build() on enter and on
  * [R] regen; nothing else in the scene touches tile graphics.
  *
  * Designed to work with any map type (dungeon, arena, town, overworld) —

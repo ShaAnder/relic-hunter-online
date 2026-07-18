@@ -1,8 +1,8 @@
 # Relic Hunter Online
 
-**A browser-based tactical multiplayer game inspired by the 1999 classic _Battle Hunter_.**
+**A browser-based tactical multiplayer game inspired by the 1999 classic _Battle Hunter_, evolved with Final Fantasy Tactics-style depth.**
 
-Players compete as hunters on a grid-based battlefield, using dice rolls and cards to move, fight, set traps, and secure powerful relics. The core fantasy is tense, high-stakes tactical decision-making where positioning, timing, and resource management matter more than raw power.
+Players compete as hunters on an isometric grid, using dice rolls and cards to move, fight, set traps, and secure powerful relics. The core fantasy is tense, high-stakes tactical decision-making where positioning, timing, and resource management matter more than raw power.
 
 ---
 
@@ -11,57 +11,26 @@ Players compete as hunters on a grid-based battlefield, using dice rolls and car
 Relic Hunter Online aims to capture the unique feel of the original game while evolving it into a modern, scalable live-service experience:
 
 - **Dice + Card Action Economy** — Every meaningful action is resolved through dice rolls or played cards.
-- **Grid-Based Tactics** — Positioning, movement range, and area control are central.
+- **Grid-Based Tactics** — Isometric positioning, movement range, and area control are central.
 - **Relic Objective** — The primary win condition is locating, claiming, and extracting the target relic.
 - **Competitive Player Interaction** — Hunters can battle each other, steal relics, and disrupt opponents.
 - **Meaningful Progression** — Persistent hunter stats, cards, and cosmetics that carry across sessions.
 
-Long-term goal: a commercial-grade platform with seasons, cosmetic monetization, skill-based matchmaking, and regular content updates.
+Long-term goal: a commercial-grade platform with seasons, cosmetic monetization, skill-based matchmaking, and regular content updates — designed from day one to support multiple scene and map types (dungeons, arenas, towns, overworld) in the FFT tradition.
 
 ---
 
 ## Tech Stack (Locked)
 
-- **Client Rendering**: PixiJS v8.19.0 (WebGL-powered 2D)
-- **Gameplay Networking**: Colyseus (authoritative game server)
-- **Platform Services**: Supabase (auth, database, realtime, storage, edge functions)
-- **Client Framework**: Vite + TypeScript
-- **Monorepo**: `client/`, `server/`, `shared/`
+| Layer               | Technology                                                   |
+| ------------------- | ------------------------------------------------------------ |
+| Client Rendering    | PixiJS v8.19.0 (WebGL-powered 2D, isometric)                 |
+| Gameplay Networking | Colyseus (authoritative game server)                         |
+| Platform Services   | Supabase (auth, database, realtime, storage, edge functions) |
+| Client Framework    | Vite + TypeScript                                            |
+| Monorepo            | npm workspaces — `client/`, `server/`, `shared/`             |
 
-Full architecture decisions and rationale are in `docs/01-tech-stack-decision.md`.
-
----
-
-## Monorepo & npm Workspaces Setup
-
-We use **npm workspaces** to manage the three packages in this repository (`client`, `server`, and `shared`).
-
-### Why We Set This Up
-
-Before workspaces, importing from `shared` required fragile relative paths like:
-
-```ts
-import { Card } from "../../../shared/src/types/card";
-```
-
-By using npm workspaces, we gain:
-
-- Clean imports using `@relic-hunter/shared`
-- Proper dependency management and deduplication
-- Development symlinks so changes in `shared/` are instantly available to both `client` and `server`
-- A clean foundation for sharing pure game logic between client and server (important for future offline/singleplayer support)
-
----
-
-## Current Architecture (Client)
-
-We are currently building the client-side foundation using a **Scene-based architecture**:
-
-- `Game` — Owns the PixiJS `Application`, the render loop, and the `SceneManager`.
-- `SceneManager` — Handles scene transitions safely (with race condition protection and proper lifecycle management).
-- `Scene` — Interface that all screens (Lobby, Dungeon, etc.) implement.
-
-This design keeps game logic decoupled from rendering and makes it easier to later move logic to the authoritative server in Phase 3.
+Full architecture decisions and rationale: `docs/01-tech-stack-decision.md`
 
 ---
 
@@ -69,28 +38,90 @@ This design keeps game logic decoupled from rendering and makes it easier to lat
 
 ```
 relic-hunter-online/
-├── package.json                 # Root workspace file
+├── package.json                      # Root workspace config
 ├── client/
-│   ├── src/
-│   │   ├── core/
-│   │   │   ├── Game.ts          # Main game controller + render loop
-│   │   │   ├── SceneManager.ts  # Scene transition & lifecycle manager
-│   │   │   └── Scene.ts         # Scene interface
-│   │   ├── scenes/              # Individual scenes (LobbyScene, DungeonScene, etc.)
-│   │   └── main.ts
-│   └── package.json
-├── server/
+│   └── src/
+│       ├── core/
+│       │   ├── Camera.ts             # Pan, zoom, lock/follow
+│       │   ├── Game.ts               # PixiJS bootstrap + render loop
+│       │   ├── Scene.ts              # Scene interface
+│       │   └── SceneManager.ts       # Scene transitions + lifecycle
+│       ├── entities/
+│       │   └── Mercenary.ts          # Visual token + continuous path animation
+│       ├── math/
+│       │   └── isoGridMath.ts        # Grid ↔ screen coordinate conversion
+│       ├── rendering/
+│       │   └── MapRenderer.ts        # Tile graphics + camera centering
+│       ├── scenes/
+│       │   ├── MapScene.ts           # Tactical map — movement, exploration, relic hunting
+│       │   ├── BattleScene.ts        # (future) Combat resolution between hunters
+│       │   └── LobbyScene.ts         # Title / lobby placeholder
+│       ├── systems/
+│       │   ├── InputHandler.ts       # Keyboard + mouse wiring for MapScene
+│       │   ├── MoveController.ts     # Move mode state machine + path preview
+│       │   └── TurnManager.ts        # Turn gate, movement budget, end-turn logic
+│       ├── ui/
+│       │   └── MoveButton.ts         # Move button (enabled / active / disabled states)
+│       ├── css.d.ts                  # CSS import type declaration
+│       └── main.ts                   # Entry point
+├── server/                           # Colyseus server (Phase 3)
 ├── shared/
-├── docs/
-│   ├── 01-tech-stack-decision.md
-│   └── 02-development-roadmap.md
-├── README.md
-└── .gitignore
+│   └── src/
+│       ├── game/
+│       │   ├── generation.ts         # Procedural map generation (seeded)
+│       │   ├── grid.ts               # Grid data structure + tile types
+│       │   ├── movement.ts           # BFS movement range + pathfinding
+│       │   └── random.ts             # Deterministic RNG
+│       └── types/
+│           └── mercenary.ts          # MercenaryState (shared client/server)
+└── docs/
+    ├── 01-tech-stack-decision.md
+    ├── 02-development-roadmap.md
+    └── 03-current-progress.md
 ```
 
 ---
 
-## Getting Started (Development)
+## Scene Map
+
+Scenes are named by what the **player is doing**, not the map type:
+
+| Scene           | Status  | Purpose                                    |
+| --------------- | ------- | ------------------------------------------ |
+| `LobbyScene`    | Active  | Title screen / matchmaking                 |
+| `MapScene`      | Active  | Tactical grid — move, explore, hunt relics |
+| `BattleScene`   | Planned | Combat resolution when hunters engage      |
+| `TownScene`     | Planned | NPC interaction, shops, story              |
+| `WorldMapScene` | Planned | Overworld travel between locations         |
+
+---
+
+## Architecture Overview
+
+### Scene System
+
+`Game` bootstraps PixiJS and owns a single `SceneManager`. Scenes implement the `Scene` interface — `onEnter`, `onExit`, `update`, `onResize` — and are swapped in/out without leaking listeners or containers.
+
+### MapScene and its Systems
+
+`MapScene` is a thin coordinator. The real work is split across dedicated systems:
+
+| System           | Responsibility                                                                   |
+| ---------------- | -------------------------------------------------------------------------------- |
+| `Camera`         | WASD pan, wheel zoom, lock/follow during move animation                          |
+| `MapRenderer`    | Builds iso tile graphics from a `Grid`; returns timing stats                     |
+| `TurnManager`    | One Move per turn; grows into full dice/card phases later                        |
+| `MoveController` | Move mode state machine: range, path preview, destination glow, commit           |
+| `InputHandler`   | Attaches/detaches all keyboard + mouse listeners; translates events to callbacks |
+| `Mercenary`      | Visual token; continuous ease-in/out animation across the whole committed path   |
+
+### Shared Package
+
+`@relic-hunter/shared` contains pure logic with no PixiJS, no Colyseus, and no DOM references — safe to import on both client and server. `movement.ts` (BFS pathfinding) is already server-ready for Phase 3.
+
+---
+
+## Getting Started
 
 ### Prerequisites
 
@@ -102,28 +133,54 @@ relic-hunter-online/
 npm install
 ```
 
-### Run Client
+### Run Client (dev)
 
 ```bash
-cd client
 npm run dev
 ```
 
-### Run Server (later)
+Or from the client directory:
 
 ```bash
-cd server
-npm run dev
+cd client && npm run dev
 ```
 
+Opens at `http://localhost:5173`
+
+### Controls (MapScene)
+
+| Input                | Action           |
+| -------------------- | ---------------- |
+| `WASD`               | Pan camera       |
+| Mouse wheel          | Zoom             |
+| `Move` button        | Enter move mode  |
+| Mouse (in move mode) | Preview path     |
+| Click (in move mode) | Commit move      |
+| `Esc`                | Cancel move mode |
+| `E`                  | End turn         |
+| `R`                  | Regenerate map   |
+
 ---
 
-## Development Roadmap
+## Current Status
 
-See `docs/02-development-roadmap.md`
+**Phase 1 — Single-Player Core Loop** (active)
 
-We are currently in **Phase 1** — building the client-side scene system and core game loop foundation.
+Working: isometric map generation, camera, mercenary movement with continuous animation, move mode with path preview + destination glow, one-Move-per-turn system.
+
+Next: dice rolling system → card hand → movement budget from dice → combat.
+
+See `docs/02-development-roadmap.md` for the full phase breakdown and `docs/03-current-progress.md` for the current sprint state.
 
 ---
 
-**Status**: Active development — Building client-side `Game` + `SceneManager` system.
+## Commenting Standard
+
+All source files follow a consistent style (defined in the TabWorks system prompt §9):
+
+- **File-level**: One JSDoc on the main class — role, architecture context, non-obvious design decisions.
+- **Methods**: One-line JSDoc on every method; second line only for a real caller contract.
+- **Blocks**: Short `//` label above logical groups.
+- **Inline**: Only where a line is genuinely non-obvious.
+
+No lecture paragraphs in code. Teaching commentary lives in chat, ADRs, and docs.

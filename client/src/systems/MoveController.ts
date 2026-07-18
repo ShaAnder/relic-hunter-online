@@ -14,17 +14,20 @@ interface MoveControllerOptions {
 	grid: Grid;
 	camera: Camera;
 	mercenary: Mercenary;
+	/** Returns the mercenary's current logical grid position. */
 	getMercenaryCoord: () => GridCoord;
+	/** Returns the movement budget remaining this turn. */
 	getMovementRemaining: () => number;
 	/** Turn gate — false once the single Move of the turn is spent. */
 	getCanMove: () => boolean;
+	/** Called when the player commits a move; scene applies it. */
 	onMoveCommitted: (target: GridCoord, path: GridCoord[]) => void;
 }
 
 /**
  * Owns the "Move Mode" state machine: entering/exiting, movement range,
  * path preview with clamping, the bright destination glow, and committing
- * the move. DungeonScene decides when to enter/exit and reacts to commits.
+ * the move. BattleScene decides when to enter/exit and reacts to commits.
  *
  * The camera lock lifecycle is driven by the scene's update() since it
  * knows about the move animation — enter() only does the initial lock so
