@@ -8,7 +8,9 @@ import {
 	TILE_WIDTH,
 	TILE_HEIGHT,
 } from "../math/isoGridMath";
-import { Mercenary } from "../entities/mercenary";
+import { Mercenary } from "../entities/Mercenary";
+import { MoveButton } from "../ui/MoveButton";
+import { MoveController } from "../systems/MoveController";
 import {
 	Grid,
 	TileType,
@@ -17,74 +19,51 @@ import {
 	findFirstWalkableTile,
 	createMercenary,
 	type MercenaryState,
-	computeMovementRange,
-	getPathTo,
-	type MovementRangeEntry,
 } from "@relic-hunter/shared";
 
-/**
- * DungeonScene renders the grid using isometric projection.
- *
- * This is the first real visual scene that uses the shared Grid data.
- * It demonstrates the full pipeline: shared data → isometric math → Pixi rendering.
- */
 export class DungeonScene implements Scene {
 	readonly view = new Container();
 
-	// grid board and tiles
 	private grid: Grid;
 	private boardContainer = new Container();
 	private tilesContainer = new Container();
-
-	// mercenary objects
-	private movementRangeContainer = new Container();
 	private mercenaryContainer = new Container();
 
-	// camera and stats objects
 	private camera: Camera;
 	private statsText: Text;
+	private moveButton: MoveButton;
+	private moveController: MoveController;
 
-	// Dimensions of the dungeon in tiles.
 	private readonly DUNGEON_WIDTH = 50;
 	private readonly DUNGEON_HEIGHT = 50;
-
-	// Controls how many rooms get generated based on map size.
 	private readonly ROOM_DENSITY = 1 / 50;
 	private readonly ROOM_COUNT = Math.floor(
 		this.DUNGEON_WIDTH * this.DUNGEON_HEIGHT * this.ROOM_DENSITY,
 	);
+	private dungeonSeed = 42;
 
-	// Seed used for dungeon generation. Changing this produces a different map.
-	private dungeonSeed = 133283;
-
-	// Color mapping for different tile types.
 	private readonly TILE_COLORS: Record<TileType, number> = {
 		[TileType.Floor]: 0x3a3a3a,
 		[TileType.Wall]: 0x1a1a1a,
 		[TileType.Exit]: 0xd4af37,
 	};
 
-	// set our mercenary and movement
-	private mercState!: MercenaryState;
-	private merc!: Mercenary;
+	private mercState: MercenaryState;
+	private mercenary: Mercenary;
 	private movementRemaining = 0;
-	private movementRange: Map<string, MovementRangeEntry> | null = null;
 
-	// Performance tracking variables.
 	private tileCount = 0;
 	private lastGenerationMs = 0;
 	private lastRenderMs = 0;
 	private fpsRefreshAccumulator = 0;
 
 	constructor(private game: Game) {
-		// init dungeon and add the board to the view
 		this.grid = this.buildDungeon();
+
 		this.boardContainer.addChild(this.tilesContainer);
-		this.boardContainer.addChild(this.movementRangeContainer);
 		this.boardContainer.addChild(this.mercenaryContainer);
 		this.view.addChild(this.boardContainer);
 
-		// Initialize the camera and pass it the boardContainer
 		this.camera = new Camera(this.boardContainer, {
 			initialZoom: 1.75,
 			minZoom: 0.75,
@@ -92,7 +71,22 @@ export class DungeonScene implements Scene {
 			panSpeed: 700,
 		});
 
-		// Create the stats text in the top-left corner.
+		this.mercState = this.spawnMercenary();
+		this.movementRemaining = this.mercState.stats.speed;
+		this.mercenary = new Mercenary(this.mercState.coord);
+		this.mercenaryContainer.addChild(this.mercenary.view);
+
+		// MoveController owns range + path preview rendering
+		this.moveController = new MoveController({
+			grid: this.grid,
+			camera: this.camera,
+			mercenary: this.mercenary,
+			getMercenaryCoord: () => this.mercState.coord,
+			getMovementRemaining: () => this.movementRemaining,
+			onMoveCommitted: (target, path) => this.onMoveCommitted(target, path),
+		});
+		this.boardContainer.addChild(this.moveController.view);
+
 		this.statsText = new Text({
 			text: "",
 			style: { fill: 0xffffff, fontSize: 14, fontFamily: "monospace" },
@@ -101,43 +95,38 @@ export class DungeonScene implements Scene {
 		this.statsText.y = 12;
 		this.view.addChild(this.statsText);
 
-		// init our mercenaries
-		this.mercState = this.spawnMerc();
-		this.movementRemaining = this.mercState.stats.speed;
-		this.merc = new Mercenary(this.mercState.coord);
-		this.mercenaryContainer.addChild(this.merc.view);
+		this.moveButton = new MoveButton();
+		this.view.addChild(this.moveButton.view);
+		this.positionMoveButton();
 	}
 
 	onEnter(): void {
-		// Draw all the tiles for the first time.
 		this.renderGrid();
-		this.recomputeMovementRange();
-		this.renderMovementRange();
 		this.centerCameraOnBoard();
-
 		this.camera.attach(this.game.app.canvas);
+
 		window.addEventListener("keydown", this.handleKeyDown);
 		this.game.app.canvas.addEventListener("click", this.handleClick);
+		this.game.app.canvas.addEventListener("mousemove", this.handleMouseMove);
 	}
 
 	onExit(): void {
-		// Clean up tile graphics and camera listeners when leaving the scene.
+		this.moveController.exit();
 		this.boardContainer.removeChildren();
 		this.camera.detach(this.game.app.canvas);
 		window.removeEventListener("keydown", this.handleKeyDown);
 		this.game.app.canvas.removeEventListener("click", this.handleClick);
+		this.game.app.canvas.removeEventListener("mousemove", this.handleMouseMove);
 	}
 
 	update(deltaTime: number): void {
-		// Update camera position and zoom based on input.
 		this.camera.update(
 			deltaTime,
 			this.game.app.screen.width,
 			this.game.app.screen.height,
 		);
-		this.merc.update(deltaTime);
+		this.mercenary.update(deltaTime);
 
-		// Refresh the stats text roughly twice per second.
 		this.fpsRefreshAccumulator += deltaTime;
 		if (this.fpsRefreshAccumulator >= 30) {
 			this.fpsRefreshAccumulator = 0;
@@ -146,29 +135,128 @@ export class DungeonScene implements Scene {
 	}
 
 	onResize(): void {
-		// Intentionally left empty.
-		// We do not want to fight the player’s current camera position on resize.
+		this.positionMoveButton();
+	}
+
+	// ---------- Move mode integration ----------
+
+	private async onMoveCommitted(
+		target: GridCoord,
+		path: GridCoord[],
+	): Promise<void> {
+		this.mercState.coord = target;
+		this.movementRemaining -= path.length;
+
+		// Clear visuals immediately
+		this.moveController.exit();
+
+		await this.mercenary.moveAlongPath(path);
+		this.refreshStatsText();
+	}
+
+	// ---------- Input ----------
+
+	private handleKeyDown = (event: KeyboardEvent): void => {
+		if (event.key === "Escape") {
+			this.moveController.exit();
+			this.moveButton.setActive(false);
+			return;
+		}
+
+		if (event.key === "r" || event.key === "R") {
+			this.moveController.exit();
+			this.moveButton.setActive(false);
+
+			this.dungeonSeed = Math.floor(Math.random() * 1_000_000);
+			this.grid = this.buildDungeon();
+			this.mercState = this.spawnMercenary();
+			this.movementRemaining = this.mercState.stats.speed;
+
+			this.mercenaryContainer.removeChildren();
+			this.mercenary = new Mercenary(this.mercState.coord);
+			this.mercenaryContainer.addChild(this.mercenary.view);
+
+			// Re-create controller with new grid reference
+			this.boardContainer.removeChild(this.moveController.view);
+			this.moveController = new MoveController({
+				grid: this.grid,
+				camera: this.camera,
+				mercenary: this.mercenary,
+				getMercenaryCoord: () => this.mercState.coord,
+				getMovementRemaining: () => this.movementRemaining,
+				onMoveCommitted: (target, path) => this.onMoveCommitted(target, path),
+			});
+			this.boardContainer.addChild(this.moveController.view);
+
+			this.renderGrid();
+			this.centerCameraOnBoard();
+			this.refreshStatsText();
+		}
+	};
+
+	private handleClick = (event: MouseEvent): void => {
+		const { screenX, screenY } = this.getScreenPoint(event);
+
+		// Toggle Move button
+		if (this.moveButton.hitTest(screenX, screenY)) {
+			if (this.moveController.active) {
+				this.moveController.exit();
+				this.moveButton.setActive(false);
+			} else {
+				this.moveController.enter();
+				this.moveButton.setActive(true);
+			}
+			return;
+		}
+
+		// Commit move if in move mode
+		if (this.moveController.active) {
+			this.moveController.tryCommit();
+		}
+	};
+
+	private handleMouseMove = (event: MouseEvent): void => {
+		if (!this.moveController.active) return;
+
+		const { screenX, screenY } = this.getScreenPoint(event);
+		const hovered = this.screenPointToGrid(screenX, screenY);
+		this.moveController.onHover(hovered);
+	};
+
+	// ---------- Helpers ----------
+
+	private getScreenPoint(event: MouseEvent) {
+		const rect = this.game.app.canvas.getBoundingClientRect();
+		return {
+			screenX: event.clientX - rect.left,
+			screenY: event.clientY - rect.top,
+		};
+	}
+
+	private screenPointToGrid(screenX: number, screenY: number): GridCoord {
+		const localX =
+			(screenX - this.boardContainer.x) / this.boardContainer.scale.x;
+		const localY =
+			(screenY - this.boardContainer.y) / this.boardContainer.scale.y;
+		return screenToGrid(localX, localY);
+	}
+
+	private positionMoveButton(): void {
+		this.moveButton.view.x = 20;
+		this.moveButton.view.y = this.game.app.screen.height - 60;
 	}
 
 	private buildDungeon(): Grid {
-		// Record start time for performance measurement.
 		const start = performance.now();
-
-		// Generate the grid data.
 		const grid = generateDungeon(this.DUNGEON_WIDTH, this.DUNGEON_HEIGHT, {
 			seed: this.dungeonSeed,
 			roomCount: this.ROOM_COUNT,
 		});
-
-		// Store how long generation took.
 		this.lastGenerationMs = performance.now() - start;
-
 		return grid;
 	}
 
-	// spawn our mercenary on the first walkable tile with some basic stats for now
-	// stats will be determined by level / equips later
-	private spawnMerc(): MercenaryState {
+	private spawnMercenary(): MercenaryState {
 		const spawnCoord = findFirstWalkableTile(this.grid) ?? { x: 0, y: 0 };
 		return createMercenary("player", spawnCoord, {
 			speed: 4,
@@ -176,72 +264,6 @@ export class DungeonScene implements Scene {
 			defense: 2,
 			maxHp: 20,
 		});
-	}
-
-	private recomputeMovementRange(): void {
-		this.movementRange = computeMovementRange(
-			this.grid,
-			this.mercState.coord,
-			this.movementRemaining,
-		);
-	}
-
-	private handleKeyDown = (event: KeyboardEvent): void => {
-		// Regenerate the dungeon when R is pressed.
-		if (event.key === "r" || event.key === "R") {
-			this.dungeonSeed = Math.floor(Math.random() * 1_000_000);
-			this.grid = this.buildDungeon();
-
-			this.mercState = this.spawnMerc();
-			this.movementRemaining = this.mercState.stats.speed;
-
-			this.mercenaryContainer.removeChildren();
-			this.merc = new Mercenary(this.mercState.coord);
-			this.mercenaryContainer.addChild(this.merc.view);
-
-			this.renderGrid();
-			this.recomputeMovementRange();
-			this.renderMovementRange();
-			this.centerCameraOnBoard();
-		}
-	};
-
-	private handleClick = (event: MouseEvent): void => {
-		if (this.camera.isLocked) return;
-		if (this.merc.isAnimating) return;
-
-		const canvas = this.game.app.canvas;
-		const rect = canvas.getBoundingClientRect();
-		const screenX = event.clientX - rect.left;
-		const screenY = event.clientY - rect.top;
-
-		// Correct conversion that respects camera pan + zoom
-		const local = this.boardContainer.toLocal({ x: screenX, y: screenY });
-		const destination = screenToGrid(local.x, local.y);
-
-		this.tryMoveMercTo(destination);
-	};
-
-	private async tryMoveMercTo(destination: GridCoord): Promise<void> {
-		// check if movement range exists
-		if (!this.movementRange) return;
-
-		// get our path based on movement range
-		const path = getPathTo(this.movementRange, destination);
-		if (!path || path.length === 0) return;
-
-		// set merc state coords and subtract from movement
-		this.mercState.coord = destination;
-		this.movementRemaining -= path.length;
-
-		// clear highlight from tile while animating
-		this.movementRangeContainer.removeChildren();
-
-		await this.merc.moveAlongPath(path);
-
-		this.recomputeMovementRange();
-		this.renderMovementRange();
-		this.refreshStatsText();
 	}
 
 	private renderGrid(): void {
@@ -268,76 +290,39 @@ export class DungeonScene implements Scene {
 		this.refreshStatsText();
 	}
 
-	private renderMovementRange(): void {
-		this.movementRangeContainer.removeChildren();
-		if (!this.movementRange) return;
-
-		for (const entry of this.movementRange.values()) {
-			if (entry.distance === 0) continue;
-
-			// CRITICAL FIX: convert grid coord → screen position
-			const screenPos = gridToScreen(entry.coord);
-
-			const highlight = new Graphics();
-			highlight.poly([
-				0,
-				-TILE_HEIGHT / 2,
-				TILE_WIDTH / 2,
-				0,
-				0,
-				TILE_HEIGHT / 2,
-				-TILE_WIDTH / 2,
-				0,
-			]);
-			highlight.fill({ color: 0x4a9eff, alpha: 0.35 });
-			highlight.x = screenPos.x;
-			highlight.y = screenPos.y;
-			this.movementRangeContainer.addChild(highlight);
-		}
-	}
-
-	private refreshStatsText(): void {
-		// Update the on-screen stats text with current information.
-		this.statsText.text = [
-			`Map: ${this.DUNGEON_WIDTH}x${this.DUNGEON_HEIGHT} Rooms: ${this.ROOM_COUNT} Seed: ${this.dungeonSeed}`,
-			`Tiles: ${this.tileCount}`,
-			`Generation: ${this.lastGenerationMs.toFixed(1)}ms Tile-build: ${this.lastRenderMs.toFixed(1)}ms`,
-			`FPS: ${Math.round(this.game.app.ticker.FPS)}`,
-			`WASD pan · wheel zoom · [R] regenerate`,
-		].join("\n");
-	}
-
 	private drawTileDiamond(color: number): Graphics {
-		// Create a new Graphics object to draw one tile.
 		const g = new Graphics();
-
-		// Draw a diamond shape using four points (top, right, bottom, left).
 		g.poly([
 			0,
-			-TILE_HEIGHT / 2, // Top
+			-TILE_HEIGHT / 2,
 			TILE_WIDTH / 2,
-			0, // Right
 			0,
-			TILE_HEIGHT / 2, // Bottom
+			0,
+			TILE_HEIGHT / 2,
 			-TILE_WIDTH / 2,
-			0, // Left
+			0,
 		]);
-
 		g.fill(color);
 		g.stroke({ width: 1, color: 0x000000, alpha: 0.3 });
-
 		return g;
 	}
 
 	private centerCameraOnBoard(): void {
-		// Get the bounding box of all the tiles that were just drawn.
 		const bounds = this.boardContainer.getLocalBounds();
-
-		// Calculate the center point of the entire drawn map.
 		this.camera.centerOn(
 			{ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
 			this.game.app.screen.width,
 			this.game.app.screen.height,
 		);
+	}
+
+	private refreshStatsText(): void {
+		this.statsText.text = [
+			`Map: ${this.DUNGEON_WIDTH}x${this.DUNGEON_HEIGHT} Rooms: ${this.ROOM_COUNT} Seed: ${this.dungeonSeed}`,
+			`Tiles: ${this.tileCount} Gen: ${this.lastGenerationMs.toFixed(1)}ms Build: ${this.lastRenderMs.toFixed(1)}ms`,
+			`FPS: ${Math.round(this.game.app.ticker.FPS)}`,
+			`Movement remaining: ${this.movementRemaining}`,
+			`[Move] to aim · click tile to confirm · [Esc] cancel · [R] regenerate`,
+		].join("\n");
 	}
 }

@@ -77,3 +77,30 @@ export function getPathTo(
 
 	return path.reverse();
 }
+
+/**
+ * Finds the reachable tile in `range` closest (straight-line) to `target` —
+ * used to "clamp" a hovered tile that's outside the movement budget down to
+ * the nearest tile the hunter can actually reach in that general direction.
+ * Returns null only if range is empty (0 movement remaining).
+ */
+export function findNearestReachableTile(
+	range: Map<string, MovementRangeEntry>,
+	target: GridCoord,
+): GridCoord | null {
+	let closest: GridCoord | null = null;
+	let closestDistSq = Infinity;
+
+	for (const entry of range.values()) {
+		const dx = entry.coord.x - target.x;
+		const dy = entry.coord.y - target.y;
+		const distSq = dx * dx + dy * dy;
+
+		if (distSq < closestDistSq) {
+			closestDistSq = distSq;
+			closest = entry.coord;
+		}
+	}
+
+	return closest;
+}
