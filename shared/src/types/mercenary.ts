@@ -9,6 +9,7 @@ export interface MercenaryStats {
 	attack: number;
 	defense: number;
 	maxHp: number;
+	ap: number;
 }
 
 // mercenaries live state during a map

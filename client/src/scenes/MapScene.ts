@@ -9,8 +9,9 @@ import {
 	TILE_HEIGHT,
 } from "../math/isoGridMath";
 import { Mercenary } from "../entities/Mercenary";
-import { MoveButton } from "../ui/MoveButton";
+import { ButtonBar } from "../ui/ButtonBar";
 import { MoveController } from "../systems/MoveController";
+import { TurnManager } from "../systems/TurnManager";
 import {
 	Grid,
 	TileType,
@@ -22,13 +23,13 @@ import {
 } from "@relic-hunter/shared";
 
 /**
- * Tactical map scene — the grid exploration layer: renders the map grid, hosts the mercenary,
- * and coordinates move mode, the camera, and the minimal turn system.
+ * Tactical map scene: renders the isometric grid, hosts the mercenary,
+ * and coordinates the AP turn system, move mode, and camera.
  *
- * The turn system is a single flag for now (one Move per turn, [E] ends
- * the turn) and grows into a real TurnManager once dice and cards land.
- * Camera lock/follow is driven from update() so it can track the
- * mercenary's visual position through the whole move animation.
+ * Button interaction is fully delegated to ButtonBar — MapScene receives
+ * a ButtonAction string from handleClick and switches on intent. All turn
+ * arithmetic lives in TurnManager. This scene makes decisions and wires
+ * systems together; it does none of the work itself.
  */
 export class MapScene implements Scene {
 	readonly view = new Container();
@@ -39,11 +40,18 @@ export class MapScene implements Scene {
 	private tilesContainer = new Container();
 	private mercenaryContainer = new Container();
 
-	// Systems + UI
+	// Systems
 	private camera: Camera;
-	private statsText: Text;
-	private moveButton: MoveButton;
+	private turnManager: TurnManager;
 	private moveController: MoveController;
+
+	// Entities
+	private mercState: MercenaryState;
+	private mercenary: Mercenary;
+
+	// UI
+	private buttonBar: ButtonBar;
+	private statsText: Text;
 
 	// Map config
 	private readonly MAP_WIDTH = 50;
@@ -60,24 +68,16 @@ export class MapScene implements Scene {
 		[TileType.Exit]: 0xd4af37,
 	};
 
-	// Player state
-	private mercState: MercenaryState;
-	private mercenary: Mercenary;
-	private movementRemaining = 0;
-
-	// Minimal turn system — one Move per turn, reset by endTurn()
-	private hasMovedThisTurn = false;
-
-	// Stats overlay
+	// Stats overlay timing
 	private tileCount = 0;
 	private lastGenerationMs = 0;
 	private lastRenderMs = 0;
-	private fpsRefreshAccumulator = 0;
+	private fpsAccumulator = 0;
 
 	constructor(private game: Game) {
 		this.grid = this.buildMap();
 
-		// Board layer order: tiles under mercenary
+		// Board layer order: tiles → move overlay → mercenary
 		this.boardContainer.addChild(this.tilesContainer);
 		this.boardContainer.addChild(this.mercenaryContainer);
 		this.view.addChild(this.boardContainer);
@@ -89,15 +89,23 @@ export class MapScene implements Scene {
 			panSpeed: 700,
 		});
 
-		// Spawn the player mercenary
+		// Spawn player mercenary
 		this.mercState = this.spawnMercenary();
-		this.movementRemaining = this.mercState.stats.speed;
 		this.mercenary = new Mercenary(this.mercState.coord);
 		this.mercenaryContainer.addChild(this.mercenary.view);
 
-		// MoveController owns range + path preview rendering
+		// TurnManager fires syncUI on every state change
+		this.turnManager = new TurnManager(
+			() => this.mercState,
+			() => this.syncUI(),
+		);
+
 		this.moveController = this.createMoveController();
 		this.boardContainer.addChild(this.moveController.view);
+
+		// Sidebar button bar
+		this.buttonBar = new ButtonBar();
+		this.view.addChild(this.buttonBar.view);
 
 		// Stats overlay
 		this.statsText = new Text({
@@ -107,11 +115,6 @@ export class MapScene implements Scene {
 		this.statsText.x = 12;
 		this.statsText.y = 12;
 		this.view.addChild(this.statsText);
-
-		// Move button
-		this.moveButton = new MoveButton();
-		this.view.addChild(this.moveButton.view);
-		this.positionMoveButton();
 	}
 
 	/** Render the map, center the camera, and wire up input. */
@@ -119,6 +122,11 @@ export class MapScene implements Scene {
 		this.renderMap();
 		this.centerCameraOnMap();
 		this.camera.attach(this.game.app.canvas);
+		this.buttonBar.resize(
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
+		this.syncUI();
 
 		window.addEventListener("keydown", this.handleKeyDown);
 		this.game.app.canvas.addEventListener("click", this.handleClick);
@@ -128,6 +136,7 @@ export class MapScene implements Scene {
 	/** Tear down visuals and input listeners. */
 	onExit(): void {
 		this.moveController.exit();
+		this.buttonBar.closeMenu();
 		this.boardContainer.removeChildren();
 		this.camera.detach(this.game.app.canvas);
 		window.removeEventListener("keydown", this.handleKeyDown);
@@ -135,7 +144,7 @@ export class MapScene implements Scene {
 		this.game.app.canvas.removeEventListener("mousemove", this.handleMouseMove);
 	}
 
-	/** Per-frame tick: camera, mercenary animation, follow logic, stats. */
+	/** Per-frame tick: camera, animation, camera follow, stats. */
 	update(deltaTime: number): void {
 		this.camera.update(
 			deltaTime,
@@ -144,9 +153,7 @@ export class MapScene implements Scene {
 		);
 		this.mercenary.update(deltaTime);
 
-		// Camera lock + follow: while aiming or animating, track the
-		// mercenary's VISUAL position — the logical coord jumps to the
-		// destination instantly on commit, the token doesn't.
+		// Lock camera to the mercenary's VISUAL position while aiming or animating
 		if (this.moveController.active || this.mercenary.isAnimating) {
 			this.camera.lockTo({
 				x: this.mercenary.view.x,
@@ -156,165 +163,208 @@ export class MapScene implements Scene {
 			this.camera.unlock();
 		}
 
-		this.fpsRefreshAccumulator += deltaTime;
-		if (this.fpsRefreshAccumulator >= 30) {
-			this.fpsRefreshAccumulator = 0;
+		this.fpsAccumulator += deltaTime;
+		if (this.fpsAccumulator >= 30) {
+			this.fpsAccumulator = 0;
 			this.refreshStatsText();
 		}
 	}
 
-	/** Keep UI anchored on window resize. */
+	/** Reposition UI on window resize. */
 	onResize(_width: number, height: number): void {
-		this.moveButton.view.x = 20;
-		this.moveButton.view.y = height - 60;
+		this.buttonBar.resize(this.game.app.screen.width, height);
 	}
 
-	// ---------- Move mode integration ----------
+	// ---------- Move ----------
 
 	/**
-	 * Apply a committed move: update logical state, spend the turn's Move,
-	 * and play the path animation. Resolves when the animation finishes.
+	 * Begin a Move action and enter aim mode.
+	 * Phase 1 stub — card selection replaces hardcoded values once hand exists.
+	 */
+	private handleMovePressed(): void {
+		if (this.moveController.active) {
+			this.moveController.exit();
+			this.buttonBar.setMoveActive(false);
+			return;
+		}
+
+		// TODO Phase 1 card system: open card selection overlay, pass chosen type + value
+		const cardType = "none";
+		const cardValue = 0;
+		if (!this.turnManager.beginMovement(cardType, cardValue)) return;
+
+		this.moveController.enter();
+		this.buttonBar.setMoveActive(this.moveController.active);
+		this.buttonBar.closeMenu();
+	}
+
+	/**
+	 * Commit a move path: advance position, deduct tiles, play animation.
+	 * Resolves when the animation finishes.
 	 */
 	private async onMoveCommitted(
 		target: GridCoord,
 		path: GridCoord[],
 	): Promise<void> {
 		this.mercState.coord = target;
-
-		// Movement is one committed action — leftover budget isn't
-		// spendable this turn, so zero it rather than decrement
-		this.movementRemaining = 0;
-
-		// Spend the turn's single Move
-		this.hasMovedThisTurn = true;
-		this.moveButton.setActive(false);
-		this.moveButton.setEnabled(false);
-
-		// exit() unlocks the camera, but update() re-locks next frame
-		// because isAnimating is true — the camera stays on the hunter
+		this.turnManager.commitMove(path.length);
+		this.buttonBar.setMoveActive(false);
 		this.moveController.exit();
 
 		await this.mercenary.moveAlongPath(path);
-		this.refreshStatsText();
+		this.syncUI();
 	}
 
-	/**
-	 * Reset the Move allowance and movement budget.
-	 * No-ops mid-animation so turn state can't desync from the visuals.
-	 */
-	private endTurn(): void {
-		if (this.mercenary.isAnimating) return;
+	// ---------- Actions ----------
 
-		this.hasMovedThisTurn = false;
-		this.movementRemaining = this.mercState.stats.speed;
+	/** Spend 2 AP on Attack and lock Move. Combat resolver deferred to Phase 2. */
+	private handleAttack(): void {
+		if (!this.turnManager.spendAttack()) return;
 		this.moveController.exit();
-		this.moveButton.setEnabled(true);
-		this.moveButton.setActive(false);
-		this.refreshStatsText();
+		this.buttonBar.setMoveActive(false);
+		this.buttonBar.closeMenu();
+		// TODO Phase 2: open combat resolver
+	}
+
+	/** Spend 1 AP on Rest and lock Move. Card draw deferred to Phase 1 card system. */
+	private handleRest(): void {
+		if (!this.turnManager.spendRest()) return;
+		this.moveController.exit();
+		this.buttonBar.setMoveActive(false);
+		this.buttonBar.closeMenu();
+		// TODO Phase 1 card system: draw up to 2 cards
+	}
+
+	/** Spend 1 AP on Disengage. Restricted move deferred to ZoC system. */
+	private handleDisengage(): void {
+		if (!this.turnManager.spendDisengage()) return;
+		this.moveController.exit();
+		this.buttonBar.setMoveActive(false);
+		this.buttonBar.closeMenu();
+		// TODO ZoC system: trigger restricted 1–2 tile disengage move
+	}
+
+	// ---------- End Turn ----------
+
+	/**
+	 * End the turn — shared by [E] key, End Turn button, and Pass button.
+	 * No-ops mid-animation so turn state can't desync from visuals.
+	 */
+	private handleEndTurn(): void {
+		if (this.mercenary.isAnimating) return;
+		this.moveController.exit();
+		this.buttonBar.setMoveActive(false);
+		this.buttonBar.closeMenu();
+		this.turnManager.endTurn();
 	}
 
 	// ---------- Input ----------
 
 	/** [Esc] cancel aim · [E] end turn · [R] regenerate map. */
 	private handleKeyDown = (event: KeyboardEvent): void => {
-		if (event.key === "Escape") {
-			this.moveController.exit();
-			this.moveButton.setActive(false);
-			return;
-		}
-
-		if (event.key === "e" || event.key === "E") {
-			this.endTurn();
-			return;
-		}
-
-		if (event.key === "r" || event.key === "R") {
-			this.regenerateMap();
+		switch (event.key) {
+			case "Escape":
+				this.moveController.exit();
+				this.buttonBar.setMoveActive(false);
+				this.buttonBar.closeMenu();
+				break;
+			case "e":
+			case "E":
+				this.handleEndTurn();
+				break;
+			case "r":
+			case "R":
+				this.regenerateMap();
+				break;
 		}
 	};
 
-	/** Route clicks to the Move button or, in move mode, to a commit. */
+	/** Delegate all click routing to ButtonBar, then switch on the returned action. */
 	private handleClick = (event: MouseEvent): void => {
 		const { screenX, screenY } = this.getScreenPoint(event);
+		const action = this.buttonBar.handleClick(screenX, screenY);
 
-		// Move button toggle (hitTest returns false while disabled)
-		if (this.moveButton.hitTest(screenX, screenY)) {
-			if (this.moveController.active) {
-				this.moveController.exit();
-				this.moveButton.setActive(false);
-			} else {
-				this.moveController.enter();
-				// enter() can refuse — only light the button if it engaged
-				this.moveButton.setActive(this.moveController.active);
-			}
-			return;
-		}
-
-		if (this.moveController.active) {
-			this.moveController.tryCommit();
+		switch (action) {
+			case "move":
+				this.handleMovePressed();
+				break;
+			case "attack":
+				this.handleAttack();
+				break;
+			case "rest":
+				this.handleRest();
+				break;
+			case "disengage":
+				this.handleDisengage();
+				break;
+			case "endTurn":
+				this.handleEndTurn();
+				break;
+			case null:
+				// No button hit — board click while aiming = commit move
+				if (this.moveController.active) this.moveController.tryCommit();
+				break;
 		}
 	};
 
 	/** Feed hovered tiles to the path preview while aiming. */
 	private handleMouseMove = (event: MouseEvent): void => {
 		if (!this.moveController.active) return;
-
 		const { screenX, screenY } = this.getScreenPoint(event);
-		const hovered = this.screenPointToGrid(screenX, screenY);
-		this.moveController.onHover(hovered);
+		this.moveController.onHover(this.screenPointToGrid(screenX, screenY));
 	};
+
+	// ---------- UI ----------
+
+	/** Sync ButtonBar and stats overlay to current TurnManager state. */
+	private syncUI(): void {
+		this.buttonBar.sync(this.turnManager);
+		this.refreshStatsText();
+	}
 
 	// ---------- Helpers ----------
 
-	/**
-	 * Single construction point for MoveController wiring — constructor
-	 * and [R] regen both use this so the config can't drift.
-	 */
+	/** Single construction point for MoveController wiring. */
 	private createMoveController(): MoveController {
 		return new MoveController({
 			grid: this.grid,
 			camera: this.camera,
 			mercenary: this.mercenary,
 			getMercenaryCoord: () => this.mercState.coord,
-			getMovementRemaining: () => this.movementRemaining,
-			getCanMove: () => !this.hasMovedThisTurn,
+			getMovementRemaining: () => this.turnManager.movementRemaining,
+			getCanMove: () => this.turnManager.canMove,
 			onMoveCommitted: (target, path) => this.onMoveCommitted(target, path),
 		});
 	}
 
 	/**
 	 * Rebuild the map with a fresh seed and reset turn state.
-	 * No-ops mid-animation — discarding the mercenary mid-move would
-	 * leave onMoveCommitted awaiting a promise that never resolves.
+	 * No-ops mid-animation to avoid orphaning the moveAlongPath promise.
 	 */
 	private regenerateMap(): void {
 		if (this.mercenary.isAnimating) return;
 
 		this.moveController.exit();
-		this.moveButton.setActive(false);
+		this.buttonBar.setMoveActive(false);
+		this.buttonBar.closeMenu();
 
 		this.mapSeed = Math.floor(Math.random() * 1_000_000);
 		this.grid = this.buildMap();
 		this.mercState = this.spawnMercenary();
-		this.movementRemaining = this.mercState.stats.speed;
 
-		// Fresh map = fresh turn
-		this.hasMovedThisTurn = false;
-		this.moveButton.setEnabled(true);
-
-		// Replace the mercenary token
 		this.mercenaryContainer.removeChildren();
 		this.mercenary = new Mercenary(this.mercState.coord);
 		this.mercenaryContainer.addChild(this.mercenary.view);
 
-		// Re-create controller with new grid + mercenary references
+		this.turnManager.reset();
+
 		this.boardContainer.removeChild(this.moveController.view);
 		this.moveController = this.createMoveController();
 		this.boardContainer.addChild(this.moveController.view);
 
 		this.renderMap();
 		this.centerCameraOnMap();
-		this.refreshStatsText();
+		this.syncUI();
 	}
 
 	/** Convert a mouse event to canvas-local screen coordinates. */
@@ -333,12 +383,6 @@ export class MapScene implements Scene {
 		const localY =
 			(screenY - this.boardContainer.y) / this.boardContainer.scale.y;
 		return screenToGrid(localX, localY);
-	}
-
-	/** Anchor the Move button to the bottom-left of the screen. */
-	private positionMoveButton(): void {
-		this.moveButton.view.x = 20;
-		this.moveButton.view.y = this.game.app.screen.height - 60;
 	}
 
 	/** Generate the map grid, timing it for the stats overlay. */
@@ -360,6 +404,7 @@ export class MapScene implements Scene {
 			attack: 3,
 			defense: 2,
 			maxHp: 20,
+			ap: 3,
 		});
 	}
 
@@ -374,7 +419,6 @@ export class MapScene implements Scene {
 				const tile = this.grid.getTile({ x, y });
 				if (!tile) continue;
 				count++;
-
 				const screenPos = gridToScreen(tile.coord);
 				const diamond = this.drawTileDiamond(this.TILE_COLORS[tile.type]);
 				diamond.x = screenPos.x;
@@ -385,7 +429,6 @@ export class MapScene implements Scene {
 
 		this.tileCount = count;
 		this.lastRenderMs = performance.now() - start;
-		this.refreshStatsText();
 	}
 
 	/** Build one iso diamond tile graphic in the given color. */
@@ -406,7 +449,7 @@ export class MapScene implements Scene {
 		return g;
 	}
 
-	/** Snap the camera to the middle of the map. */
+	/** Snap the camera to the centre of the map. */
 	private centerCameraOnMap(): void {
 		const bounds = this.boardContainer.getLocalBounds();
 		this.camera.centerOn(
@@ -418,12 +461,14 @@ export class MapScene implements Scene {
 
 	/** Rebuild the debug/stats overlay text. */
 	private refreshStatsText(): void {
+		const tm = this.turnManager;
 		this.statsText.text = [
 			`Map: ${this.MAP_WIDTH}x${this.MAP_HEIGHT} Rooms: ${this.ROOM_COUNT} Seed: ${this.mapSeed}`,
 			`Tiles: ${this.tileCount} Gen: ${this.lastGenerationMs.toFixed(1)}ms Build: ${this.lastRenderMs.toFixed(1)}ms`,
 			`FPS: ${Math.round(this.game.app.ticker.FPS)}`,
-			`Movement: ${this.movementRemaining}  |  Move used: ${this.hasMovedThisTurn ? "YES" : "no"}`,
-			`[Move] aim · click confirm · [Esc] cancel · [E] end turn · [R] regenerate`,
+			`AP: ${tm.apRemaining}/${tm.baseAP}  |  Moves: ${tm.movePressesUsed}/2  |  Locked: ${tm.moveLocked ? "YES" : "no"}`,
+			`Attacked: ${tm.hasAttackedThisTurn ? "YES" : "no"}  |  Rested: ${tm.hasRestedThisTurn ? "YES" : "no"}  |  Pool: ${tm.movementRemaining}`,
+			`[Esc] cancel  ·  [E] end turn  ·  [R] regenerate`,
 		].join("\n");
 	}
 }
