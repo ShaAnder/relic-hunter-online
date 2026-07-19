@@ -29,9 +29,11 @@ import { CardData } from "../entities/Card";
  * and coordinates the AP turn system, move mode, and camera.
  *
  * Button interaction is fully delegated to ButtonBar — MapScene receives
- * a ButtonAction string from handleClick and switches on intent. All turn
- * arithmetic lives in TurnManager. This scene makes decisions and wires
- * systems together; it does none of the work itself.
+ * a ButtonAction string from handleClick and switches on intent. Pressing
+ * Move opens Hand's card-selection mode rather than moving immediately;
+ * the actual AP spend and aim mode only begin once a card is confirmed.
+ * All turn arithmetic lives in TurnManager. This scene makes decisions and
+ * wires systems together; it does none of the work itself.
  */
 export class MapScene implements Scene {
 	readonly view = new Container();
@@ -84,7 +86,6 @@ export class MapScene implements Scene {
 	constructor(private game: Game) {
 		this.grid = this.buildMap();
 
-		// Board layer order: tiles → move overlay → mercenary
 		this.boardContainer.addChild(this.tilesContainer);
 		this.boardContainer.addChild(this.mercenaryContainer);
 		this.view.addChild(this.boardContainer);
@@ -96,13 +97,12 @@ export class MapScene implements Scene {
 			panSpeed: 700,
 		});
 
-		// Spawn player mercenary
 		this.mercState = this.spawnMercenary();
 		this.mercenary = new Mercenary(this.mercState.coord);
 		this.mercenaryContainer.addChild(this.mercenary.view);
 
 		// add hand
-		this.hand = new Hand((card: CardData) => this.handleCardPlayed(card));
+		this.hand = new Hand((card: CardData) => this.handleCardConfirmed(card));
 		this.view.addChild(this.hand.view);
 
 		// TurnManager fires syncUI on every state change
@@ -114,11 +114,9 @@ export class MapScene implements Scene {
 		this.moveController = this.createMoveController();
 		this.boardContainer.addChild(this.moveController.view);
 
-		// Sidebar button bar
 		this.buttonBar = new ButtonBar();
 		this.view.addChild(this.buttonBar.view);
 
-		// Stats overlay
 		this.statsText = new Text({
 			text: "",
 			style: { fill: 0xffffff, fontSize: 14, fontFamily: "monospace" },
@@ -127,7 +125,6 @@ export class MapScene implements Scene {
 		this.statsText.y = 12;
 		this.view.addChild(this.statsText);
 
-		// Action feedback line — hidden until showFeedback() is called
 		this.feedbackText = new Text({
 			text: "",
 			style: { fill: 0xffd700, fontSize: 16, fontWeight: "bold" },
@@ -174,9 +171,17 @@ export class MapScene implements Scene {
 			this.game.app.screen.height,
 		);
 		this.mercenary.update(deltaTime);
+		this.hand.update(deltaTime);
 
-		// Lock camera to the mercenary's VISUAL position while aiming or animating
-		if (this.moveController.active || this.mercenary.isAnimating) {
+		// Lock camera to the mercenary's VISUAL position while aiming,
+		// animating, OR selecting a card — the snap needs to happen the
+		// instant Move is pressed, before a card is even picked, not just
+		// once moveController.enter() finally runs after confirmation.
+		if (
+			this.moveController.active ||
+			this.mercenary.isAnimating ||
+			this.hand.isSelecting
+		) {
 			this.camera.lockTo({
 				x: this.mercenary.view.x,
 				y: this.mercenary.view.y,
@@ -185,7 +190,6 @@ export class MapScene implements Scene {
 			this.camera.unlock();
 		}
 
-		// Fade out action feedback after its timer expires
 		if (this.feedbackTimer > 0) {
 			this.feedbackTimer -= deltaTime;
 			if (this.feedbackTimer <= 0) {
@@ -209,8 +213,15 @@ export class MapScene implements Scene {
 	// ---------- Move ----------
 
 	/**
-	 * Begin a Move action and enter aim mode.
-	 * Phase 1 stub — card selection replaces hardcoded values once hand exists.
+	 * Toggle Move: cancel if currently aiming or selecting a card, otherwise
+	 * open card selection. Guarded by turnManager.canMove up front — a
+	 * greyed-out button can never open selection even if this somehow gets
+	 * called directly, on top of ButtonBar's own disabled hitTest.
+	 *
+	 * The filter always excludes Attack, and additionally excludes Blue
+	 * once a blue card has been played this turn. TurnManager.beginMovement
+	 * already rejects a second blue at the data layer — greying it out here
+	 * means the player never sees it as a live option in the first place.
 	 */
 	private handleMovePressed(): void {
 		if (this.moveController.active) {
@@ -219,13 +230,21 @@ export class MapScene implements Scene {
 			return;
 		}
 
-		// TODO Phase 1 card system: open card selection overlay, pass chosen type + value
-		const cardType = "none";
-		const cardValue = 0;
-		if (!this.turnManager.beginMovement(cardType, cardValue)) return;
+		if (this.hand.isSelecting) {
+			this.hand.exitSelectionMode();
+			this.buttonBar.setMoveActive(false);
+			return;
+		}
 
-		this.moveController.enter();
-		this.buttonBar.setMoveActive(this.moveController.active);
+		if (!this.turnManager.canMove) return;
+
+		const blueAlreadyUsed = this.turnManager.blueCardUsedThisTurn;
+		this.hand.enterSelectionMode(
+			(data) =>
+				data.actionType !== "attack" &&
+				!(data.color === "blue" && blueAlreadyUsed),
+		);
+		this.buttonBar.setMoveActive(true);
 		this.buttonBar.closeMenu();
 	}
 
@@ -255,7 +274,6 @@ export class MapScene implements Scene {
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
 		this.showFeedback("⚔ Attack! (combat phase coming soon)");
-		// TODO Phase 2: open combat resolver
 	}
 
 	/** Spend 1 AP on Rest and lock Move. Card draw deferred to Phase 1 card system. */
@@ -265,7 +283,6 @@ export class MapScene implements Scene {
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
 		this.showFeedback("💤 Rested — card draw coming with the hand system");
-		// TODO Phase 1 card system: draw up to 2 cards
 	}
 
 	/** Spend 1 AP on Disengage. Restricted move deferred to ZoC system. */
@@ -275,30 +292,43 @@ export class MapScene implements Scene {
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
 		this.showFeedback("↩ Disengaged (ZoC escape coming soon)");
-		// TODO ZoC system: trigger restricted 1–2 tile disengage move
 	}
 
 	// ---------- End Turn ----------
 
 	/**
-	 * End the turn — shared by [E] key, End Turn button, and Pass button.
+	 * End the turn — shared by [E] key and the End Turn button.
 	 * No-ops mid-animation so turn state can't desync from visuals.
+	 *
+	 * TEMP TESTING BEHAVIOUR: fully refills the hand back to the starter
+	 * set every turn so the card flow can be exercised repeatedly without
+	 * running out of cards. Replace with the real draw economy (draw 1/round,
+	 * Rest draws up to 2, max hand 5) from `04-card-system-design.md`.
 	 */
 	private handleEndTurn(): void {
 		if (this.mercenary.isAnimating) return;
 		this.moveController.exit();
+		this.hand.exitSelectionMode();
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
 		this.turnManager.endTurn();
+
+		// TODO: remove once real hand economy (draw/spend/cap) exists
+		this.hand.initStarterHand();
 	}
 
 	// ---------- Input ----------
 
-	/** [Esc] cancel aim · [E] end turn · [R] regenerate map. */
+	/**
+	 * [Esc] cancel aim/selection · [E] end turn · [R] regenerate map ·
+	 * [←/→] move card caret · [Enter/Space] confirm highlighted card —
+	 * the last two only act while Hand.isSelecting is true.
+	 */
 	private handleKeyDown = (event: KeyboardEvent): void => {
 		switch (event.key) {
 			case "Escape":
 				this.moveController.exit();
+				this.hand.exitSelectionMode();
 				this.buttonBar.setMoveActive(false);
 				this.buttonBar.closeMenu();
 				break;
@@ -309,6 +339,16 @@ export class MapScene implements Scene {
 			case "r":
 			case "R":
 				this.regenerateMap();
+				break;
+			case "ArrowLeft":
+				if (this.hand.isSelecting) this.hand.moveCaret(-1);
+				break;
+			case "ArrowRight":
+				if (this.hand.isSelecting) this.hand.moveCaret(1);
+				break;
+			case "Enter":
+			case " ":
+				if (this.hand.isSelecting) this.hand.confirmHighlighted();
 				break;
 		}
 	};
@@ -335,7 +375,6 @@ export class MapScene implements Scene {
 				this.handleEndTurn();
 				break;
 			case null:
-				// No button hit — board click while aiming = commit move
 				if (this.moveController.active) this.moveController.tryCommit();
 				break;
 		}
@@ -360,7 +399,7 @@ export class MapScene implements Scene {
 		this.feedbackText.x =
 			(this.game.app.screen.width - this.feedbackText.width) / 2;
 		this.feedbackText.y = 60;
-		this.feedbackTimer = 150; // ~2.5s at 60fps frame units
+		this.feedbackTimer = 150;
 	}
 
 	/**
@@ -375,31 +414,37 @@ export class MapScene implements Scene {
 	}
 
 	// ---------- Cards ----------
-	private handleCardPlayed(card: CardData): void {
-		if (this.mercenary.isAnimating) return;
 
-		switch (card.actionType) {
-			case "move":
-				// Blue card — start movement with bonus
-				if (this.turnManager.beginMovement(card.color, card.value)) {
-					this.moveController.enter();
-					this.buttonBar.setMoveActive(this.moveController.active);
-				}
-				break;
+	/**
+	 * Apply the gameplay effect for a confirmed card. Hand has already shown
+	 * the detail overlay, removed the card (if not the permanent skip slot),
+	 * and exited selection mode by the time this fires — this method only
+	 * spends AP and enters aim mode.
+	 *
+	 * The skip card is mapped to cardType "none" rather than its own `color`
+	 * field, so TurnManager never mistakes it for a real blue play — "none"
+	 * grants base-speed movement with no bonus, exactly as beginMovement
+	 * already handles for any non-blue cardType.
+	 *
+	 * Attack never reaches here — it's filtered out of Move-phase selection
+	 * and still runs through the Action button (handleAttack).
+	 */
+	private handleCardConfirmed(card: CardData): void {
+		const cardType = card.id === "__skip__" ? "none" : card.color;
 
-			case "attack":
-				this.handleAttack(); // reuse existing handler
-				break;
+		if (!this.turnManager.beginMovement(cardType, card.value)) {
+			return;
+		}
 
-			case "defense":
-				this.showFeedback("🛡️ Defense +" + card.value + " (coming soon)");
-				// TODO: implement defense buff
-				break;
+		this.moveController.enter();
+		this.buttonBar.setMoveActive(this.moveController.active);
 
-			case "stun":
-				this.showFeedback("🌟 Stun! (coming soon)");
-				// TODO: stun enemy
-				break;
+		if (card.actionType === "defense") {
+			this.showFeedback(
+				`🛡️ Defense +${card.value} active this turn (effect coming soon)`,
+			);
+		} else if (card.actionType === "stun") {
+			this.showFeedback("🪤 Trap card selected — placement coming soon");
 		}
 	}
 
@@ -425,6 +470,7 @@ export class MapScene implements Scene {
 		if (this.mercenary.isAnimating) return;
 
 		this.moveController.exit();
+		this.hand.exitSelectionMode();
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
 

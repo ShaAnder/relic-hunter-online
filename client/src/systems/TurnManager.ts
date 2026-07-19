@@ -5,11 +5,12 @@ export type TurnAction = "move" | "action" | "pass";
 /**
  * Manages the AP-based turn cycle for a single match.
  *
- * Each turn the player has a base pool of 3 AP to spend across Move and
- * Action (Attack / Rest / Disengage). Spending any Action permanently locks
- * the Move button for the rest of the turn. The Move button may be pressed
- * up to twice per turn while unlocked, each press costing 1 AP.
- *
+ * Each turn the player has a base pool of AP (from the mercenary's `ap`
+ * stat) to spend across Move and Action (Attack / Rest / Disengage).
+ * Spending Attack or Rest permanently locks Move for the rest of the turn.
+ * The Move button may be pressed up to twice per turn while unlocked, each
+ * press costing 1 AP — a blue Move card may only be played on the first
+ * press; the movement pool is shared and carries over into the second.
  */
 export class TurnManager {
 	// ap pool
@@ -54,12 +55,22 @@ export class TurnManager {
 		return this._baseAp;
 	}
 
-	/* Is Move button available Y/N */
+	/**
+	 * Is Move button available Y/N.
+	 * The first press is always allowed if AP/lock permit it — the pool
+	 * hasn't been set yet, so there's nothing to check. Any press after
+	 * the first additionally requires actual movement left in the pool,
+	 * otherwise pressing Move again would spend an AP for nothing.
+	 */
 	get canMove(): boolean {
+		const hasBudgetForAnotherPress =
+			this._movementPressesUsed === 0 || this._movementRemaining > 0;
+
 		return (
 			!this._moveLocked &&
 			this._movementPressesUsed < 2 &&
-			this._apRemaining >= 1
+			this._apRemaining >= 1 &&
+			hasBudgetForAnotherPress
 		);
 	}
 
@@ -91,6 +102,11 @@ export class TurnManager {
 	/* how many times move has been pressed */
 	get movePressesUsed(): number {
 		return this._movementPressesUsed;
+	}
+
+	/* Whether a blue Move card has already been played this turn */
+	get blueCardUsedThisTurn(): boolean {
+		return this._blueCardUsedThisTurn;
 	}
 
 	/* Whether attack has been presed */
@@ -143,7 +159,11 @@ export class TurnManager {
 
 		// First move press of the turn — allow blue card once
 		if (this._movementPressesUsed === 0) {
-			let budget = this._baseAp;
+			// Movement budget is the mercenary's speed stat, NOT the AP pool.
+			// (Previously this read `this._baseAp` here, which meant every
+			// character moved exactly as far as their max AP regardless of
+			// their actual speed stat — a real stat-bypassing bug.)
+			let budget = this.getMercState().stats.speed;
 
 			if (cardType === "blue" && !this._blueCardUsedThisTurn) {
 				budget += valueNum;
@@ -223,7 +243,9 @@ export class TurnManager {
 		this._moveLocked = false;
 		this._hasAttackedThisTurn = false;
 		this._hasRestedThisTurn = false;
-		this._movementRemaining = this.baseAP;
+		// Reset to 0, not baseAP — the real budget is set by beginMovement()
+		// on the turn's first press, from the mercenary's speed stat.
+		this._movementRemaining = 0;
 		this._blueCardUsedThisTurn = false;
 		this.onChanged();
 	}
