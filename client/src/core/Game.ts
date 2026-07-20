@@ -2,6 +2,7 @@ import { Application } from "pixi.js";
 import { SceneManager } from "./SceneManager";
 import type { Scene } from "./Scene";
 import { GameSession } from "./GameSession";
+import { OverlayManager } from "./OverlayManager";
 
 /**
  * Central controller for the PixiJS client.
@@ -25,6 +26,7 @@ export class Game {
 	readonly app: Application;
 	readonly sceneManager: SceneManager;
 	readonly session = new GameSession();
+	readonly overlays: OverlayManager;
 
 	/**
 	 * Private constructor to enforce the use of the async factory method `Game.create()`.
@@ -36,10 +38,12 @@ export class Game {
 	private constructor(app: Application) {
 		this.app = app;
 		this.sceneManager = new SceneManager(app.stage);
+		this.overlays = new OverlayManager(app.stage);
 
 		// main game loop
 		this.app.ticker.add((ticker) => {
 			this.sceneManager.update(ticker.deltaTime);
+			this.overlays.update(ticker.deltaTime);
 		});
 
 		// handle browser window resizing
@@ -81,5 +85,6 @@ export class Game {
 	 */
 	private handleResize(): void {
 		this.sceneManager.onResize(this.app.screen.width, this.app.screen.height);
+		this.overlays.onResize(this.app.screen.width, this.app.screen.height);
 	}
 }

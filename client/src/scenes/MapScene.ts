@@ -10,6 +10,7 @@ import {
 } from "../math/isoGridMath";
 import { Mercenary } from "../entities/Mercenary";
 import { ButtonBar } from "../ui/buttons/ButtonBar";
+import { PauseOverlay } from "@/ui/overlay/pauseOverlay";
 import { MoveController } from "../systems/MoveController";
 import { TurnManager } from "../systems/TurnManager";
 import {
@@ -185,6 +186,11 @@ export class MapScene implements Scene {
 
 	/** Per-frame tick: camera, animation, camera follow, stats. */
 	update(deltaTime: number): void {
+		// Nothing in the scene should advance while paused — the overlay's
+		// own update() still runs (via OverlayManager), this only freezes
+		// MapScene's own logic so it resumes exactly where it left off.
+		if (this.game.overlays.isOpen) return;
+
 		this.camera.update(
 			deltaTime,
 			this.game.app.screen.width,
@@ -342,17 +348,28 @@ export class MapScene implements Scene {
 	// ---------- Input ----------
 
 	/**
-	 * [Esc] cancel aim/selection · [E] end turn · [R] regenerate map ·
-	 * [←/→] move card caret · [Enter/Space] confirm highlighted card —
+	 * [Esc] close local state first (aim/selection), then open Pause if
+	 * nothing else was open — pressing it again while paused closes Pause.
+	 * All other keys are ignored while paused. [E] end turn · [R] regenerate
+	 * map · [←/→] move card caret · [Enter/Space] confirm highlighted card —
 	 * the last two only act while Hand.isSelecting is true.
 	 */
 	private handleKeyDown = (event: KeyboardEvent): void => {
+		if (this.game.overlays.isOpen) {
+			if (event.key === "Escape") this.game.overlays.hide();
+			return;
+		}
+
 		switch (event.key) {
 			case "Escape":
-				this.moveController.exit();
-				this.hand.exitSelectionMode();
-				this.buttonBar.setMoveActive(false);
-				this.buttonBar.closeMenu();
+				if (this.moveController.active || this.hand.isSelecting) {
+					this.moveController.exit();
+					this.hand.exitSelectionMode();
+					this.buttonBar.setMoveActive(false);
+					this.buttonBar.closeMenu();
+				} else {
+					this.openPauseMenu();
+				}
 				break;
 			case "e":
 			case "E":
@@ -375,8 +392,15 @@ export class MapScene implements Scene {
 		}
 	};
 
+	/** Show the pause overlay. MapScene keeps existing untouched underneath — see OverlayManager. */
+	private openPauseMenu(): void {
+		void this.game.overlays.show(new PauseOverlay(this.game));
+	}
+
 	/** Delegate all click routing to ButtonBar, then switch on the returned action. */
 	private handleClick = (event: MouseEvent): void => {
+		if (this.game.overlays.isOpen) return;
+
 		const { screenX, screenY } = this.getScreenPoint(event);
 		const action = this.buttonBar.handleClick(screenX, screenY);
 
@@ -404,6 +428,7 @@ export class MapScene implements Scene {
 
 	/** Feed hovered tiles to the path preview while aiming. */
 	private handleMouseMove = (event: MouseEvent): void => {
+		if (this.game.overlays.isOpen) return;
 		if (!this.moveController.active) return;
 		const { screenX, screenY } = this.getScreenPoint(event);
 		this.moveController.onHover(this.screenPointToGrid(screenX, screenY));
