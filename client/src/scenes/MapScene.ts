@@ -18,6 +18,7 @@ import {
 	type GridCoord,
 	generateDungeon,
 	findFirstWalkableTile,
+	findExitTile,
 	createMercenary,
 	type MercenaryState,
 } from "@relic-hunter/shared";
@@ -52,6 +53,10 @@ export class MapScene implements Scene {
 	// Entities
 	private mercState: MercenaryState;
 	private mercenary: Mercenary;
+	// True during the Exit card's two-flight teleport sequence — blocks
+	// End Turn / regenerate from interrupting mid-sequence, same role
+	// mercenary.isAnimating plays for normal moves.
+	private exitCardInProgress = false;
 
 	// UI
 	private buttonBar: ButtonBar;
@@ -70,6 +75,10 @@ export class MapScene implements Scene {
 		this.MAP_WIDTH * this.MAP_HEIGHT * this.ROOM_DENSITY,
 	);
 	private mapSeed = 42;
+	/** How long the mercenary lingers, visible, at the exit tile before the second flight. */
+	private readonly EXIT_CARD_LINGER_MS = 1000;
+	/** Duration of each straight-line flight leg of the Exit card's teleport. */
+	private readonly EXIT_FLIGHT_MS = 1500;
 
 	private readonly TILE_COLORS: Record<TileType, number> = {
 		[TileType.Floor]: 0x3a3a3a,
@@ -174,13 +183,14 @@ export class MapScene implements Scene {
 		this.hand.update(deltaTime);
 
 		// Lock camera to the mercenary's VISUAL position while aiming,
-		// animating, OR selecting a card — the snap needs to happen the
-		// instant Move is pressed, before a card is even picked, not just
-		// once moveController.enter() finally runs after confirmation.
+		// animating, selecting a card, OR mid-Exit-card-sequence — the
+		// player shouldn't be able to pan away during the linger between
+		// the two flights, when isAnimating is briefly false again.
 		if (
 			this.moveController.active ||
 			this.mercenary.isAnimating ||
-			this.hand.isSelecting
+			this.hand.isSelecting ||
+			this.exitCardInProgress
 		) {
 			this.camera.lockTo({
 				x: this.mercenary.view.x,
@@ -306,7 +316,7 @@ export class MapScene implements Scene {
 	 * Rest draws up to 2, max hand 5) from `04-card-system-design.md`.
 	 */
 	private handleEndTurn(): void {
-		if (this.mercenary.isAnimating) return;
+		if (this.mercenary.isAnimating || this.exitCardInProgress) return;
 		this.moveController.exit();
 		this.hand.exitSelectionMode();
 		this.buttonBar.setMoveActive(false);
@@ -429,23 +439,124 @@ export class MapScene implements Scene {
 	 * Attack never reaches here — it's filtered out of Move-phase selection
 	 * and still runs through the Action button (handleAttack).
 	 */
+	/**
+	 * Apply the gameplay effect for a confirmed card. Hand has already shown
+	 * the detail overlay, removed the card (if not the permanent skip slot),
+	 * and exited selection mode by the time this fires — this method only
+	 * spends AP and enters aim mode.
+	 *
+	 * Blue E is handled separately (handleExitCard) since it bypasses aim
+	 * mode and normal pathing entirely — it's a teleport, not a move.
+	 *
+	 * Attack never reaches here — it's filtered out of Move-phase selection
+	 * and still runs through the Action button (handleAttack).
+	 */
 	private handleCardConfirmed(card: CardData): void {
-		const cardType = card.id === "__skip__" ? "none" : card.color;
-
-		if (!this.turnManager.beginMovement(cardType, card.value)) {
+		if (card.color === "blue" && card.value === "E") {
+			this.handleExitCard();
 			return;
 		}
 
-		this.moveController.enter();
+		const cardType = card.id === "__skip__" ? "none" : card.color;
+		const numericValue = typeof card.value === "number" ? card.value : 0;
+
+		if (!this.turnManager.beginMovement(cardType, numericValue)) {
+			return;
+		}
+
+		this.moveController.requestEnter();
 		this.buttonBar.setMoveActive(this.moveController.active);
 
 		if (card.actionType === "defense") {
 			this.showFeedback(
-				`🛡️ Defense +${card.value} active this turn (effect coming soon)`,
+				`🛡️ Defense ${card.value} active this turn (effect coming soon)`,
 			);
 		} else if (card.actionType === "stun") {
 			this.showFeedback("🪤 Trap card selected — placement coming soon");
 		}
+	}
+
+	/**
+	 * Resolve the Blue E (Exit) card as a two-flight sequence: fly to the
+	 * exit tile first, linger there briefly, then — since no relic/inventory
+	 * system exists yet — fly to a random other tile. Per
+	 * `04-card-system-design.md`, carrying the relic at the first arrival
+	 * would trigger the match win condition instead of ever reaching the
+	 * second flight.
+	 * TODO: check relic-carry state after the first flight once inventory
+	 * exists, and trigger the win condition there instead of continuing.
+	 *
+	 * Guarded by exitCardInProgress so End Turn / regenerate can't fire
+	 * mid-sequence — the same role mercenary.isAnimating plays elsewhere —
+	 * and that flag also keeps the camera locked during the linger, when
+	 * isAnimating briefly goes false between the two flights.
+	 */
+	private async handleExitCard(): Promise<void> {
+		if (!this.turnManager.beginMovement("blue", 0)) return;
+
+		this.exitCardInProgress = true;
+
+		const exitTile = findExitTile(this.grid);
+		if (exitTile) {
+			this.showFeedback("🌀 Exit card played — heading to the exit...");
+			await this.flyMercenaryTo(exitTile);
+		}
+
+		await this.delay(this.EXIT_CARD_LINGER_MS);
+
+		const destination = this.randomWalkableTile(this.mercState.coord);
+		if (destination) {
+			await this.flyMercenaryTo(destination);
+		}
+
+		this.showFeedback("🌀 No relic carried — teleported randomly instead");
+		this.exitCardInProgress = false;
+	}
+
+	/**
+	 * Fade out, fly there in a straight line, fade back in on arrival.
+	 *
+	 * The flight itself reuses Mercenary.moveAlongPath with a single
+	 * waypoint — that produces a straight two-point polyline (current
+	 * position → destination) using the same eased position interpolation
+	 * as a normal move, with an explicit duration since a 1-tile "path"
+	 * would otherwise animate far too fast for a cross-map flight.
+	 *
+	 * The sprite is set to alpha 0 for the flight's duration rather than
+	 * `visible = false` — its position keeps updating throughout (that's
+	 * what moveAlongPath is doing), so the camera's existing
+	 * mercenary.isAnimating lock keeps tracking it the whole time even
+	 * though nothing is drawn. It only "reappears" once alpha is restored
+	 * on arrival. This is a placeholder for a real teleport VFX later —
+	 * for now the fade is the whole effect.
+	 */
+	private async flyMercenaryTo(coord: GridCoord): Promise<void> {
+		this.mercenary.view.alpha = 0;
+		this.mercState.coord = coord;
+		await this.mercenary.moveAlongPath([coord], this.EXIT_FLIGHT_MS);
+		this.mercenary.view.alpha = 1;
+	}
+
+	/** Promise-based delay — used for the Exit card's linger between flights. */
+	private delay(ms: number): Promise<void> {
+		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
+	/** Pick a random walkable (Floor) tile on the grid, excluding one coord. */
+	private randomWalkableTile(exclude: GridCoord): GridCoord | null {
+		const candidates: GridCoord[] = [];
+
+		for (let x = 0; x < this.grid.width; x++) {
+			for (let y = 0; y < this.grid.height; y++) {
+				const tile = this.grid.getTile({ x, y });
+				if (!tile || tile.type !== TileType.Floor) continue;
+				if (tile.coord.x === exclude.x && tile.coord.y === exclude.y) continue;
+				candidates.push(tile.coord);
+			}
+		}
+
+		if (candidates.length === 0) return null;
+		return candidates[Math.floor(Math.random() * candidates.length)];
 	}
 
 	// ---------- Helpers ----------
@@ -458,7 +569,8 @@ export class MapScene implements Scene {
 			mercenary: this.mercenary,
 			getMercenaryCoord: () => this.mercState.coord,
 			getMovementRemaining: () => this.turnManager.movementRemaining,
-			onMoveCommitted: (target, path) => this.onMoveCommitted(target, path),
+			onMoveCommitted: (target: GridCoord, path: GridCoord[]) =>
+				this.onMoveCommitted(target, path),
 		});
 	}
 
@@ -467,7 +579,7 @@ export class MapScene implements Scene {
 	 * No-ops mid-animation to avoid orphaning the moveAlongPath promise.
 	 */
 	private regenerateMap(): void {
-		if (this.mercenary.isAnimating) return;
+		if (this.mercenary.isAnimating || this.exitCardInProgress) return;
 
 		this.moveController.exit();
 		this.hand.exitSelectionMode();
@@ -527,7 +639,7 @@ export class MapScene implements Scene {
 	private spawnMercenary(): MercenaryState {
 		const spawnCoord = findFirstWalkableTile(this.grid) ?? { x: 0, y: 0 };
 		return createMercenary("player", spawnCoord, {
-			speed: 4,
+			movement: 4,
 			attack: 3,
 			defense: 2,
 			maxHp: 20,

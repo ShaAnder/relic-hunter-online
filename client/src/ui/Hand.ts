@@ -85,6 +85,7 @@ export class Hand {
 		this.clear();
 
 		const starterCards: CardData[] = [
+			// Blue — Movement (1-3, plus E which bypasses movement entirely)
 			{
 				id: "blue1",
 				color: "blue",
@@ -94,6 +95,16 @@ export class Hand {
 				actionType: "move",
 			},
 			{
+				id: "blueE",
+				color: "blue",
+				name: "Exit (E)",
+				value: "E",
+				description:
+					"Teleport to exit — wins if carrying the relic, otherwise random teleport",
+				actionType: "move",
+			},
+			// Red — Attack (1-6, plus A/C which multiply the attack stat pre-defense)
+			{
 				id: "red1",
 				color: "red",
 				name: "Attack +5",
@@ -102,6 +113,23 @@ export class Hand {
 				actionType: "attack",
 			},
 			{
+				id: "redA",
+				color: "red",
+				name: "Double Dmg (A)",
+				value: "A",
+				description: "Attack stat ×2, applied before defense",
+				actionType: "attack",
+			},
+			{
+				id: "redC",
+				color: "red",
+				name: "Critical (C)",
+				value: "C",
+				description: "Attack stat ×1.5, applied before defense",
+				actionType: "attack",
+			},
+			// Yellow — Defense (1-4, plus A/C special effects)
+			{
 				id: "yellow1",
 				color: "yellow",
 				name: "Def +4",
@@ -109,6 +137,24 @@ export class Hand {
 				description: "+4 Defense",
 				actionType: "defense",
 			},
+			{
+				id: "yellowA",
+				color: "yellow",
+				name: "Nullify (A)",
+				value: "A",
+				description: "Negates the hit entirely, or instantly disarms a trap",
+				actionType: "defense",
+			},
+			{
+				id: "yellowC",
+				color: "yellow",
+				name: "Double Def (C)",
+				value: "C",
+				description:
+					"Doubles defense this exchange — bypasses the attack-stance half rule",
+				actionType: "defense",
+			},
+			// Green — Environment/Trap (Stun only for Phase 1)
 			{
 				id: "green1",
 				color: "green",

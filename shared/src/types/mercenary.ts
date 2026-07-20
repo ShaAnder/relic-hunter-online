@@ -5,7 +5,7 @@ import type { GridCoord } from "../game/grid";
  * unchanged during a match for now we will use spd/atk/def/hp
  */
 export interface MercenaryStats {
-	speed: number;
+	movement: number;
 	attack: number;
 	defense: number;
 	maxHp: number;

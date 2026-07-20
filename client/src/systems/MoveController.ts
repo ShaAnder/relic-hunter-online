@@ -30,6 +30,8 @@ interface MoveControllerOptions {
  * The camera lock lifecycle is driven by the scene's update() since it
  * knows about the move animation — enter() only does the initial lock so
  * aiming starts centered.
+ *
+ * Added pendingEnter + requestEnter for card-play UX safety (see 05-turn-ap-system-design.md).
  */
 export class MoveController {
 	readonly view = new Container();
@@ -45,6 +47,10 @@ export class MoveController {
 	private previewTarget: GridCoord | null = null;
 	private previewPath: GridCoord[] = [];
 
+	// UX safety: slight delay after card play so range tiles don't overlap clicks
+	private pendingEnterTimeout: number | null = null;
+	private readonly ENTER_DELAY_MS = 180; // tunable; 150-250ms sweet spot for card fanning
+
 	constructor(private options: MoveControllerOptions) {
 		this.view.addChild(this.rangeContainer);
 		this.view.addChild(this.pathContainer);
@@ -57,12 +63,30 @@ export class MoveController {
 	}
 
 	/**
-	 * Engage move mode.
+	 * Request move mode (non-blocking). Applies a short delay to avoid
+	 * accidental clicks immediately after card selection. Scene still
+	 * spends AP instantly for confirmation feel.
+	 */
+	requestEnter(): void {
+		if (this.pendingEnterTimeout !== null) return; // already pending
+
+		this.pendingEnterTimeout = window.setTimeout(() => {
+			this.pendingEnterTimeout = null;
+			this.enter();
+		}, this.ENTER_DELAY_MS);
+	}
+
+	/**
+	 * Engage move mode immediately (bypasses delay for direct calls, e.g. keyboard).
 	 * Refuses while animating or with no movement budget. The turn gate
 	 * (AP, press count, lockout) is the scene's job via beginMovement —
 	 * this controller only owns the aiming state machine.
 	 */
 	enter(): void {
+		if (this.pendingEnterTimeout !== null) {
+			window.clearTimeout(this.pendingEnterTimeout);
+			this.pendingEnterTimeout = null;
+		}
 		if (this.isActive) return;
 		if (this.options.mercenary.isAnimating) return;
 		if (this.options.getMovementRemaining() <= 0) return;
@@ -83,6 +107,10 @@ export class MoveController {
 
 	/** Cancel move mode and clear all aiming visuals. */
 	exit(): void {
+		if (this.pendingEnterTimeout !== null) {
+			window.clearTimeout(this.pendingEnterTimeout);
+			this.pendingEnterTimeout = null;
+		}
 		if (!this.isActive) return;
 
 		this.isActive = false;

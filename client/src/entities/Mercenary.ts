@@ -39,8 +39,17 @@ export class Mercenary {
 	/**
 	 * Animate smoothly across the entire path with one ease curve.
 	 * Resolves once the final tile is visually reached.
+	 *
+	 * @param path Tiles to visit, in order. path[0] is the first tile after
+	 *   the current position — this is the normal walked-route case.
+	 * @param durationMsOverride When provided, use this exact duration
+	 *   instead of `path.length * MOVE_DURATION_PER_TILE_MS`. Needed for
+	 *   cases like the Exit card's straight-line flight, where the "path"
+	 *   is a single long-distance waypoint (skipping normal pathing
+	 *   entirely) that would otherwise get an unrealistically short
+	 *   duration from the per-tile formula.
 	 */
-	moveAlongPath(path: GridCoord[]): Promise<void> {
+	moveAlongPath(path: GridCoord[], durationMsOverride?: number): Promise<void> {
 		return new Promise((resolve) => {
 			// Empty path or double-call: resolve immediately rather than
 			// leaving a promise hanging forever.
@@ -54,7 +63,8 @@ export class Mercenary {
 				...path.map(gridToScreen),
 			];
 			this.animElapsedMs = 0;
-			this.animDurationMs = path.length * MOVE_DURATION_PER_TILE_MS;
+			this.animDurationMs =
+				durationMsOverride ?? path.length * MOVE_DURATION_PER_TILE_MS;
 			this._isAnimating = true;
 			this.onPathComplete = resolve;
 		});

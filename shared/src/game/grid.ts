@@ -153,3 +153,21 @@ export function findFirstWalkableTile(grid: Grid): GridCoord | null {
 	}
 	return null;
 }
+
+/**
+ * Scan the grid for the Exit tile. There's exactly one per generated map
+ * (see generation.ts), so the first match found is returned.
+ *
+ * @param grid Grid map
+ * @returns grid coordinate or null if no Exit tile exists
+ */
+export function findExitTile(grid: Grid): GridCoord | null {
+	for (let x = 0; x < grid.width; x++) {
+		for (let y = 0; y < grid.height; y++) {
+			const coord = { x, y };
+			const tile = grid.getTile(coord);
+			if (tile?.type === TileType.Exit) return coord;
+		}
+	}
+	return null;
+}

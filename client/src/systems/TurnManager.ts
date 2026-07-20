@@ -159,11 +159,11 @@ export class TurnManager {
 
 		// First move press of the turn — allow blue card once
 		if (this._movementPressesUsed === 0) {
-			// Movement budget is the mercenary's speed stat, NOT the AP pool.
+			// Movement budget is the mercenary's movement stat, NOT the AP pool.
 			// (Previously this read `this._baseAp` here, which meant every
 			// character moved exactly as far as their max AP regardless of
-			// their actual speed stat — a real stat-bypassing bug.)
-			let budget = this.getMercState().stats.speed;
+			// their actual movement stat — a real stat-bypassing bug.)
+			let budget = this.getMercState().stats.movement;
 
 			if (cardType === "blue" && !this._blueCardUsedThisTurn) {
 				budget += valueNum;
