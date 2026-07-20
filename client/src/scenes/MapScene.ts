@@ -9,7 +9,7 @@ import {
 	TILE_HEIGHT,
 } from "../math/isoGridMath";
 import { Mercenary } from "../entities/Mercenary";
-import { ButtonBar } from "../ui/ButtonBar";
+import { ButtonBar } from "../ui/buttons/ButtonBar";
 import { MoveController } from "../systems/MoveController";
 import { TurnManager } from "../systems/TurnManager";
 import {
@@ -20,10 +20,12 @@ import {
 	findFirstWalkableTile,
 	findExitTile,
 	createMercenary,
+	spawnFromCharacter,
 	type MercenaryState,
 } from "@relic-hunter/shared";
 import { Hand } from "../ui/Hand";
 import { CardData } from "../entities/Card";
+import { CharacterPanel } from "../ui/CharacterPanel";
 
 /**
  * Tactical map scene: renders the isometric grid, hosts the mercenary,
@@ -57,6 +59,9 @@ export class MapScene implements Scene {
 	// End Turn / regenerate from interrupting mid-sequence, same role
 	// mercenary.isAnimating plays for normal moves.
 	private exitCardInProgress = false;
+
+	// Character panel (top-right)
+	private characterPanel: CharacterPanel;
 
 	// UI
 	private buttonBar: ButtonBar;
@@ -110,6 +115,9 @@ export class MapScene implements Scene {
 		this.mercenary = new Mercenary(this.mercState.coord);
 		this.mercenaryContainer.addChild(this.mercenary.view);
 
+		this.characterPanel = new CharacterPanel();
+		this.view.addChild(this.characterPanel.view);
+
 		// add hand
 		this.hand = new Hand((card: CardData) => this.handleCardConfirmed(card));
 		this.view.addChild(this.hand.view);
@@ -153,6 +161,9 @@ export class MapScene implements Scene {
 		);
 		this.hand.initStarterHand();
 		this.hand.resize(this.game.app.screen.width, this.game.app.screen.height);
+
+		this.characterPanel.setCharacter(this.game.session.character);
+		this.characterPanel.layout(this.game.app.screen.width);
 
 		this.syncUI();
 
@@ -218,6 +229,7 @@ export class MapScene implements Scene {
 	onResize(_width: number, height: number): void {
 		this.buttonBar.resize(this.game.app.screen.width, height);
 		this.hand.resize(this.game.app.screen.width, this.game.app.screen.height);
+		this.characterPanel.layout(_width);
 	}
 
 	// ---------- Move ----------
@@ -638,6 +650,14 @@ export class MapScene implements Scene {
 	/** Place the player mercenary on the first walkable tile. */
 	private spawnMercenary(): MercenaryState {
 		const spawnCoord = findFirstWalkableTile(this.grid) ?? { x: 0, y: 0 };
+		const character = this.game.session.character;
+
+		if (character) {
+			// Use the real stats the player allocated
+			return spawnFromCharacter(character, spawnCoord);
+		}
+
+		// Fallback for direct MapScene boots during development
 		return createMercenary("player", spawnCoord, {
 			movement: 4,
 			attack: 3,

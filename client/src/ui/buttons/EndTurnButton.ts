@@ -1,4 +1,4 @@
-import { Button } from "./generics/Button";
+import { Button } from "../generics/Button";
 
 /**
  * End Turn button — always available.

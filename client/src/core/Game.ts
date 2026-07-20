@@ -1,6 +1,7 @@
 import { Application } from "pixi.js";
 import { SceneManager } from "./SceneManager";
 import type { Scene } from "./Scene";
+import { GameSession } from "./GameSession";
 
 /**
  * Central controller for the PixiJS client.
@@ -23,6 +24,7 @@ export class Game {
 	// we make readonly as once game is created we never want to replace them, but still allow access
 	readonly app: Application;
 	readonly sceneManager: SceneManager;
+	readonly session = new GameSession();
 
 	/**
 	 * Private constructor to enforce the use of the async factory method `Game.create()`.

@@ -1,4 +1,4 @@
-import { Button } from "./generics/Button";
+import { Button } from "../generics/Button";
 
 /**
  * Move button — toggles move mode / card selection.
