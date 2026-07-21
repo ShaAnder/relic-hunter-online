@@ -1,8 +1,8 @@
 import { Application } from "pixi.js";
-import { SceneManager } from "./SceneManager";
-import type { Scene } from "./Scene";
+import { SceneManager } from "../scenes/SceneManager";
+import type { Scene } from "../scenes/Scene";
 import { GameSession } from "./GameSession";
-import { OverlayManager } from "./OverlayManager";
+import { OverlayManager } from "../overlays/OverlayManager";
 
 /**
  * Central controller for the PixiJS client.

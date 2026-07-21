@@ -1,7 +1,7 @@
 import { Container, Graphics, Text } from "pixi.js";
-import type { Scene } from "@/core/Scene";
-import type { Game } from "@/core/Game";
-import { Camera } from "@/core/Camera";
+import type { Scene } from "@/core/scenes/Scene";
+import type { Game } from "@/core/game/Game";
+import { Camera } from "@/core/cameras/Camera";
 import {
 	gridToScreen,
 	screenToGrid,
@@ -31,8 +31,9 @@ import {
 import { Hand } from "@/ui/Hand";
 import { CardData } from "@/entities/Card";
 import { CharacterPanel } from "@/ui/CharacterPanel";
-import { MAP_SIZE_DIMENSIONS } from "@/core/GameSession";
+import { MAP_SIZE_DIMENSIONS } from "@/core/game/GameSession";
 import { MatchResultScene } from "./MatchResultScene";
+import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -214,7 +215,7 @@ export class MapScene implements Scene {
 	/** Render the map, center the camera, and wire up input. */
 	onEnter(): void {
 		this.renderMap();
-		this.centerCameraOnMap();
+		this.centerCameraOnActiveHunter();
 		this.camera.attach(this.game.app.canvas);
 		this.buttonBar.resize(
 			this.game.app.screen.width,
@@ -305,6 +306,17 @@ export class MapScene implements Scene {
 		this.characterPanel.layout(_width);
 	}
 
+	// ---------- Camera ----------
+
+	private centerCameraOnActiveHunter(): void {
+		const world = getActiveHunterWorldPos(this.game.session);
+		this.camera.centerOn(
+			world,
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
+	}
+
 	// ---------- Move ----------
 
 	/**
@@ -378,6 +390,21 @@ export class MapScene implements Scene {
 		this.chestContainer.removeChildren();
 		this.placedChests = [];
 
+		const sessionPlacements = this.game.session.chestPlacements;
+		if (sessionPlacements && sessionPlacements.length > 0) {
+			for (const record of sessionPlacements) {
+				const entity = new Chest(record.coord);
+				this.chestContainer.addChild(entity.view);
+				this.placedChests.push({
+					coord: record.coord,
+					plan: record.plan,
+					entity,
+				});
+			}
+			return;
+		}
+
+		// Fallback — same random logic as before (dev / regen)
 		const plan = this.game.session.chestPlan;
 		if (!plan) return;
 
@@ -388,10 +415,8 @@ export class MapScene implements Scene {
 
 		for (const chestPlan of plan.chests) {
 			const coord = this.pickUnusedWalkableTile(used);
-			if (!coord) break; // ran out of distinct tiles — extremely unlikely on a real map
-
+			if (!coord) break;
 			used.add(coordKey(coord));
-
 			const entity = new Chest(coord);
 			this.chestContainer.addChild(entity.view);
 			this.placedChests.push({ coord, plan: chestPlan, entity });
@@ -828,7 +853,9 @@ export class MapScene implements Scene {
 		this.itemPopup.visible = false;
 		this.mercenaryContainer.addChild(this.mercenary.view);
 
-		this.game.session.chestPlan = null; // no chests on a dev-shortcut regen
+		this.game.session.chestPlan = null;
+		this.game.session.chestPlacements = null;
+		this.game.session.playerSpawn = null;
 		this.spawnChests();
 
 		this.hand.initStarterHand();
@@ -875,15 +902,14 @@ export class MapScene implements Scene {
 
 	/** Place the player mercenary on the first walkable tile. */
 	private spawnMercenary(): MercenaryState {
-		const spawnCoord = findFirstWalkableTile(this.grid) ?? { x: 0, y: 0 };
-		const character = this.game.session.character;
+		const spawnCoord = this.game.session.playerSpawn ??
+			findFirstWalkableTile(this.grid) ?? { x: 0, y: 0 };
 
+		const character = this.game.session.character;
 		if (character) {
-			// Use the real stats the player allocated
 			return spawnFromCharacter(character, spawnCoord);
 		}
 
-		// Fallback for direct MapScene boots during development
 		return createMercenary("player", spawnCoord, {
 			movement: 4,
 			attack: 3,

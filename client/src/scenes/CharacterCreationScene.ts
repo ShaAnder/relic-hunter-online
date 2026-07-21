@@ -1,6 +1,6 @@
 import { Container, Graphics, Text } from "pixi.js";
-import type { Scene } from "@/core/Scene";
-import type { Game } from "@/core/Game";
+import type { Scene } from "@/core/scenes/Scene";
+import type { Game } from "@/core/game/Game";
 import { Button } from "@/ui/generics/Button";
 import {
 	type CharacterClass,
@@ -11,7 +11,7 @@ import {
 	computeCharacterStats,
 	createCharacter,
 } from "@relic-hunter/shared";
-import { LocalCharacterRepo } from "@/core/CharacterRepo";
+import { LocalCharacterRepo } from "@/core/entities/CharacterRepo";
 import { LobbyScene } from "./LobbyScene";
 
 const CLASSES: CharacterClass[] = [

@@ -1,4 +1,4 @@
-import { Game } from "./core/Game";
+import { Game } from "./core/game/Game";
 import { MainMenuScene } from "@/scenes/MainMenuScene";
 import "@/style.css";
 

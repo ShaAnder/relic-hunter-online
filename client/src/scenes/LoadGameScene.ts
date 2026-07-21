@@ -1,8 +1,8 @@
 import { Container, Text } from "pixi.js";
-import type { Scene } from "@/core/Scene";
-import type { Game } from "@/core/Game";
+import type { Scene } from "@/core/scenes/Scene";
+import type { Game } from "@/core/game/Game";
 import { Button } from "@/ui/generics/Button";
-import { LocalCharacterRepo } from "@/core/CharacterRepo";
+import { LocalCharacterRepo } from "@/core/entities/CharacterRepo";
 import type { CharacterData } from "@relic-hunter/shared";
 import { LobbyScene } from "./LobbyScene";
 import { MainMenuScene } from "./MainMenuScene";

@@ -1,6 +1,6 @@
 import { Container, Graphics, Text } from "pixi.js";
-import type { Overlay } from "@/core/Overlay";
-import type { Game } from "@/core/Game";
+import type { Overlay } from "@/core/overlays/Overlay";
+import type { Game } from "@/core/game/Game";
 import { Button } from "../generics/Button";
 import { MainMenuScene } from "@/scenes/MainMenuScene";
 

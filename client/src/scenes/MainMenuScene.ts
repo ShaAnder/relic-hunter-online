@@ -1,6 +1,6 @@
 import { Container, Text } from "pixi.js";
-import type { Scene } from "@/core/Scene";
-import type { Game } from "@/core/Game";
+import type { Scene } from "@/core/scenes/Scene";
+import type { Game } from "@/core/game/Game";
 import { Button } from "@/ui/generics/Button";
 import { CharacterCreationScene } from "./CharacterCreationScene";
 import { LoadGameScene } from "./LoadGameScene";

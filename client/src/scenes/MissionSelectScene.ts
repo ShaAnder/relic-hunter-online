@@ -1,10 +1,10 @@
 import { Container, Text } from "pixi.js";
-import type { Scene } from "@/core/Scene";
-import type { Game } from "@/core/Game";
+import type { Scene } from "@/core/scenes/Scene";
+import type { Game } from "@/core/game/Game";
 import { Button } from "@/ui/generics/Button";
 import { LobbyScene } from "./LobbyScene";
 import { LoadingOverlay } from "@/ui/overlay/LoadingOverlay";
-import type { MissionParams } from "@/core/GameSession";
+import type { MissionParams } from "@/core/game/GameSession";
 
 /**
  * Per-match config: map size only (enemy count fixed at 4 for this pass).
