@@ -1,4 +1,5 @@
 import type { GridCoord } from "../game/grid";
+import type { ItemData } from "../game/item";
 
 /**
  * A char permanent stats - set at char creation, changes via level up,
@@ -18,6 +19,12 @@ export interface MercenaryState {
 	coord: GridCoord;
 	stats: MercenaryStats;
 	currentHp: number;
+	/**
+	 * General item slots (max 6, per `11-item-inventory-win-design.md`).
+	 * Gear (weapon/armor/accessory) isn't tracked here yet — no gear items
+	 * exist in the pool, those 3 slots are currently UI-only placeholders.
+	 */
+	items: ItemData[];
 }
 
 // Create fresh hunter at full HP, given starting position
@@ -26,5 +33,5 @@ export function createMercenary(
 	coord: GridCoord,
 	stats: MercenaryStats,
 ): MercenaryState {
-	return { id, coord, stats, currentHp: stats.maxHp };
+	return { id, coord, stats, currentHp: stats.maxHp, items: [] };
 }
