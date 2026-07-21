@@ -91,6 +91,7 @@ export function computeCharacterStats(
 }
 
 /* Build a full charData record computing and caching final stats */
+/* Build a full charData record computing and caching final stats */
 export function createCharacter(
 	name: string,
 	characterClass: CharacterClass,
@@ -98,7 +99,7 @@ export function createCharacter(
 	modelIndex: number,
 ): CharacterData {
 	return {
-		id: crypto.randomUUID(),
+		id: generateId(),
 		name,
 		characterClass,
 		modelIndex,
@@ -106,6 +107,19 @@ export function createCharacter(
 		stats: computeCharacterStats(characterClass, pointsSpent),
 		createdAt: Date.now(),
 	};
+}
+
+/** Portable id — works in browser and Node without requiring crypto.randomUUID. */
+function generateId(): string {
+	if (
+		typeof crypto !== "undefined" &&
+		typeof crypto.randomUUID === "function"
+	) {
+		return crypto.randomUUID();
+	}
+
+	// Fallback: timestamp + random suffix (unique enough for local saves)
+	return `char_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /**

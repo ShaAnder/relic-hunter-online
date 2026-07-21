@@ -85,7 +85,15 @@ export class LoadingScene implements Scene {
 
 	onExit(): void {}
 
-	update(_deltaTime: number): void {}
+	update(deltaTime: number): void {
+		// Camera.panTo only advances while update runs. Without this the
+		// intro sequence hangs forever on the first await panTo(...).
+		this.camera.update(
+			deltaTime,
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
+	}
 
 	onResize(width: number, height: number): void {
 		this.layout(width, height);
