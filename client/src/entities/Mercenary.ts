@@ -1,6 +1,7 @@
 import { Container, Graphics } from "pixi.js";
 import { GridCoord } from "@relic-hunter/shared";
 import { gridToScreen } from "../math/isoGridMath";
+import { easeInOutCubic } from "@/math/easeInOutCubic";
 
 const SPHERE_RADIUS = 12;
 const MOVE_DURATION_PER_TILE_MS = 180;
@@ -124,11 +125,6 @@ export class Mercenary {
 
 		return g;
 	}
-}
-
-/** Cubic ease-in-out: slow start, fast middle, slow finish. */
-function easeInOutCubic(t: number): number {
-	return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
 /**

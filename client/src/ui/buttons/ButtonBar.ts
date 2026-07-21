@@ -2,7 +2,7 @@ import { Container, Text } from "pixi.js";
 import { MoveButton } from "./MoveButton";
 import { ActionButton } from "./ActionButton";
 import { EndTurnButton } from "./EndTurnButton";
-import type { TurnManager } from "../../systems/TurnManager";
+import type { TurnManager } from "@/systems/TurnManager";
 
 export type ButtonAction =
 	| "move"

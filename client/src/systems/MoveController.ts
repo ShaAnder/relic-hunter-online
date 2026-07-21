@@ -6,9 +6,9 @@ import {
 	findNearestReachableTile,
 	coordKey,
 } from "@relic-hunter/shared";
-import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "../math/isoGridMath";
-import type { Camera } from "../core/Camera";
-import type { Mercenary } from "../entities/Mercenary";
+import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
+import type { Camera } from "@/core/Camera";
+import type { Mercenary } from "@/entities/Mercenary";
 
 interface MoveControllerOptions {
 	grid: Grid;

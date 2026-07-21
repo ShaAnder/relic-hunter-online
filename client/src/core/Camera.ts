@@ -1,4 +1,5 @@
 import { Container } from "pixi.js";
+import { easeInOutCubic } from "@/math/easeInOutCubic";
 
 export interface CameraOptions {
 	initialZoom?: number;
@@ -30,6 +31,15 @@ export class Camera {
 	private options: Required<CameraOptions>;
 	private heldKeys = new Set<string>();
 	private lockedWorldPosition: { x: number; y: number } | null = null;
+
+	// Scripted pan state, null when no pan is in progress
+	private panning: {
+		from: { x: number; y: number };
+		to: { x: number; y: number };
+		elapsedMs: number;
+		durationMs: number;
+		resolve: () => void;
+	} | null = null;
 
 	// Cached every frame via update() — handleWheel fires from a DOM event,
 	// not the game loop, so it has no other way to know the current screen size.
@@ -78,17 +88,76 @@ export class Camera {
 		this.target.y = screenHeight / 2 - worldPosition.y * this.target.scale.y;
 	}
 
+	/**
+	 * Scripted cinematic pan from the cameras current center to
+	 * target position eased over duration ms.
+	 *
+	 * Overrides free-pan and any active lock while running
+	 */
+	panTo(
+		worldPosition: { x: number; y: number },
+		durationMs: number,
+	): Promise<void> {
+		return new Promise((resolve) => {
+			// Reverse centerOns math to recover the world point currently
+			// centered on screen - the pans true starting position
+			const currentWorldCenter = {
+				x: (this.screenWidth / 2 - this.target.x) / this.target.scale.x,
+				y: (this.screenHeight / 2 - this.target.y) / this.target.scale.y,
+			};
+
+			this.panning = {
+				from: currentWorldCenter,
+				to: worldPosition,
+				elapsedMs: 0,
+				durationMs,
+				resolve,
+			};
+		});
+	}
+
 	// Update camera position when something happens - does nothing
 	// right now but will follow players on their turn / monsters ect
 	update(deltaTime: number, screenWidth: number, screenHeight: number): void {
 		this.screenWidth = screenWidth;
 		this.screenHeight = screenHeight;
 
+		if (this.panning) {
+			this.advancePan(deltaTime, screenWidth, screenHeight);
+			return;
+		}
+
 		if (this.lockedWorldPosition) {
 			this.centerOn(this.lockedWorldPosition, screenWidth, screenHeight);
 			return;
 		}
 		this.applyPan(deltaTime);
+	}
+
+	/* Advance the in-progress scripted pan by one tick, resolving on completion */
+	private advancePan(
+		deltaTime: number,
+		screenWidth: number,
+		screenHeight: number,
+	): void {
+		if (!this.panning) return;
+
+		this.panning.elapsedMs += (deltaTime / 60) * 1000;
+		const time = Math.min(this.panning.elapsedMs / this.panning.durationMs, 1);
+		const eased = easeInOutCubic(time);
+
+		const worldX =
+			this.panning.from.x + (this.panning.to.x - this.panning.from.x) * eased;
+		const worldY =
+			this.panning.from.y + (this.panning.to.y - this.panning.from.y) * eased;
+
+		this.centerOn({ x: worldX, y: worldY }, screenWidth, screenHeight);
+
+		if (time >= 1) {
+			const resolve = this.panning.resolve;
+			this.panning = null;
+			resolve();
+		}
 	}
 
 	// apply camera pan speed

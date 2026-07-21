@@ -1,8 +1,8 @@
 import { Container, Graphics } from "pixi.js";
 import type { Grid, TileType } from "@relic-hunter/shared";
-import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "../math/isoGridMath";
-import type { Camera } from "../core/Camera";
-import type { Game } from "../core/Game";
+import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
+import type { Camera } from "@/core/Camera";
+import type { Game } from "@/core/Game";
 
 /** Timing stats returned after a build so the scene can display them. */
 export interface MapRenderStats {

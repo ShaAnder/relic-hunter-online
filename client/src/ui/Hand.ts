@@ -1,5 +1,5 @@
 import { Container, Graphics, Text } from "pixi.js";
-import { Card, CardData, CARD_WIDTH, CARD_HEIGHT } from "../entities/Card";
+import { Card, CardData, CARD_WIDTH, CARD_HEIGHT } from "@/entities/Card";
 
 const CARET_PULSE_SPEED = 0.006; // radians per ms — tuned for a gentle bob
 const CARET_PULSE_RANGE = 6; // pixels

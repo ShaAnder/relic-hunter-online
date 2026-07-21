@@ -1,15 +1,16 @@
 import { Container, Text } from "pixi.js";
-import type { Scene } from "../core/Scene";
-import type { Game } from "../core/Game";
-import { Button } from "../ui/generics/Button";
+import type { Scene } from "@/core/Scene";
+import type { Game } from "@/core/Game";
+import { Button } from "@/ui/generics/Button";
 import { LobbyScene } from "./LobbyScene";
-import { MapScene } from "./MapScene";
-import type { MissionParams } from "../core/GameSession";
+import { LoadingScene } from "./LoadingScene";
+import type { MissionParams } from "@/core/GameSession";
 
 /**
  * Per-match config: map size only (enemy count fixed at 4 for this pass).
- * Start writes missionParams into the session and enters MapScene.
- * LoadingScene will be inserted later without changing this contract.
+ * Start writes missionParams into the session and enters LoadingScene,
+ * which generates the map/chests and does the pre-match reveal before
+ * handing off to MapScene itself.
  */
 export class MissionSelectScene implements Scene {
 	readonly view = new Container();
@@ -91,8 +92,7 @@ export class MissionSelectScene implements Scene {
 
 	private onStart(): void {
 		this.game.session.missionParams = { mapSize: this.selectedSize };
-		// LoadingScene will sit between these two later.
-		void this.game.sceneManager.changeScene(new MapScene(this.game));
+		void this.game.sceneManager.changeScene(new LoadingScene(this.game));
 	}
 
 	private layout(width: number, height: number): void {

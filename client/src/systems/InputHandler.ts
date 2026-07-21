@@ -1,4 +1,4 @@
-import { screenToGrid } from "../math/isoGridMath";
+import { screenToGrid } from "@/math/isoGridMath";
 import type { GridCoord } from "@relic-hunter/shared";
 import type { Container } from "pixi.js";
 

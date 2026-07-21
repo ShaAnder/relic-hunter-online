@@ -1,36 +1,52 @@
 import { Container, Graphics, Text } from "pixi.js";
-import type { Scene } from "../core/Scene";
-import type { Game } from "../core/Game";
-import { Camera } from "../core/Camera";
+import type { Scene } from "@/core/Scene";
+import type { Game } from "@/core/Game";
+import { Camera } from "@/core/Camera";
 import {
 	gridToScreen,
 	screenToGrid,
 	TILE_WIDTH,
 	TILE_HEIGHT,
-} from "../math/isoGridMath";
-import { Mercenary } from "../entities/Mercenary";
-import { ButtonBar } from "../ui/buttons/ButtonBar";
-import { PauseOverlay } from "@/ui/overlay/pauseOverlay";
-import { MoveController } from "../systems/MoveController";
-import { TurnManager } from "../systems/TurnManager";
+} from "@/math/isoGridMath";
+import { Mercenary } from "@/entities/Mercenary";
+import { Chest } from "@/entities/Chest";
+import { ButtonBar } from "@/ui/buttons/ButtonBar";
+import { PauseOverlay } from "@/ui/overlay/PauseOverlay";
+import { MoveController } from "@/systems/MoveController";
+import { TurnManager } from "@/systems/TurnManager";
 import {
 	Grid,
 	TileType,
 	type GridCoord,
+	type ItemData,
+	type ChestPlan,
 	generateDungeon,
 	findFirstWalkableTile,
 	findExitTile,
+	coordKey,
 	createMercenary,
 	spawnFromCharacter,
 	type MercenaryState,
 } from "@relic-hunter/shared";
-import { Hand } from "../ui/Hand";
-import { CardData } from "../entities/Card";
-import { CharacterPanel } from "../ui/CharacterPanel";
+import { Hand } from "@/ui/Hand";
+import { CardData } from "@/entities/Card";
+import { CharacterPanel } from "@/ui/CharacterPanel";
+import { MAP_SIZE_DIMENSIONS } from "@/core/GameSession";
+import { MatchResultScene } from "./MatchResultScene";
+
+/** A chest placed on the map, tying its visual entity to its plan and position. */
+interface PlacedChest {
+	coord: GridCoord;
+	plan: ChestPlan;
+	entity: Chest;
+}
+
+const MAX_GENERAL_SLOTS = 6;
 
 /**
  * Tactical map scene: renders the isometric grid, hosts the mercenary,
- * and coordinates the AP turn system, move mode, and camera.
+ * and coordinates the AP turn system, move mode, cards, chests, and the
+ * win condition.
  *
  * Button interaction is fully delegated to ButtonBar — MapScene receives
  * a ButtonAction string from handleClick and switches on intent. Pressing
@@ -38,6 +54,12 @@ import { CharacterPanel } from "../ui/CharacterPanel";
  * the actual AP spend and aim mode only begin once a card is confirmed.
  * All turn arithmetic lives in TurnManager. This scene makes decisions and
  * wires systems together; it does none of the work itself.
+ *
+ * Map generation and chest contents are NOT decided here — LoadingScene
+ * decides them (seed, chest plan) and stores them on GameSession before
+ * this scene ever constructs, so the pre-match reveal and actual gameplay
+ * always agree. A direct MapScene boot with nothing in session (dev/testing)
+ * falls back to a fresh random seed and an empty chest plan.
  */
 export class MapScene implements Scene {
 	readonly view = new Container();
@@ -46,6 +68,7 @@ export class MapScene implements Scene {
 	private grid: Grid;
 	private boardContainer = new Container();
 	private tilesContainer = new Container();
+	private chestContainer = new Container();
 	private mercenaryContainer = new Container();
 
 	// Systems
@@ -56,10 +79,12 @@ export class MapScene implements Scene {
 	// Entities
 	private mercState: MercenaryState;
 	private mercenary: Mercenary;
+	private placedChests: PlacedChest[] = [];
 	// True during the Exit card's two-flight teleport sequence — blocks
 	// End Turn / regenerate from interrupting mid-sequence, same role
 	// mercenary.isAnimating plays for normal moves.
 	private exitCardInProgress = false;
+	private turnsTaken = 0;
 
 	// Character panel (top-right)
 	private characterPanel: CharacterPanel;
@@ -70,17 +95,25 @@ export class MapScene implements Scene {
 	private feedbackText: Text;
 	private feedbackTimer = 0;
 
+	// Item pickup popup — floats above the mercenary's head, placeholder
+	// icon until real item sprites exist
+	private itemPopup = new Container();
+	private itemPopupIcon = new Graphics();
+	private itemPopupText: Text;
+	private itemPopupTimer = 0;
+
 	// Cards
 	private hand: Hand;
 
-	// Map config
-	private readonly MAP_WIDTH = 50;
-	private readonly MAP_HEIGHT = 50;
+	// Map config — dimensions and seed come from GameSession (set by
+	// LoadingScene) rather than being hardcoded, so mission map size
+	// selection actually does something.
 	private readonly ROOM_DENSITY = 1 / 50;
-	private readonly ROOM_COUNT = Math.floor(
-		this.MAP_WIDTH * this.MAP_HEIGHT * this.ROOM_DENSITY,
-	);
-	private mapSeed = 42;
+	private mapWidth: number;
+	private mapHeight: number;
+	private roomCount: number;
+	private mapSeed: number;
+
 	/** How long the mercenary lingers, visible, at the exit tile before the second flight. */
 	private readonly EXIT_CARD_LINGER_MS = 1000;
 	/** Duration of each straight-line flight leg of the Exit card's teleport. */
@@ -99,9 +132,22 @@ export class MapScene implements Scene {
 	private fpsAccumulator = 0;
 
 	constructor(private game: Game) {
+		// Dimensions + seed come from the mission/LoadingScene setup. Falls
+		// back to sane defaults for direct MapScene boots during dev.
+		const mapSize = this.game.session.missionParams?.mapSize ?? "M";
+		const dims = MAP_SIZE_DIMENSIONS[mapSize];
+		this.mapWidth = dims.width;
+		this.mapHeight = dims.height;
+		this.roomCount = Math.floor(
+			this.mapWidth * this.mapHeight * this.ROOM_DENSITY,
+		);
+		this.mapSeed =
+			this.game.session.mapSeed ?? Math.floor(Math.random() * 1_000_000);
+
 		this.grid = this.buildMap();
 
 		this.boardContainer.addChild(this.tilesContainer);
+		this.boardContainer.addChild(this.chestContainer);
 		this.boardContainer.addChild(this.mercenaryContainer);
 		this.view.addChild(this.boardContainer);
 
@@ -115,6 +161,20 @@ export class MapScene implements Scene {
 		this.mercState = this.spawnMercenary();
 		this.mercenary = new Mercenary(this.mercState.coord);
 		this.mercenaryContainer.addChild(this.mercenary.view);
+
+		// Item popup rides along as a child of the mercenary's own view,
+		// so it moves with the token automatically — no manual per-frame
+		// position syncing needed.
+		this.itemPopupText = new Text({
+			text: "",
+			style: { fill: 0xffffff, fontSize: 12, fontWeight: "bold" },
+		});
+		this.itemPopupText.anchor.set(0.5, 1);
+		this.itemPopup.addChild(this.itemPopupIcon, this.itemPopupText);
+		this.itemPopup.visible = false;
+		this.mercenary.view.addChild(this.itemPopup);
+
+		this.spawnChests();
 
 		this.characterPanel = new CharacterPanel();
 		this.view.addChild(this.characterPanel.view);
@@ -224,6 +284,13 @@ export class MapScene implements Scene {
 			}
 		}
 
+		if (this.itemPopupTimer > 0) {
+			this.itemPopupTimer -= deltaTime;
+			if (this.itemPopupTimer <= 0) {
+				this.itemPopup.visible = false;
+			}
+		}
+
 		this.fpsAccumulator += deltaTime;
 		if (this.fpsAccumulator >= 30) {
 			this.fpsAccumulator = 0;
@@ -277,8 +344,9 @@ export class MapScene implements Scene {
 	}
 
 	/**
-	 * Commit a move path: advance position, deduct tiles, play animation.
-	 * Resolves when the animation finishes.
+	 * Commit a move path: advance position, deduct tiles, play animation,
+	 * then check for a chest at the destination and whether this move just
+	 * won the match. Resolves when the animation finishes.
 	 */
 	private async onMoveCommitted(
 		target: GridCoord,
@@ -290,7 +358,145 @@ export class MapScene implements Scene {
 		this.moveController.exit();
 
 		await this.mercenary.moveAlongPath(path);
+
+		this.tryOpenChestAt(target);
+		this.checkWinCondition();
+
 		this.syncUI();
+	}
+
+	// ---------- Chests & Items ----------
+
+	/**
+	 * Place every chest from the session's chest plan onto distinct random
+	 * walkable tiles, avoiding the exit tile and the player's spawn point.
+	 * If the plan is missing (a direct MapScene boot with no LoadingScene
+	 * run first) this simply places nothing — chests are optional, not a
+	 * hard requirement for the scene to function.
+	 */
+	private spawnChests(): void {
+		this.chestContainer.removeChildren();
+		this.placedChests = [];
+
+		const plan = this.game.session.chestPlan;
+		if (!plan) return;
+
+		const exitTile = findExitTile(this.grid);
+		const used = new Set<string>();
+		if (exitTile) used.add(coordKey(exitTile));
+		used.add(coordKey(this.mercState.coord));
+
+		for (const chestPlan of plan.chests) {
+			const coord = this.pickUnusedWalkableTile(used);
+			if (!coord) break; // ran out of distinct tiles — extremely unlikely on a real map
+
+			used.add(coordKey(coord));
+
+			const entity = new Chest(coord);
+			this.chestContainer.addChild(entity.view);
+			this.placedChests.push({ coord, plan: chestPlan, entity });
+		}
+	}
+
+	/** A random walkable tile not already in `used`. Null if none remain. */
+	private pickUnusedWalkableTile(used: Set<string>): GridCoord | null {
+		const candidates: GridCoord[] = [];
+		for (let x = 0; x < this.grid.width; x++) {
+			for (let y = 0; y < this.grid.height; y++) {
+				const coord = { x, y };
+				if (!this.grid.isWalkable(coord)) continue;
+				if (used.has(coordKey(coord))) continue;
+				candidates.push(coord);
+			}
+		}
+		if (candidates.length === 0) return null;
+		return candidates[Math.floor(Math.random() * candidates.length)];
+	}
+
+	/**
+	 * Open the chest at `coord` if one exists and isn't already opened.
+	 * If the inventory's 6 general slots are already full, the chest stays
+	 * closed and unopened — no forced drop, no swap prompt, per
+	 * `11-item-inventory-win-design.md`. The player can return once they
+	 * have room.
+	 */
+	private tryOpenChestAt(coord: GridCoord): void {
+		const placed = this.placedChests.find(
+			(c) => !c.entity.isOpen && c.coord.x === coord.x && c.coord.y === coord.y,
+		);
+		if (!placed) return;
+
+		if (this.mercState.items.length >= MAX_GENERAL_SLOTS) {
+			this.showFeedback("🎒 Inventory full — chest left unopened");
+			return;
+		}
+
+		placed.entity.open();
+		this.mercState.items.push(placed.plan.item);
+
+		if (placed.plan.isTarget) {
+			this.showFeedback(
+				`🎯 Found the target: ${placed.plan.item.name}! Head to the Exit.`,
+			);
+		} else {
+			this.showFeedback(`📦 Found: ${placed.plan.item.name}`);
+		}
+
+		this.showItemPopup(placed.plan.item, placed.plan.isTarget);
+	}
+
+	/**
+	 * Float a small icon + item name above the mercenary's head for a
+	 * couple seconds. Placeholder shape until real item sprites exist —
+	 * target items get a gold icon, everything else a plain white one.
+	 */
+	private showItemPopup(item: ItemData, isTarget: boolean): void {
+		this.itemPopupIcon.clear();
+		this.itemPopupIcon.circle(0, -46, 10);
+		this.itemPopupIcon.fill(isTarget ? 0xffd700 : 0xffffff);
+		this.itemPopupIcon.stroke({ width: 2, color: 0x000000, alpha: 0.6 });
+
+		this.itemPopupText.text = item.name;
+		this.itemPopupText.y = -58;
+
+		this.itemPopup.visible = true;
+		this.itemPopupTimer = 90; // ~1.5s at 60fps, matching feedbackTimer's frame-unit convention
+	}
+
+	/**
+	 * Standing on the Exit tile while holding the match's target item —
+	 * arrived at via a normal move commit only. The Exit (E) card
+	 * deliberately never reaches this check; see handleExitCard.
+	 */
+	private checkWinCondition(): void {
+		const exitTile = findExitTile(this.grid);
+		if (!exitTile) return;
+		if (
+			this.mercState.coord.x !== exitTile.x ||
+			this.mercState.coord.y !== exitTile.y
+		) {
+			return;
+		}
+
+		const target = this.game.session.chestPlan?.targetItem;
+		if (!target) return;
+
+		const hasTarget = this.mercState.items.some(
+			(item) => item.id === target.id,
+		);
+		if (!hasTarget) return;
+
+		this.triggerWin();
+	}
+
+	/** Record the match result and transition to MatchResultScene. */
+	private triggerWin(): void {
+		this.game.session.matchResult = {
+			won: true,
+			turnsTaken: this.turnsTaken,
+			itemsExtracted: this.mercState.items.length,
+		};
+		void this.game.sceneManager.changeScene(new MatchResultScene(this.game));
 	}
 
 	// ---------- Actions ----------
@@ -340,6 +546,7 @@ export class MapScene implements Scene {
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
 		this.turnManager.endTurn();
+		this.turnsTaken++;
 
 		// TODO: remove once real hand economy (draw/spend/cap) exists
 		this.hand.initStarterHand();
@@ -468,20 +675,6 @@ export class MapScene implements Scene {
 	 * and exited selection mode by the time this fires — this method only
 	 * spends AP and enters aim mode.
 	 *
-	 * The skip card is mapped to cardType "none" rather than its own `color`
-	 * field, so TurnManager never mistakes it for a real blue play — "none"
-	 * grants base-speed movement with no bonus, exactly as beginMovement
-	 * already handles for any non-blue cardType.
-	 *
-	 * Attack never reaches here — it's filtered out of Move-phase selection
-	 * and still runs through the Action button (handleAttack).
-	 */
-	/**
-	 * Apply the gameplay effect for a confirmed card. Hand has already shown
-	 * the detail overlay, removed the card (if not the permanent skip slot),
-	 * and exited selection mode by the time this fires — this method only
-	 * spends AP and enters aim mode.
-	 *
 	 * Blue E is handled separately (handleExitCard) since it bypasses aim
 	 * mode and normal pathing entirely — it's a teleport, not a move.
 	 *
@@ -515,13 +708,11 @@ export class MapScene implements Scene {
 
 	/**
 	 * Resolve the Blue E (Exit) card as a two-flight sequence: fly to the
-	 * exit tile first, linger there briefly, then — since no relic/inventory
-	 * system exists yet — fly to a random other tile. Per
-	 * `04-card-system-design.md`, carrying the relic at the first arrival
-	 * would trigger the match win condition instead of ever reaching the
-	 * second flight.
-	 * TODO: check relic-carry state after the first flight once inventory
-	 * exists, and trigger the win condition there instead of continuing.
+	 * exit tile first, linger there briefly, then fly to a random other
+	 * tile. Per `11-item-inventory-win-design.md`, E never triggers the win
+	 * condition regardless of whether the target item is carried — the win
+	 * check lives specifically in onMoveCommitted, not here, and always
+	 * will. This is purely a flavor/repositioning card.
 	 *
 	 * Guarded by exitCardInProgress so End Turn / regenerate can't fire
 	 * mid-sequence — the same role mercenary.isAnimating plays elsewhere —
@@ -546,7 +737,7 @@ export class MapScene implements Scene {
 			await this.flyMercenaryTo(destination);
 		}
 
-		this.showFeedback("🌀 No relic carried — teleported randomly instead");
+		this.showFeedback("🌀 Teleported randomly");
 		this.exitCardInProgress = false;
 	}
 
@@ -614,6 +805,10 @@ export class MapScene implements Scene {
 	/**
 	 * Rebuild the map with a fresh seed and reset turn state.
 	 * No-ops mid-animation to avoid orphaning the moveAlongPath promise.
+	 *
+	 * Note: this generates a brand new seed/chest layout locally rather
+	 * than going back through LoadingScene — [R] is a dev/testing shortcut,
+	 * not part of the normal match flow, so it doesn't re-run the reveal.
 	 */
 	private regenerateMap(): void {
 		if (this.mercenary.isAnimating || this.exitCardInProgress) return;
@@ -629,10 +824,16 @@ export class MapScene implements Scene {
 
 		this.mercenaryContainer.removeChildren();
 		this.mercenary = new Mercenary(this.mercState.coord);
+		this.mercenary.view.addChild(this.itemPopup);
+		this.itemPopup.visible = false;
 		this.mercenaryContainer.addChild(this.mercenary.view);
+
+		this.game.session.chestPlan = null; // no chests on a dev-shortcut regen
+		this.spawnChests();
 
 		this.hand.initStarterHand();
 		this.turnManager.reset();
+		this.turnsTaken = 0;
 
 		this.boardContainer.removeChild(this.moveController.view);
 		this.moveController = this.createMoveController();
@@ -664,9 +865,9 @@ export class MapScene implements Scene {
 	/** Generate the map grid, timing it for the stats overlay. */
 	private buildMap(): Grid {
 		const start = performance.now();
-		const grid = generateDungeon(this.MAP_WIDTH, this.MAP_HEIGHT, {
+		const grid = generateDungeon(this.mapWidth, this.mapHeight, {
 			seed: this.mapSeed,
-			roomCount: this.ROOM_COUNT,
+			roomCount: this.roomCount,
 		});
 		this.lastGenerationMs = performance.now() - start;
 		return grid;
@@ -747,11 +948,12 @@ export class MapScene implements Scene {
 	// private refreshStatsText(): void {
 	// 	const tm = this.turnManager;
 	// 	this.statsText.text = [
-	// 		`Map: ${this.MAP_WIDTH}x${this.MAP_HEIGHT} Rooms: ${this.ROOM_COUNT} Seed: ${this.mapSeed}`,
+	// 		`Map: ${this.mapWidth}x${this.mapHeight} Rooms: ${this.roomCount} Seed: ${this.mapSeed}`,
 	// 		`Tiles: ${this.tileCount} Gen: ${this.lastGenerationMs.toFixed(1)}ms Build: ${this.lastRenderMs.toFixed(1)}ms`,
 	// 		`FPS: ${Math.round(this.game.app.ticker.FPS)}`,
 	// 		`AP: ${tm.apRemaining}/${tm.baseAP}  |  Moves: ${tm.movePressesUsed}/2  |  Locked: ${tm.moveLocked ? "YES" : "no"}`,
 	// 		`Attacked: ${tm.hasAttackedThisTurn ? "YES" : "no"}  |  Rested: ${tm.hasRestedThisTurn ? "YES" : "no"}  |  Pool: ${tm.movementRemaining}`,
+	// 		`Turns: ${this.turnsTaken}  |  Items: ${this.mercState.items.length}/${MAX_GENERAL_SLOTS}`,
 	// 		`[Esc] cancel  ·  [E] end turn  ·  [R] regenerate`,
 	// 	].join("\n");
 	// }

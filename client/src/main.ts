@@ -1,6 +1,6 @@
 import { Game } from "./core/Game";
-import { MainMenuScene } from "./scenes/MainMenuScene";
-import "./style.css";
+import { MainMenuScene } from "@/scenes/MainMenuScene";
+import "@/style.css";
 
 async function bootStrap() {
 	const container = document.getElementById("app");
