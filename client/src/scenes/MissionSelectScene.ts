@@ -3,7 +3,7 @@ import type { Scene } from "@/core/Scene";
 import type { Game } from "@/core/Game";
 import { Button } from "@/ui/generics/Button";
 import { LobbyScene } from "./LobbyScene";
-import { LoadingScene } from "./LoadingScene";
+import { LoadingOverlay } from "@/ui/overlay/LoadingOverlay";
 import type { MissionParams } from "@/core/GameSession";
 
 /**
@@ -92,7 +92,7 @@ export class MissionSelectScene implements Scene {
 
 	private onStart(): void {
 		this.game.session.missionParams = { mapSize: this.selectedSize };
-		void this.game.sceneManager.changeScene(new LoadingScene(this.game));
+		void this.game.overlays.show(new LoadingOverlay(this.game));
 	}
 
 	private layout(width: number, height: number): void {

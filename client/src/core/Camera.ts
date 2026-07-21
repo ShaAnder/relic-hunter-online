@@ -1,4 +1,4 @@
-import { Container } from "pixi.js";
+import { Container, Ticker } from "pixi.js";
 import { easeInOutCubic } from "@/math/easeInOutCubic";
 
 export interface CameraOptions {
@@ -21,25 +21,21 @@ const DEFAULTS: Required<CameraOptions> = {
  * Controls pan (WASD) and zoom (mouse wheel) for a Pixi Container acting as
  * a "camera"
  *
- * Two modes:
+ * Two modes drive update()'s per-frame behavior:
  *  - Free: player can pan/zoom freely. Default, and the only mode right now.
  *  - Locked: camera snaps to and follows a given world position every frame,
  *    ignoring pan input.
+ *
+ * panTo() is a separate, self-contained scripted pan — it runs on PixiJS's
+ * own shared ticker rather than through update(), specifically so it keeps
+ * working even during a scene transition that suppresses update() calls.
+ * See panTo()'s own docblock for why that matters.
  */
 export class Camera {
 	private target: Container;
 	private options: Required<CameraOptions>;
 	private heldKeys = new Set<string>();
 	private lockedWorldPosition: { x: number; y: number } | null = null;
-
-	// Scripted pan state, null when no pan is in progress
-	private panning: {
-		from: { x: number; y: number };
-		to: { x: number; y: number };
-		elapsedMs: number;
-		durationMs: number;
-		resolve: () => void;
-	} | null = null;
 
 	// Cached every frame via update() — handleWheel fires from a DOM event,
 	// not the game loop, so it has no other way to know the current screen size.
@@ -89,30 +85,74 @@ export class Camera {
 	}
 
 	/**
-	 * Scripted cinematic pan from the cameras current center to
-	 * target position eased over duration ms.
+	 * Scripted cinematic pan from the camera's current center to a target
+	 * position, eased over durationMs.
 	 *
-	 * Overrides free-pan and any active lock while running
+	 * Deliberately self-driving via PixiJS's global Ticker.shared rather
+	 * than depending on this scene's own update() being called — SceneManager
+	 * blocks update() for whatever scene is currently inside an in-flight
+	 * onEnter() (see its own docblock: "Blocks per-frame updates during
+	 * transitions"). If this pan's progress depended on that update() call,
+	 * awaiting it from inside onEnter() would deadlock forever: the promise
+	 * can only resolve once enough ticks have advanced it, but those ticks
+	 * are exactly what's suppressed while onEnter() is pending. Driving it
+	 * from the shared ticker instead sidesteps that entirely — it advances
+	 * regardless of any scene's transition state.
+	 *
+	 * screenWidth/screenHeight are taken as explicit parameters rather than
+	 * reading cached instance fields, since those fields are normally kept
+	 * fresh by the owning scene's update() — which, for the same reason
+	 * above, may never have run yet when a scene calls panTo() from its own
+	 * onEnter(). Reading a stale (possibly still-zero) cached value would
+	 * silently produce garbage camera positions.
+	 *
+	 * Overrides free-pan and any active lock while running.
 	 */
 	panTo(
 		worldPosition: { x: number; y: number },
 		durationMs: number,
+		screenWidth: number,
+		screenHeight: number,
 	): Promise<void> {
 		return new Promise((resolve) => {
-			// Reverse centerOns math to recover the world point currently
-			// centered on screen - the pans true starting position
 			const currentWorldCenter = {
-				x: (this.screenWidth / 2 - this.target.x) / this.target.scale.x,
-				y: (this.screenHeight / 2 - this.target.y) / this.target.scale.y,
+				x: (screenWidth / 2 - this.target.x) / this.target.scale.x,
+				y: (screenHeight / 2 - this.target.y) / this.target.scale.y,
 			};
 
-			this.panning = {
-				from: currentWorldCenter,
-				to: worldPosition,
-				elapsedMs: 0,
-				durationMs,
-				resolve,
+			// Wall-clock timestamp rather than accumulating ticker.deltaMS.
+			// If the main thread was busy just before this (e.g. building a
+			// large map's tile graphics synchronously), the ticker's first
+			// tick afterward can report a hugely inflated deltaMS — it can't
+			// tick while JS is blocked, so that whole gap gets folded into
+			// whichever tick runs next. Accumulating that would jump elapsed
+			// straight past durationMs on frame one, resolving the pan
+			// instantly and invisibly. performance.now() sidesteps this
+			// entirely: elapsed is always "now minus when we started."
+			// https://developer.mozilla.org/en-US/docs/Web/API/Performance/now
+			const startTime = performance.now();
+
+			const tick = (): void => {
+				const elapsedMs = performance.now() - startTime;
+				const t = Math.min(elapsedMs / durationMs, 1);
+				const eased = easeInOutCubic(t);
+
+				const worldX =
+					currentWorldCenter.x +
+					(worldPosition.x - currentWorldCenter.x) * eased;
+				const worldY =
+					currentWorldCenter.y +
+					(worldPosition.y - currentWorldCenter.y) * eased;
+
+				this.centerOn({ x: worldX, y: worldY }, screenWidth, screenHeight);
+
+				if (t >= 1) {
+					Ticker.shared.remove(tick);
+					resolve();
+				}
 			};
+
+			Ticker.shared.add(tick);
 		});
 	}
 
@@ -122,42 +162,11 @@ export class Camera {
 		this.screenWidth = screenWidth;
 		this.screenHeight = screenHeight;
 
-		if (this.panning) {
-			this.advancePan(deltaTime, screenWidth, screenHeight);
-			return;
-		}
-
 		if (this.lockedWorldPosition) {
 			this.centerOn(this.lockedWorldPosition, screenWidth, screenHeight);
 			return;
 		}
 		this.applyPan(deltaTime);
-	}
-
-	/* Advance the in-progress scripted pan by one tick, resolving on completion */
-	private advancePan(
-		deltaTime: number,
-		screenWidth: number,
-		screenHeight: number,
-	): void {
-		if (!this.panning) return;
-
-		this.panning.elapsedMs += (deltaTime / 60) * 1000;
-		const time = Math.min(this.panning.elapsedMs / this.panning.durationMs, 1);
-		const eased = easeInOutCubic(time);
-
-		const worldX =
-			this.panning.from.x + (this.panning.to.x - this.panning.from.x) * eased;
-		const worldY =
-			this.panning.from.y + (this.panning.to.y - this.panning.from.y) * eased;
-
-		this.centerOn({ x: worldX, y: worldY }, screenWidth, screenHeight);
-
-		if (time >= 1) {
-			const resolve = this.panning.resolve;
-			this.panning = null;
-			resolve();
-		}
 	}
 
 	// apply camera pan speed
