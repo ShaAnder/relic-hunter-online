@@ -1,5 +1,6 @@
 import { Container, Graphics, Text } from "pixi.js";
-import { Card, CardData, CARD_WIDTH, CARD_HEIGHT } from "@/entities/Card";
+import type { CardData } from "@relic-hunter/shared";
+import { Card, CARD_WIDTH, CARD_HEIGHT } from "@/entities/Card";
 
 const CARET_PULSE_SPEED = 0.006; // radians per ms — tuned for a gentle bob
 const CARET_PULSE_RANGE = 6; // pixels
@@ -12,30 +13,22 @@ const FAN_Y_RISE = 8; // px each card drops per offset unit from center
 const HIGHLIGHT_LIFT = 34; // px the selected card slides outward along its fan angle
 const CARET_GAP = 18; // px between a card's top edge and the caret
 
-/** Reserved id for the permanent "No Card" option — never removed on play. */
-const SKIP_CARD_ID = "__skip__";
+// Hide/reveal tuning — see class docblock for the container split this drives
+const REVEALED_Y_OFFSET = -40; // matches the hand's old fixed resting position
+const HIDDEN_Y_OFFSET = CARD_HEIGHT - 25; // ~85px down; leaves a ~25px peek above the screen edge
+const HOVER_EASE_MS = 180; // how quickly the fan responds to a hover state change
+
+/** Reserved id for the permanent "No Card" option — never removed on play, never part of mercState.hand. */
+export const SKIP_CARD_ID = "__skip__";
 
 /**
  * Renders the player's hand as a fanned arc (rotation + arc offset per
  * card, pivoting from the bottom-center of each card) and owns
  * card-selection during the Move action.
- *
- * A pulsing downward-pointing caret hovers over the currently highlighted
- * card, which lifts further above the fan and partially straightens — the
- * "pulled out of the hand" look. Cards that fail the current phase's filter
- * (e.g. Attack during Move, or a second blue card once one's been played)
- * are greyed and non-interactive. A permanent "No Card" slot always sits
- * at the fan's end — never disabled by the filter, never removed on play.
- *
- * Click and hover handlers are bound to each Card object directly rather
- * than a captured array index, and resolve their current position via
- * `indexOf()` at event time — this is what keeps clicks correct after a
- * card is removed and every card after it shifts down one slot.
- *
- * Spec: `04-card-system-design.md`
  */
 export class Hand {
 	readonly view = new Container();
+	private fanContainer = new Container();
 
 	private cards: Card[] = [];
 	private onCardConfirmed?: (card: CardData) => void;
@@ -44,6 +37,10 @@ export class Hand {
 	private selecting = false;
 	private highlightedIndex = -1;
 	private selectableFilter: (data: CardData) => boolean = () => true;
+
+	// Hover/reveal state
+	private isHovered = false;
+	private forceRevealed = false;
 
 	// Caret indicator
 	private caret = new Container();
@@ -57,17 +54,20 @@ export class Hand {
 	constructor(onCardConfirmed?: (card: CardData) => void) {
 		this.onCardConfirmed = onCardConfirmed;
 
+		this.view.addChild(this.fanContainer);
+		this.fanContainer.y = HIDDEN_Y_OFFSET;
+
 		this.buildCaret();
 		this.caret.visible = false;
-		this.view.addChild(this.caret);
+		this.fanContainer.addChild(this.caret);
 
 		this.overlayText = new Text({
 			text: "",
 			style: { fill: 0xffffff, fontSize: 13, align: "center" },
 		});
 		this.overlayText.anchor.set(0.5, 0);
-		this.view.addChild(this.overlayBg);
-		this.view.addChild(this.overlayText);
+		this.fanContainer.addChild(this.overlayBg);
+		this.fanContainer.addChild(this.overlayText);
 		this.overlayBg.visible = false;
 		this.overlayText.visible = false;
 	}
@@ -78,95 +78,33 @@ export class Hand {
 	}
 
 	/**
-	 * Build the starter hand plus the permanent skip slot.
-	 * Cards start disabled until selection begins.
+	 * Tell the fan whether the mouse is currently over its reveal zone.
+	 * MapScene calls this from its own mousemove handler based on raw
+	 * screen-Y position — deliberately not driven by Pixi pointerover/out
+	 * on a dedicated hit zone, since an interactive card sitting on top of
+	 * such a zone would steal those events and cause the fan to flicker
+	 * hidden while the player is still trying to use it.
 	 */
-	initStarterHand(): void {
+	setHovered(isHovered: boolean): void {
+		this.isHovered = isHovered;
+	}
+
+	/**
+	 * Rebuild the displayed cards to match the mercenary's actual hand,
+	 * plus the permanent skip slot appended at the end. This is the only
+	 * way cards get onto the fan — there is no local test/starter hand.
+	 *
+	 * Full teardown-and-rebuild rather than diffing against the previous
+	 * cards — simpler and correct. Hand changes are infrequent (once or
+	 * twice a turn), not a hot per-frame path, so the rebuild cost is
+	 * irrelevant.
+	 */
+	syncFromHand(hand: CardData[]): void {
 		this.clear();
 
-		const starterCards: CardData[] = [
-			// Blue — Movement (1-3, plus E which bypasses movement entirely)
-			{
-				id: "blue1",
-				color: "blue",
-				name: "Move +3",
-				value: 3,
-				description: "+3 Movement",
-				actionType: "move",
-			},
-			{
-				id: "blueE",
-				color: "blue",
-				name: "Exit (E)",
-				value: "E",
-				description:
-					"Teleport to exit — wins if carrying the relic, otherwise random teleport",
-				actionType: "move",
-			},
-			// Red — Attack (1-6, plus A/C which multiply the attack stat pre-defense)
-			{
-				id: "red1",
-				color: "red",
-				name: "Attack +5",
-				value: 5,
-				description: "+5 Attack",
-				actionType: "attack",
-			},
-			{
-				id: "redA",
-				color: "red",
-				name: "Double Dmg (A)",
-				value: "A",
-				description: "Attack stat ×2, applied before defense",
-				actionType: "attack",
-			},
-			{
-				id: "redC",
-				color: "red",
-				name: "Critical (C)",
-				value: "C",
-				description: "Attack stat ×1.5, applied before defense",
-				actionType: "attack",
-			},
-			// Yellow — Defense (1-4, plus A/C special effects)
-			{
-				id: "yellow1",
-				color: "yellow",
-				name: "Def +4",
-				value: 4,
-				description: "+4 Defense",
-				actionType: "defense",
-			},
-			{
-				id: "yellowA",
-				color: "yellow",
-				name: "Nullify (A)",
-				value: "A",
-				description: "Negates the hit entirely, or instantly disarms a trap",
-				actionType: "defense",
-			},
-			{
-				id: "yellowC",
-				color: "yellow",
-				name: "Double Def (C)",
-				value: "C",
-				description:
-					"Doubles defense this exchange — bypasses the attack-stance half rule",
-				actionType: "defense",
-			},
-			// Green — Environment/Trap (Stun only for Phase 1)
-			{
-				id: "green1",
-				color: "green",
-				name: "Stun",
-				value: 1,
-				description: "Stun trap",
-				actionType: "stun",
-			},
-			this.buildSkipCardData(),
-		];
+		const displayCards = [...hand, this.buildSkipCardData()];
 
-		starterCards.forEach((data) => {
+		displayCards.forEach((data) => {
 			const card = new Card(data);
 			// Resting state: full color, just not clickable until Move is pressed
 			card.setInteractive(false);
@@ -175,7 +113,7 @@ export class Hand {
 			// point below the hand, not spinning around each card's corner
 			card.view.pivot.set(CARD_WIDTH / 2, CARD_HEIGHT);
 			this.cards.push(card);
-			this.view.addChild(card.view);
+			this.fanContainer.addChild(card.view);
 
 			// Bound to the Card object, not a captured index — see file JSDoc
 			card.view.on("pointerover", () => this.handlePointerOverCard(card));
@@ -187,12 +125,13 @@ export class Hand {
 
 	/**
 	 * Begin card selection: grey out cards that fail the filter, highlight
-	 * the first selectable card, and show the caret. The skip slot always
-	 * passes regardless of filter. Call when Move is pressed.
+	 * the first selectable card, show the caret, and force the fan
+	 * revealed regardless of hover state. Call when Move is pressed.
 	 */
 	enterSelectionMode(filter: (data: CardData) => boolean): void {
 		this.selectableFilter = filter;
 		this.selecting = true;
+		this.forceRevealed = true;
 
 		this.cards.forEach((card) => {
 			const selectable = this.isSelectable(card);
@@ -206,9 +145,13 @@ export class Hand {
 		this.applyHighlight();
 	}
 
-	/** Exit selection mode: hide the caret, return every card to full-color rest. */
+	/**
+	 * Exit selection mode: hide the caret, return every card to full-color
+	 * rest, and let the fan go back to hover-driven hide/reveal.
+	 */
 	exitSelectionMode(): void {
 		this.selecting = false;
+		this.forceRevealed = false;
 		this.highlightedIndex = -1;
 		this.caret.visible = false;
 		this.cards.forEach((card) => {
@@ -244,9 +187,23 @@ export class Hand {
 		this.playCard(this.cards[this.highlightedIndex]);
 	}
 
-	/** Per-frame tick: pulses the caret and counts down the played-card overlay. */
+	/**
+	 * Per-frame tick: eases the fan toward its hidden/revealed target,
+	 * pulses the caret, and counts down the played-card overlay.
+	 */
 	update(deltaTime: number): void {
 		const deltaMs = (deltaTime / 60) * 1000;
+
+		// Ease-toward-target: moves a fraction of the remaining distance
+		// each frame rather than a fixed-duration tween. Simple, framerate-
+		// tolerant enough for a UI polish detail, no separate timer state
+		// needed the way Camera.panTo's cinematic pan requires.
+		const targetY =
+			this.isHovered || this.forceRevealed
+				? REVEALED_Y_OFFSET
+				: HIDDEN_Y_OFFSET;
+		const easeT = Math.min(1, deltaMs / HOVER_EASE_MS);
+		this.fanContainer.y += (targetY - this.fanContainer.y) * easeT;
 
 		if (this.caret.visible) {
 			this.caretElapsedMs += deltaMs;
@@ -264,10 +221,10 @@ export class Hand {
 		}
 	}
 
-	/** Position the hand at the bottom center of the screen. */
+	/** Anchor the hand at the fixed bottom-center of the screen. Never animated directly. */
 	resize(width: number, height: number): void {
 		this.view.x = width / 2;
-		this.view.y = height - 40;
+		this.view.y = height;
 		this.layoutCards();
 	}
 
@@ -301,25 +258,18 @@ export class Hand {
 	}
 
 	/**
-	 * Play the given card: fire the effect callback, show the brief detail
-	 * overlay, remove it (unless it's the permanent skip slot), and exit
-	 * selection mode. Looks up the index fresh rather than trusting a
-	 * value computed before this call.
+	 * Play the given card: show the brief detail overlay, fire the effect
+	 * callback, and exit selection mode. Does NOT remove the card from
+	 * `this.cards` directly — the caller (MapScene) removes it from the
+	 * real mercState.hand as the first thing it does with the callback,
+	 * which triggers a syncFromHand() rebuild through the normal
+	 * onChanged → syncUI cascade. That rebuild is what actually makes the
+	 * played card disappear from the fan.
 	 */
 	private playCard(card: Card): void {
 		const data = card.getData();
-
 		this.showPlayedOverlay(data);
 		this.onCardConfirmed?.(data);
-
-		if (data.id !== SKIP_CARD_ID) {
-			const index = this.cards.indexOf(card);
-			if (index !== -1) {
-				card.view.removeFromParent();
-				this.cards.splice(index, 1);
-			}
-		}
-
 		this.exitSelectionMode();
 	}
 
@@ -332,18 +282,14 @@ export class Hand {
 	}
 
 	/**
-	 * Recompute every card's fan position, rotation, and pivot. Called
-	 * whenever the card count, highlight, or screen size changes — this is
-	 * the single source of truth for hand layout, replacing any per-card
-	 * position logic that used to live in Card itself.
+	 * Recompute every card's fan position, rotation, and pivot — all
+	 * relative to fanContainer's own origin, unaffected by whatever the
+	 * hide/reveal animation is doing to fanContainer.y itself.
 	 *
 	 * The highlighted card doesn't lift straight up or straighten its
 	 * rotation — it slides outward along the direction its own fan angle
 	 * already points, using sin/cos of baseRotation as the direction
-	 * vector, and keeps that same rotation the whole time. A card angled
-	 * 15° to the side slides diagonally along that 15° and stays tilted;
-	 * the center card (rotation 0) still moves straight up, which falls
-	 * out of the same formula for free.
+	 * vector, and keeps that same rotation the whole time.
 	 */
 	private layoutCards(): void {
 		const n = this.cards.length;
@@ -362,9 +308,6 @@ export class Hand {
 			card.view.rotation = baseRotation;
 
 			if (isHighlighted) {
-				// Pull-out direction follows the card's OWN resting angle —
-				// this is what makes an outer card slide diagonally instead
-				// of popping straight up, with no rotation change at all.
 				card.view.x = baseX + HIGHLIGHT_LIFT * Math.sin(baseRotation);
 				card.view.y = baseY - HIGHLIGHT_LIFT * Math.cos(baseRotation);
 			} else {
@@ -418,7 +361,7 @@ export class Hand {
 		this.overlayTimerMs = OVERLAY_DURATION_MS;
 	}
 
-	/** Data for the permanent "No Card" slot — always last, never spent. */
+	/** Data for the permanent "No Card" slot — always last, never spent, never real hand data. */
 	private buildSkipCardData(): CardData {
 		return {
 			id: SKIP_CARD_ID,

@@ -3,6 +3,7 @@ import type {
 	ChestPlan,
 	ItemData,
 	GridCoord,
+	CardData,
 } from "@relic-hunter/shared";
 
 /**
@@ -68,4 +69,15 @@ export class GameSession {
 	participants: MatchParticipant[] | null = null;
 	turnOrder: TurnOrderEntry[] | null = null;
 	matchResult: MatchResult | null = null;
+
+	/**
+	 * The ONE shared deck for the match — built once (see
+	 * `buildSharedDeck()` in `shared/game/deck.ts`), shared by every
+	 * mercenary on the map. Not per-mercenary — MercenaryState only holds
+	 * a `hand`, the deck itself lives here so it survives regardless of
+	 * which scene is currently active (relevant once Attack opens a
+	 * dedicated BattleScene and drawing still needs to work consistently
+	 * across that transition).
+	 */
+	sharedDeck: CardData[] | null = null;
 }

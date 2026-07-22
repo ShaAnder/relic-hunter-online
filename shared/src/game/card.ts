@@ -1,5 +1,29 @@
 import { Container, Graphics, Text, ColorMatrixFilter } from "pixi.js";
-import type { CardColor, CardData } from "@relic-hunter/shared";
+
+export type CardColor = "blue" | "red" | "yellow" | "green" | "none";
+
+/** Special card markers — see `04-card-system-design.md` for exact effects per color. */
+export type CardSpecial = "A" | "C" | "E";
+
+/* Set containing special cards */
+const CARD_SPECIALS = new Set<CardSpecial>(["A", "C", "E"]);
+
+/* Card Data Interface, we take the above special or a number for our types */
+export interface CardData {
+	id: string;
+	color: CardColor;
+	name: string;
+	value: number | CardSpecial;
+	description: string;
+	actionType: "move" | "attack" | "defense" | "stun";
+}
+
+/** True if this card is a special (A/C/E, or any future addition) rather than a plain numeric value. */
+export function isSpecialCard(
+	data: CardData,
+): data is CardData & { value: CardSpecial } {
+	return CARD_SPECIALS.has(data.value as CardSpecial);
+}
 
 export const CARD_WIDTH = 80;
 export const CARD_HEIGHT = 110;

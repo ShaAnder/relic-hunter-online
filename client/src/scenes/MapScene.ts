@@ -11,6 +11,8 @@ import {
 import { Mercenary } from "@/entities/Mercenary";
 import { Chest } from "@/entities/Chest";
 import { ButtonBar } from "@/ui/buttons/ButtonBar";
+import { DeckTracker } from "@/ui/DeckTracker";
+import { InventoryPanel } from "@/ui/InventoryPanel";
 import { PauseOverlay } from "@/ui/overlay/PauseOverlay";
 import { MoveController } from "@/systems/MoveController";
 import { TurnManager } from "@/systems/TurnManager";
@@ -20,16 +22,17 @@ import {
 	type GridCoord,
 	type ItemData,
 	type ChestPlan,
+	type CardData,
 	generateDungeon,
 	findFirstWalkableTile,
 	findExitTile,
 	coordKey,
 	createMercenary,
 	spawnFromCharacter,
+	buildSharedDeck,
 	type MercenaryState,
 } from "@relic-hunter/shared";
 import { Hand } from "@/ui/Hand";
-import { CardData } from "@/entities/Card";
 import { CharacterPanel } from "@/ui/CharacterPanel";
 import { MAP_SIZE_DIMENSIONS } from "@/core/game/GameSession";
 import { MatchResultScene } from "./MatchResultScene";
@@ -89,6 +92,8 @@ export class MapScene implements Scene {
 
 	// Character panel (top-right)
 	private characterPanel: CharacterPanel;
+	private deckTracker: DeckTracker;
+	private inventoryPanel: InventoryPanel;
 
 	// UI
 	private buttonBar: ButtonBar;
@@ -180,15 +185,31 @@ export class MapScene implements Scene {
 		this.characterPanel = new CharacterPanel();
 		this.view.addChild(this.characterPanel.view);
 
+		this.inventoryPanel = new InventoryPanel();
+		this.view.addChild(this.inventoryPanel.view);
+
+		this.deckTracker = new DeckTracker();
+		this.view.addChild(this.deckTracker.view);
+
 		// add hand
 		this.hand = new Hand((card: CardData) => this.handleCardConfirmed(card));
 		this.view.addChild(this.hand.view);
 
-		// TurnManager fires syncUI on every state change
+		// TurnManager fires syncUI on every state change. The shared deck
+		// is lazily built here (??=) so a direct MapScene boot without
+		// LoadingOverlay having run still works — and once built, the
+		// SAME array reference is reused on every subsequent call, which
+		// matters because TurnManager mutates it in place every draw.
 		this.turnManager = new TurnManager(
 			() => this.mercState,
+			() => (this.game.session.sharedDeck ??= buildSharedDeck()),
 			() => this.syncUI(),
 		);
+		// Top up to the full 5-card starting hand — the constructor above
+		// already drew 1 via its own reset()→endTurn() cascade; this draws
+		// the remaining 4 (drawCards is self-limiting on current hand size,
+		// so this is safe regardless of how many were already drawn).
+		this.turnManager.dealStartingHand();
 
 		this.moveController = this.createMoveController();
 		this.boardContainer.addChild(this.moveController.view);
@@ -221,11 +242,17 @@ export class MapScene implements Scene {
 			this.game.app.screen.width,
 			this.game.app.screen.height,
 		);
-		this.hand.initStarterHand();
+		this.hand.syncFromHand(this.mercState.hand);
 		this.hand.resize(this.game.app.screen.width, this.game.app.screen.height);
 
 		this.characterPanel.setCharacter(this.game.session.character);
 		this.characterPanel.layout(this.game.app.screen.width);
+		this.inventoryPanel.layout(this.game.app.screen.width);
+		this.inventoryPanel.sync(this.mercState.items);
+		this.deckTracker.layout(
+			this.game.app.screen.width - 280,
+			12 + 110 + 8 + 190 + 8,
+		);
 
 		this.syncUI();
 
@@ -304,6 +331,8 @@ export class MapScene implements Scene {
 		this.buttonBar.resize(this.game.app.screen.width, height);
 		this.hand.resize(this.game.app.screen.width, this.game.app.screen.height);
 		this.characterPanel.layout(_width);
+		this.inventoryPanel.layout(_width);
+		this.deckTracker.layout(_width - 280, 12 + 110 + 8 + 190 + 8);
 	}
 
 	// ---------- Camera ----------
@@ -458,6 +487,7 @@ export class MapScene implements Scene {
 
 		placed.entity.open();
 		this.mercState.items.push(placed.plan.item);
+		this.syncUI();
 
 		if (placed.plan.isTarget) {
 			this.showFeedback(
@@ -503,15 +533,16 @@ export class MapScene implements Scene {
 			return;
 		}
 
-		const target = this.game.session.chestPlan?.targetItem;
-		if (!target) return;
-
-		const hasTarget = this.mercState.items.some(
-			(item) => item.id === target.id,
-		);
-		if (!hasTarget) return;
+		if (!this.isCarryingTarget()) return;
 
 		this.triggerWin();
+	}
+
+	/** Whether the mercenary currently holds this match's target item. */
+	private isCarryingTarget(): boolean {
+		const target = this.game.session.chestPlan?.targetItem;
+		if (!target) return false;
+		return this.mercState.items.some((item) => item.id === target.id);
 	}
 
 	/** Record the match result and transition to MatchResultScene. */
@@ -572,9 +603,6 @@ export class MapScene implements Scene {
 		this.buttonBar.closeMenu();
 		this.turnManager.endTurn();
 		this.turnsTaken++;
-
-		// TODO: remove once real hand economy (draw/spend/cap) exists
-		this.hand.initStarterHand();
 	}
 
 	// ---------- Input ----------
@@ -659,10 +687,23 @@ export class MapScene implements Scene {
 	};
 
 	/** Feed hovered tiles to the path preview while aiming. */
+	/**
+	 * Hand hover-reveal works regardless of aiming state — computed first,
+	 * unconditionally. The existing move-preview logic still only runs
+	 * while actively aiming, unchanged below it.
+	 */
+	private readonly HAND_HOVER_THRESHOLD_PX = 220;
+
 	private handleMouseMove = (event: MouseEvent): void => {
 		if (this.game.overlays.isOpen) return;
-		if (!this.moveController.active) return;
+
 		const { screenX, screenY } = this.getScreenPoint(event);
+
+		this.hand.setHovered(
+			screenY > this.game.app.screen.height - this.HAND_HOVER_THRESHOLD_PX,
+		);
+
+		if (!this.moveController.active) return;
 		this.moveController.onHover(this.screenPointToGrid(screenX, screenY));
 	};
 
@@ -689,16 +730,23 @@ export class MapScene implements Scene {
 	private syncUI(): void {
 		if (!this.buttonBar || !this.turnManager) return;
 		this.buttonBar.sync(this.turnManager);
+		this.hand.syncFromHand(this.mercState.hand);
+		this.deckTracker.sync(this.turnManager);
+		this.inventoryPanel.sync(this.mercState.items);
 		// this.refreshStatsText();
 	}
 
 	// ---------- Cards ----------
 
 	/**
-	 * Apply the gameplay effect for a confirmed card. Hand has already shown
-	 * the detail overlay, removed the card (if not the permanent skip slot),
-	 * and exited selection mode by the time this fires — this method only
-	 * spends AP and enters aim mode.
+	 * Apply the gameplay effect for a confirmed card. Hand has already
+	 * shown the detail overlay and exited selection mode by the time this
+	 * fires, but it no longer removes the card itself — Hand only renders
+	 * whatever's in mercState.hand, it doesn't own the data. This method
+	 * removes the card from the real hand first (making mercState.hand
+	 * the immediate source of truth), then spends AP and enters aim mode.
+	 * The visual hand catches up automatically the next time syncUI()
+	 * runs, which beginMovement()'s onChanged() call triggers right below.
 	 *
 	 * Blue E is handled separately (handleExitCard) since it bypasses aim
 	 * mode and normal pathing entirely — it's a teleport, not a move.
@@ -707,6 +755,12 @@ export class MapScene implements Scene {
 	 * and still runs through the Action button (handleAttack).
 	 */
 	private handleCardConfirmed(card: CardData): void {
+		// Remove the played card from the real hand (source of truth) —
+		// this no-ops harmlessly for the synthetic "No Card" skip option,
+		// which is never actually part of mercState.hand to begin with.
+		const handIndex = this.mercState.hand.findIndex((c) => c.id === card.id);
+		if (handIndex !== -1) this.mercState.hand.splice(handIndex, 1);
+
 		if (card.color === "blue" && card.value === "E") {
 			this.handleExitCard();
 			return;
@@ -744,6 +798,17 @@ export class MapScene implements Scene {
 	 * and that flag also keeps the camera locked during the linger, when
 	 * isAnimating briefly goes false between the two flights.
 	 */
+	/**
+	 * Resolve the Blue E (Exit) card as a two-flight sequence: fly to the
+	 * exit tile first, then check whether the target item is carried.
+	 *
+	 * If carrying the target: this wins the match immediately, skipping
+	 * the linger and second flight entirely — reverses an earlier design
+	 * decision (`11-item-inventory-win-design.md`'s original "E never
+	 * triggers win") which this session's requirements explicitly
+	 * override. If NOT carrying the target: linger briefly, then fly to a
+	 * random other tile — a flavor/repositioning gamble, same as before.
+	 */
 	private async handleExitCard(): Promise<void> {
 		if (!this.turnManager.beginMovement("blue", 0)) return;
 
@@ -753,6 +818,12 @@ export class MapScene implements Scene {
 		if (exitTile) {
 			this.showFeedback("🌀 Exit card played — heading to the exit...");
 			await this.flyMercenaryTo(exitTile);
+
+			if (this.isCarryingTarget()) {
+				this.exitCardInProgress = false;
+				this.triggerWin();
+				return;
+			}
 		}
 
 		await this.delay(this.EXIT_CARD_LINGER_MS);
@@ -858,8 +929,9 @@ export class MapScene implements Scene {
 		this.game.session.playerSpawn = null;
 		this.spawnChests();
 
-		this.hand.initStarterHand();
+		this.hand.syncFromHand(this.mercState.hand);
 		this.turnManager.reset();
+		this.turnManager.dealStartingHand();
 		this.turnsTaken = 0;
 
 		this.boardContainer.removeChild(this.moveController.view);

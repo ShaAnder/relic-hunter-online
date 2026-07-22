@@ -6,3 +6,5 @@ export * from "./src/game/character";
 export * from "./src/types/mercenary";
 export * from "./src/game/chest";
 export * from "./src/game/item";
+export * from "./src/game/card";
+export * from "./src/game/deck";

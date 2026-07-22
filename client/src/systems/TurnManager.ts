@@ -1,6 +1,10 @@
-import type { MercenaryState } from "@relic-hunter/shared";
+import type { CardData, MercenaryState } from "@relic-hunter/shared";
 
 export type TurnAction = "move" | "action" | "pass";
+
+/** Max cards a mercenary can hold. Draws (turn-start or Rest) never exceed this. */
+const STARTING_HAND_SIZE = 4;
+const MAX_HAND_SIZE = 5;
 
 /**
  * Manages the AP-based turn cycle for a single match.
@@ -11,6 +15,17 @@ export type TurnAction = "move" | "action" | "pass";
  * The Move button may be pressed up to twice per turn while unlocked, each
  * press costing 1 AP — a blue Move card may only be played on the first
  * press; the movement pool is shared and carries over into the second.
+ *
+ * Also owns the draw side of the hand economy: 1 card at the start of
+ * every turn (including the first — the constructor resets straight into
+ * a turn), and up to 2 more from Rest. Both draw from the ONE shared match
+ * deck (`getSharedDeck`, backed by `GameSession.sharedDeck`) — there is no
+ * personal per-mercenary deck. Draws mutate both the shared deck array and
+ * this mercenary's `hand` in place; since both are plain array/object
+ * references, that mutation is visible to anything else holding the same
+ * references (MapScene, the deck-tracker UI, etc.) with no extra plumbing.
+ * No reshuffle on exhaustion — see `04-card-system-design.md` §Hand
+ * Economy for what an empty shared deck triggers.
  */
 export class TurnManager {
 	// ap pool
@@ -34,6 +49,8 @@ export class TurnManager {
 
 	constructor(
 		private getMercState: () => MercenaryState,
+		/** Accessor for the ONE shared match deck — not per-mercenary. */
+		private getSharedDeck: () => CardData[],
 		onChanged: () => void,
 		baseAp?: number,
 	) {
@@ -130,6 +147,16 @@ export class TurnManager {
 		);
 	}
 
+	/** Cards remaining in the ONE shared match deck — for the deck-tracker UI. */
+	get deckRemaining(): number {
+		return this.getSharedDeck().length;
+	}
+
+	/** Cards currently in this mercenary's hand — for the deck-tracker UI. */
+	get handSize(): number {
+		return this.getMercState().hand.length;
+	}
+
 	// ---------- MOVE ----------
 
 	/**
@@ -141,32 +168,16 @@ export class TurnManager {
 	 * @param cardValue - value of the card (only useful for movement if blue)
 	 * @returns - boolean
 	 */
-	beginMovement(cardType: string, cardValue: string | number): boolean {
+	beginMovement(cardType: string, cardValue: number): boolean {
 		if (!this.canMove) return false;
-
-		// Convert card value to number (handles face cards)
-		const getValue = (val: string | number): number => {
-			if (typeof val === "number") return val;
-			const upper = val.toUpperCase();
-			if (upper === "J") return 11;
-			if (upper === "Q") return 12;
-			if (upper === "K") return 13;
-			if (upper === "A") return 14;
-			return parseInt(upper, 10) || 0; // fallback
-		};
-
-		const valueNum = getValue(cardValue);
 
 		// First move press of the turn — allow blue card once
 		if (this._movementPressesUsed === 0) {
 			// Movement budget is the mercenary's movement stat, NOT the AP pool.
-			// (Previously this read `this._baseAp` here, which meant every
-			// character moved exactly as far as their max AP regardless of
-			// their actual movement stat — a real stat-bypassing bug.)
 			let budget = this.getMercState().stats.movement;
 
 			if (cardType === "blue" && !this._blueCardUsedThisTurn) {
-				budget += valueNum;
+				budget += cardValue;
 				this._blueCardUsedThisTurn = true;
 			}
 
@@ -208,7 +219,9 @@ export class TurnManager {
 	}
 
 	/**
-	 * Spend 1 ap on rest and lock move for the rest of the turn
+	 * Spend 1 ap on rest, lock move for the rest of the turn, and draw up
+	 * to 2 cards from the shared deck (capped by hand max and by however
+	 * many cards remain in the deck). Once per turn, per canRest.
 	 */
 	spendRest(): boolean {
 		if (!this.canRest) return false;
@@ -217,6 +230,7 @@ export class TurnManager {
 		this._hasRestedThisTurn = true;
 		this._moveLocked = true;
 		this._movementRemaining = 0;
+		this.drawCards(2);
 		this.onChanged();
 		return true;
 	}
@@ -235,7 +249,10 @@ export class TurnManager {
 	// ---------- TURN LIFECYCLE ----------
 
 	/**
-	 * End current turn and reset all AP / action state
+	 * End current turn and reset all AP / action state, then draw 1 card
+	 * from the shared deck for the turn that's about to begin. Also runs
+	 * via reset() at match start, so the very first turn draws too — hand
+	 * starts empty (createMercenary), not pre-dealt.
 	 */
 	endTurn(): void {
 		this._apRemaining = this._baseAp;
@@ -247,11 +264,47 @@ export class TurnManager {
 		// on the turn's first press, from the mercenary's speed stat.
 		this._movementRemaining = 0;
 		this._blueCardUsedThisTurn = false;
+		this.drawCards(1);
 		this.onChanged();
 	}
 
 	// Full reset function to wipe on match start / regen
 	reset(): void {
 		this.endTurn();
+	}
+
+	/**
+	 * Deal the mercenary's starting hand up to MAX_HAND_SIZE (5). Call once,
+	 * right after constructing TurnManager, before any real turn begins.
+	 *
+	 * This is separate from the normal per-turn draw-1 — the constructor
+	 * already drew 1 card via reset()→endTurn(). drawCards() is
+	 * self-limiting based on current hand size (roomInHand), so calling
+	 * drawCards(MAX_HAND_SIZE) here correctly tops up to exactly 5
+	 * regardless of that already-drawn card — it just draws the remaining
+	 * 4, not 5 more.
+	 */
+	dealStartingHand(): void {
+		this.drawCards(STARTING_HAND_SIZE);
+	}
+
+	/**
+	 * Draw up to `count` cards from the shared deck into this mercenary's
+	 * hand, capped by MAX_HAND_SIZE and by whatever's actually left in the
+	 * deck. No reshuffle when the deck runs dry — draws just stop.
+	 */
+	private drawCards(count: number): void {
+		const merc = this.getMercState();
+		const sharedDeck = this.getSharedDeck();
+		const roomInHand = MAX_HAND_SIZE - merc.hand.length;
+		const actualDraw = Math.min(count, roomInHand, sharedDeck.length);
+
+		// .shift() is O(n) (removes from the front, re-indexes the rest) —
+		// fine at this deck size (75 cards); would be worth a head-pointer/
+		// queue if deck sizes ever grew by orders of magnitude.
+		for (let i = 0; i < actualDraw; i++) {
+			const card = sharedDeck.shift();
+			if (card) merc.hand.push(card);
+		}
 	}
 }

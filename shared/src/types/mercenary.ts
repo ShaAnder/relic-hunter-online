@@ -1,5 +1,6 @@
 import type { GridCoord } from "../game/grid";
 import type { ItemData } from "../game/item";
+import type { CardData } from "../game/card";
 
 /**
  * A char permanent stats - set at char creation, changes via level up,
@@ -25,6 +26,14 @@ export interface MercenaryState {
 	 * exist in the pool, those 3 slots are currently UI-only placeholders.
 	 */
 	items: ItemData[];
+	/**
+	 * Cards currently held, max 5. There is no personal deck field here —
+	 * every mercenary draws from the ONE shared match deck
+	 * (`GameSession.sharedDeck`, built once via `buildSharedDeck()`), not
+	 * from a deck of their own. Only the hand — what's actually in a given
+	 * mercenary's grasp right now — is personal state.
+	 */
+	hand: CardData[];
 }
 
 // Create fresh hunter at full HP, given starting position
@@ -33,5 +42,5 @@ export function createMercenary(
 	coord: GridCoord,
 	stats: MercenaryStats,
 ): MercenaryState {
-	return { id, coord, stats, currentHp: stats.maxHp, items: [] };
+	return { id, coord, stats, currentHp: stats.maxHp, items: [], hand: [] };
 }
