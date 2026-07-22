@@ -1,217 +1,61 @@
-# Relic Hunter Online
+# Relic Hunter Online — Current Progress Tracker
 
-**A browser-based tactical multiplayer game inspired by the 1999 classic _Battle Hunter_, evolved with Final Fantasy Tactics-style depth.**
+**Purpose**: Living snapshot of where the project actually is. Update this at the end of every work cycle. Keep entries short — this is a status board, not a journal. Detailed decisions go in ADRs; phase definitions live in `02-development-roadmap.md`.
 
-Players compete as hunters on an isometric grid, using an AP-driven turn system and cards to move, fight, defend, and set traps while racing to secure powerful relics. The core fantasy is tense, high-stakes tactical decision-making where positioning, timing, and resource management matter more than raw power.
-
----
-
-## Vision & Core Pillars
-
-- **Card Action Economy** — Every meaningful action is resolved through cards (blue Move, red Attack, yellow Defense, green Environment/Trap). No dice in the core loop.
-- **AP System** — Base Action Points per turn (from the character's `ap` stat) across Move (1 AP, up to twice), Attack (2 AP), Rest (1 AP), and Disengage (1 AP). Spending Attack or Rest locks Move for the rest of the turn.
-- **Grid-Based Tactics** — Isometric positioning, movement range, and future Zone of Control mechanics are central.
-- **Relic Objective** — The primary win condition is locating, claiming, and extracting the target relic.
-- **Competitive Player Interaction** — Hunters can battle each other, steal relics, and disrupt opponents.
-- **Class-Based Progression** — Six launch classes (Tank, Brawler, Hunter, Scout, Mage, Summoner), each a small nudge toward a signature stat on top of a shared universal base, plus a 12-point creation budget.
-
-Full mechanics: `docs/04-card-system-design.md`, `docs/05-turn-ap-system-design.md`, `docs/06-character-creation-design.md`.
+**Last Updated**: 2026-07-22
+**Current Phase**: Phase 1 — Single-Player Core Loop (Vertical Slice push)
+**Repo**: https://github.com/ShaAnder/relic-hunter-online (main, commit `089d9d5`)
 
 ---
 
-## Tech Stack (Locked)
+## ✅ Done (verified in repo)
 
-| Layer               | Technology                                                   |
-| ------------------- | ------------------------------------------------------------ |
-| Client Rendering    | PixiJS v8.19.0 (WebGL-powered 2D, isometric)                 |
-| Gameplay Networking | Colyseus (authoritative game server)                         |
-| Platform Services   | Supabase (auth, database, realtime, storage, edge functions) |
-| Client Framework    | Vite + TypeScript                                            |
-| Monorepo            | npm workspaces — `client/`, `server/`, `shared/`             |
+| System                                        | Location                                                                 | Notes                                                                                                                                                                                                                                                    |
+| --------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Monorepo + npm workspaces                     | root `package.json`                                                      | `@relic-hunter/shared`                                                                                                                                                                                                                                   |
+| Scene + Overlay architecture                  | `client/src/core/{scenes,overlays,game,cameras,entities}/`               | `SceneManager` (full-replace) + `OverlayManager` (layers on top without touching the scene) deliberately separate                                                                                                                                        |
+| Full scene chain                              | `client/src/scenes/`                                                     | Landing → MainMenu → CharacterCreation/Load → Lobby → MissionSelect → Map → MatchResult                                                                                                                                                                  |
+| Character creation + persistence              | `character.ts`, `CharacterRepo.ts`                                       | 6 classes, Universal Base + Class Modifier + 12 points, `localStorage`-backed                                                                                                                                                                            |
+| Pre-match cinematic                           | `LoadingOverlay.ts`, `Camera.ts` (`panTo`)                               | Layered as an Overlay on `MissionSelectScene`, not its own Scene — sidesteps `SceneManager`'s update-blocking-during-transition. `Camera.panTo` self-drives via `Ticker.shared` + `performance.now()`, immune to inflated-first-tick-after-blocking-work |
+| Item pool + chests + win condition            | `shared/game/{item,chest}.ts`, `MapScene.ts`                             | Every item is a target-candidate — no separate "relic" tier. One shared 10–15 chest plan built once pre-match; target guaranteed in exactly one chest. Win = normal move onto Exit while holding target                                                  |
+| **Card deck system — fully wired end-to-end** | `shared/game/{card,deck}.ts`, `TurnManager.ts`, `Hand.ts`, `MapScene.ts` | See breakdown below — this was the major work this cycle                                                                                                                                                                                                 |
+| Deck / Inventory UI                           | `ui/DeckTracker.ts`, `ui/InventoryPanel.ts`                              | Both constructed, positioned under `CharacterPanel`, synced on every `syncUI()` call and immediately on chest-open                                                                                                                                       |
+| Hand hide/reveal                              | `Hand.ts` (`setHovered`), `MapScene.ts` (`HAND_HOVER_THRESHOLD_PX`)      | Fan tucks to a small peek at screen bottom, reveals on mouse proximity; forced visible during card selection so keyboard nav isn't selecting an invisible hand                                                                                           |
+| Exit (E) card                                 | `MapScene.handleExitCard`                                                | Flies to Exit tile; **wins immediately if carrying the target item**, otherwise lingers then flies to a random tile. (Reversed from an earlier "E never wins" decision — this is the current, correct behavior)                                          |
+| Pause overlay                                 | `ui/overlay/PauseOverlay.ts`                                             | Same Overlay pattern as the cinematic                                                                                                                                                                                                                    |
 
-Full architecture decisions and rationale: `docs/01-tech-stack-decision.md`
+### Card deck system — what actually shipped this cycle
 
----
+- **One shared 75-card deck per match** (not per-mercenary) — 20 Blue / 25 Red / 15 Yellow / 15 Green, built once via `buildSharedDeck()`, exact fixed composition with capped specials (≤2 Blue-E, ≤5 of any Red/Yellow special). Lives on `GameSession.sharedDeck`, survives scene transitions.
+- **`MercenaryState` now holds `hand: CardData[]`** — no personal deck field; every hunter draws from the one shared pool. `CardData` itself moved to `shared/game/card.ts` (was previously duplicated locally in the client's visual `Card.ts`, which now correctly imports it instead).
+- **Hand economy**: starts at 4 cards (just fixed — was landing at 5 due to double-counting the constructor's implicit first draw), caps at 5, draws 1 at turn start, Rest draws up to 2. No reshuffle on deck exhaustion — draws simply stop (boss-spawn consequence designed, not yet built — see Next Up).
+- **`Hand.ts` renders real data, not a test array** — `syncFromHand(mercState.hand)` rebuilds the fan from the actual hand every time `TurnManager` fires `onChanged`. The permanent "No Card" skip slot is synthesized fresh each sync, never part of real hand data.
+- **Dead code removed**: `TurnManager.beginMovement` had a vestigial J/Q/K/A face-card value converter (leftover from an early generic-playing-card prototype) that was provably unreachable — both real call sites already coerce to a plain number before calling it. Signature tightened to `cardValue: number`.
 
-## Project Structure
+## 🔨 Next Up — This Is the Actual Blocker
 
-```
-relic-hunter-online/
-├── package.json
-├── client/
-│   └── src/
-│       ├── core/
-│       │   ├── Camera.ts             # Pan, zoom, lock/follow
-│       │   ├── Game.ts               # PixiJS bootstrap, owns SceneManager + OverlayManager
-│       │   ├── GameSession.ts        # Cross-scene data bag (active character, mission params)
-│       │   ├── CharacterRepo.ts      # Character persistence (localStorage now, interface-first)
-│       │   ├── Overlay.ts            # Overlay interface — UI layered on top of a scene
-│       │   ├── OverlayManager.ts     # Shows/hides overlays without touching the active scene
-│       │   ├── Scene.ts              # Scene interface
-│       │   └── SceneManager.ts       # Scene transitions + lifecycle (full replace, not a stack)
-│       ├── entities/
-│       │   ├── Card.ts               # Visual card (grayscale/highlight states, no position logic)
-│       │   └── Mercenary.ts          # Visual token + continuous path animation
-│       ├── math/
-│       │   └── isoGridMath.ts        # Grid ↔ screen coordinate conversion
-│       ├── rendering/
-│       │   └── MapRenderer.ts        # ⚠️ Built but currently unused — see debt list
-│       ├── scenes/
-│       │   ├── MainMenuScene.ts      # New Character / Load Character / Settings (stub)
-│       │   ├── CharacterCreationScene.ts  # 6 classes, stat allocation
-│       │   ├── LoadGameScene.ts      # Select from saved characters
-│       │   ├── LobbyScene.ts         # Persistent hub — Missions / Story / Shop / Collectibles / Quit
-│       │   ├── MissionSelectScene.ts # Map size only, transitions to MapScene
-│       │   ├── MapScene.ts           # Tactical map — movement, cards, turn coordination, pause
-│       │   └── BattleScene.ts        # (next) Combat resolution between hunters
-│       ├── systems/
-│       │   ├── InputHandler.ts       # ⚠️ Built but currently unused — see debt list
-│       │   ├── MoveController.ts     # Move mode state machine + path preview
-│       │   └── TurnManager.ts        # AP pool, Move/Attack/Rest/Disengage costs
-│       ├── ui/
-│       │   ├── buttons/              # ButtonBar, ActionButton, EndTurnButton, MoveButton
-│       │   ├── generics/Button.ts    # Self-contained button (owns its own onClick)
-│       │   ├── overlay/PauseOverlay.ts  # Resume / Settings (stub) / Main Menu
-│       │   ├── CharacterPanel.ts     # Character summary display
-│       │   └── Hand.ts               # Fanned card hand, selection mode, caret nav
-│       ├── css.d.ts
-│       └── main.ts
-├── server/                           # Colyseus server (Phase 3)
-├── shared/
-│   └── src/
-│       ├── game/
-│       │   ├── generation.ts         # Procedural map generation (seeded)
-│       │   ├── grid.ts               # Grid data structure, tile types, findExitTile
-│       │   ├── movement.ts           # BFS movement range + pathfinding
-│       │   ├── random.ts             # Deterministic RNG
-│       │   └── character.ts          # CharacterData, class modifiers, stat formula
-│       └── types/
-│           └── mercenary.ts          # MercenaryState + MercenaryStats (movement/attack/defense/maxHp/ap)
-└── docs/
-    ├── 01-tech-stack-decision.md
-    ├── 02-development-roadmap.md
-    ├── 03-current-progress.md
-    ├── 04-card-system-design.md
-    ├── 05-turn-ap-system-design.md
-    ├── 06-character-creation-design.md
-    ├── 07-knockout-loot-design.md
-    ├── 08-summoner-design.md
-    ├── 09-enemy-ai-design.md
-    └── 10-scene-flow-design.md
-```
+Per `09-enemy-ai-design.md`'s locked sequencing, and confirmed by re-reading the repo this session:
 
----
+1. **Real combat resolution** — `handleAttack()` still just spends AP and shows a feedback stub. No damage math, no HP changes exist anywhere. **Nothing below this can start until it lands.**
+2. **One static enemy mercenary** — `GameSession.participants` currently only ever contains the player; no enemy entity exists to fight even once combat math works.
+3. **Enemy AI** (Balanced → Aggressive → Treasure-Hunter)
+4. **Relic theft / knockout sequence** (`07-knockout-loot-design.md`) — needs an HP-to-zero event, which needs #1
+5. **Class mechanics beyond flat stats** — no Summoner build, no per-class abilities yet
+6. **Monsters**, including the deck-exhaustion boss (`09-enemy-ai-design.md`'s boss addition) — same prerequisites as #3
 
-## Scene Map
+## ⚠️ Known Tech Debt / Watch List
 
-| Scene                    | Status      | Purpose                                                                   |
-| ------------------------ | ----------- | ------------------------------------------------------------------------- |
-| `MainMenuScene`          | Active      | New Character / Load Character / Settings (stub)                          |
-| `CharacterCreationScene` | Active      | 6-class creation, 12-point stat allocation                                |
-| `LoadGameScene`          | Active      | Select a saved character                                                  |
-| `LobbyScene`             | Active      | Persistent hub between matches                                            |
-| `MissionSelectScene`     | Active      | Map size selection → MapScene                                             |
-| `MapScene`               | Active      | Tactical grid — move, explore, hunt relics, cards, pause                  |
-| `LoadingScene`           | Planned     | Insertion point noted in `MissionSelectScene` — map gen + turn order roll |
-| `BattleScene`            | **Next up** | Combat resolution when hunters engage                                     |
-| `TownScene`              | Planned     | NPC interaction, shops, story                                             |
-| `WorldMapScene`          | Planned     | Overworld travel between locations                                        |
+| Item                                                             | Risk         | Notes                                                                                                                                                                                                                                                           |
+| ---------------------------------------------------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MapScene.ts` well over 900 lines                                | High, rising | Flagged repeatedly; every new feature (deck UI, hover-reveal, win-check) adds to it. `MapRenderer.ts`/`InputHandler.ts` remain built-but-unused. Combat resolution will add real complexity here — worth deciding now whether the split happens before or after |
+| No real combat resolution                                        | High         | The actual blocker for the rest of the vertical slice, see Next Up                                                                                                                                                                                              |
+| Yellow/Green cards beyond numeric values are feedback-text stubs | Medium       | Defense/Trap real effects still not implemented                                                                                                                                                                                                                 |
+| Unused fields (`tileCount`, `lastGenerationMs`, `lastRenderMs`)  | Trivial      | Lint warnings only, from `refreshStatsText()` being commented out                                                                                                                                                                                               |
+| `client/src/counter.ts`                                          | Trivial      | Leftover Vite scaffold file, never deleted                                                                                                                                                                                                                      |
 
----
+## 📓 Session Log (newest first)
 
-## Architecture Overview
-
-### Scene & Overlay System
-
-`Game` bootstraps PixiJS and owns two siblings: `SceneManager` (full-replace scene transitions — `onEnter`/`onExit`/`update`/`onResize`) and `OverlayManager` (layers UI, like the pause menu, on top of the active scene without ever calling into it — the scene underneath stays fully intact, just paused). These are deliberately separate systems rather than one push/pop stack; `SceneManager`'s single-scene design is intentional, and pause/dialog-style UI is a narrower need that doesn't require rearchitecting it.
-
-### MapScene and its Systems
-
-| System           | Responsibility                                                                                                            |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `Camera`         | WASD pan, wheel zoom, lock/follow — covers moves, card selection, and the Exit card's teleport flights                    |
-| `TurnManager`    | AP pool (sourced from the character's `ap` stat) and costs for Move / Attack / Rest / Disengage                           |
-| `MoveController` | Move mode state machine: range, path preview, destination glow, commit                                                    |
-| `Hand`           | Fanned card hand, selection mode gating, caret navigation, permanent skip slot                                            |
-| `ButtonBar`      | Sidebar UI: Move, Action (dropdown), End Turn                                                                             |
-| `PauseOverlay`   | Resume / Settings / Main Menu, shown via `OverlayManager`                                                                 |
-| `Mercenary`      | Visual token; continuous ease-in/out animation, with an optional duration override for non-walked flights (the Exit card) |
-
-**Known drift**: `MapRenderer` and `InputHandler` were extracted from `MapScene` in an earlier cycle but aren't currently wired in — `MapScene` (733 lines) has its own inline tile-drawing and input-handling logic again. Flagged for resolution alongside the upcoming `BattleScene` work rather than as a separate detour.
-
-### Character System
-
-`CharacterData` (persistent, `shared/src/game/character.ts`) and `MercenaryState` (ephemeral, live-match) are deliberately **not** related by inheritance — `spawnFromCharacter()` is the factory bridging them, since they'll eventually be owned by different backends (Supabase vs. Colyseus). Stats follow `Universal Base + Class Modifier + Player Points`, with Defense starting at 0 for every class (only Tank's modifier touches it) since combat resolves as subtractive damage — see `06-character-creation-design.md` for the full rebalancing story.
-
-### Card System
-
-Fully implemented to spec: Blue (1–3 + **E** exit-teleport), Red (1–6 + **A** double-damage + **C** critical), Yellow (1–4 + **A** nullify + **C** double-defense), Green (Stun, more trap types later). `Card.ts` owns only visual state (`setInteractive`/`setGreyedOut` are independent — resting cards are full-color-but-inert, only selection-mode filtering greys them out). `Hand.ts` owns the fanned layout and selection state machine. The Exit (**E**) card is fully playable: a two-flight teleport (to the exit tile, linger, then a random tile since no relic-carry state exists yet) with alpha-fade transitions and full camera follow.
-
-Still stubbed: Defense/Trap cards beyond numeric values show feedback text only. Hand economy (draw/cap/spend) is a temporary full-refill-every-turn testing behavior — the real deck system is the explicitly-planned next major phase after core gameplay mechanics.
-
-### Shared Package
-
-`@relic-hunter/shared` contains pure logic with no PixiJS, no Colyseus, and no DOM references — safe to import on both client and server. `movement.ts` (BFS pathfinding) is already server-ready for Phase 3.
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js ≥ 20
-
-### Install
-
-```bash
-npm install
-```
-
-### Run Client (dev)
-
-```bash
-npm run dev
-```
-
-Opens at `http://localhost:5173`
-
-### Controls (MapScene)
-
-| Input                              | Action                                                                            |
-| ---------------------------------- | --------------------------------------------------------------------------------- |
-| `WASD`                             | Pan camera                                                                        |
-| Mouse wheel                        | Zoom                                                                              |
-| `Move` button (sidebar)            | Open card selection                                                               |
-| Arrow Left/Right                   | Navigate hand while selecting                                                     |
-| Enter / Space                      | Confirm highlighted card                                                          |
-| Click a card                       | Select + confirm immediately                                                      |
-| `Action` button (sidebar)          | Open Attack / Rest / Disengage sub-menu                                           |
-| `End Turn` button (sidebar) or `E` | End turn                                                                          |
-| Mouse (in move mode)               | Preview path                                                                      |
-| Click (in move mode)               | Commit move                                                                       |
-| `Esc`                              | Close aim/selection, or open Pause if nothing's open — press again to close Pause |
-| `R`                                | Regenerate map                                                                    |
-
----
-
-## Current Status
-
-**Phase 1 — Single-Player Core Loop** (active)
-
-Working: full navigation (Landing→MainMenu→CharacterCreation/Load→Lobby→MissionSelect→Map), character creation with 6 classes and persistence, complete card system including the Exit card's teleport sequence, AP turn system, pause functionality.
-
-**Starting now — core gameplay mechanics**: real combat resolution (Attack is currently a feedback-stub), one static enemy mercenary to fight, a `BattleScene` combat transition, and the item/relic pickup loop. The full card deck system (hand economy, remaining card effects) is the explicitly-planned next phase after these land.
-
-See `docs/02-development-roadmap.md` for the full phase breakdown and `docs/03-current-progress.md` for the current sprint state.
-
----
-
-## Commenting & Code Delivery Standards
-
-All source files follow a consistent style (defined in the TabWorks system prompt §9–10):
-
-- **File-level**: One JSDoc on the main class — role, architecture context, non-obvious design decisions.
-- **Methods**: One-line JSDoc on every method; second line only for a real caller contract.
-- **Blocks**: Short `//` label above logical groups.
-- **Inline**: Only where a line is genuinely non-obvious.
-- **Code delivery**: Every code block ships with a plain-language breakdown covering what each section does, why, how it connects, and any gotchas — referencing design docs by name and section where relevant.
+- **2026-07-22** — Fixed a real bug in `dealStartingHand()`: it called `drawCards(STARTING_HAND_SIZE)` which draws _that many more_, not _up to that total_ — since the constructor already draws 1 card implicitly, this landed hands at 5 (maxed) instead of the intended starting size of 4. Now computes `needed = STARTING_HAND_SIZE - hand.length` first. Removed genuinely dead J/Q/K/A face-card conversion code from `TurnManager.beginMovement` (both real callers already pass a plain number; the string-handling branch was unreachable). Confirmed full read-through: chests, win condition, Exit-card reversal, DeckTracker, InventoryPanel, and hand hover-reveal are all correctly wired from last session. Card deck system is genuinely complete and playable end-to-end.
+- **2026-07-21/22 (deck system build)** — Extracted `CardData` to `shared/game/card.ts` (was duplicated in client). Built the one-shared-75-card-deck model (20/25/15/15, capped specials) after two design corrections mid-session (first per-mercenary independent decks, then a dealt-from-one-pool model, landing on one shared match-wide deck). Wired `Hand.ts` to render real `mercState.hand` data instead of a static test array — this was the actual "why can't I see my deck" bug. Added `DeckTracker` and `InventoryPanel`, wired hand hide/reveal-on-hover, reversed the Exit card to win on target-carry.
+- **2026-07-20** — Chests + win condition landed. Pre-match cinematic rebuilt as an `Overlay` (was a `Scene`, which deadlocked — `SceneManager` blocks a scene's `update()` for its whole `onEnter()`, which permanently hung any `Camera.panTo()` awaited from inside it). `Camera.panTo()` made self-driving via `Ticker.shared` + `performance.now()`.
+- **(earlier)** — Full scene chain, character creation + persistence, card system to spec, AP turn system, pause functionality.

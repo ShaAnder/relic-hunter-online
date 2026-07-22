@@ -285,7 +285,9 @@ export class TurnManager {
 	 * 4, not 5 more.
 	 */
 	dealStartingHand(): void {
-		this.drawCards(STARTING_HAND_SIZE);
+		const merc = this.getMercState();
+		const needed = STARTING_HAND_SIZE - merc.hand.length;
+		if (needed > 0) this.drawCards(needed);
 	}
 
 	/**
