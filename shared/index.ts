@@ -8,3 +8,4 @@ export * from "./src/game/chest";
 export * from "./src/game/item";
 export * from "./src/game/card";
 export * from "./src/game/deck";
+export * from "./SRC/game/combat"

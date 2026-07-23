@@ -7,13 +7,11 @@ const SPHERE_RADIUS = 12;
 const MOVE_DURATION_PER_TILE_MS = 180;
 
 /**
- * Animated on-screen token for a hunter. Visual representation only —
- * authoritative position lives in MercenaryState.
- *
- * Movement plays as one continuous ease-in/out across the whole committed
- * path rather than easing tile-by-tile, so the token glides instead of
- * pausing at every step. In Phase 3 the server-validated path feeds into
- * moveAlongPath unchanged.
+ * Animated on-screen hunter token. Visual only — real position lives in MercenaryState.
+ * Moves as one continuous ease across the whole path, not tile-by-tile.
+ * @param initialCoord - starting grid position
+ * @param bodyColor - sphere fill color, defaults to player red
+ * @author ShaAnder
  */
 export class Mercenary {
 	readonly view = new Container();
@@ -26,34 +24,28 @@ export class Mercenary {
 	private onPathComplete: (() => void) | null = null;
 	private _isAnimating = false;
 
-	constructor(initialCoord: GridCoord) {
+	constructor(
+		initialCoord: GridCoord,
+		private bodyColor: number = 0xe74c3c,
+	) {
 		this.currentScreenPos = gridToScreen(initialCoord);
 		this.view.addChild(this.drawSphere());
 		this.syncPosition();
 	}
 
-	/** True while a move animation is in progress — blocks new input. */
+	/** True while a move animation is in progress. */
 	get isAnimating(): boolean {
 		return this._isAnimating;
 	}
 
 	/**
-	 * Animate smoothly across the entire path with one ease curve.
-	 * Resolves once the final tile is visually reached.
-	 *
-	 * @param path Tiles to visit, in order. path[0] is the first tile after
-	 *   the current position — this is the normal walked-route case.
-	 * @param durationMsOverride When provided, use this exact duration
-	 *   instead of `path.length * MOVE_DURATION_PER_TILE_MS`. Needed for
-	 *   cases like the Exit card's straight-line flight, where the "path"
-	 *   is a single long-distance waypoint (skipping normal pathing
-	 *   entirely) that would otherwise get an unrealistically short
-	 *   duration from the per-tile formula.
+	 * Animate across the whole path with one ease curve.
+	 * @param path - tiles to visit in order
+	 * @param durationMsOverride - explicit duration, for non-walked flights (e.g. Exit card)
 	 */
 	moveAlongPath(path: GridCoord[], durationMsOverride?: number): Promise<void> {
 		return new Promise((resolve) => {
-			// Empty path or double-call: resolve immediately rather than
-			// leaving a promise hanging forever.
+			// Empty path or already animating: resolve immediately, don't hang
 			if (path.length === 0 || this._isAnimating) {
 				resolve();
 				return;
@@ -71,11 +63,10 @@ export class Mercenary {
 		});
 	}
 
-	/** Advance the animation; call once per frame from the scene. */
+	/** Advance the animation — call once per frame. */
 	update(deltaTime: number): void {
 		if (!this._isAnimating || this.animPoints.length < 2) return;
 
-		// Convert deltaTime (frames) into milliseconds so timing stays consistent
 		this.animElapsedMs += (deltaTime / 60) * 1000;
 
 		const t = Math.min(this.animElapsedMs / this.animDurationMs, 1);
@@ -85,7 +76,7 @@ export class Mercenary {
 		this.syncPosition();
 
 		if (t >= 1) {
-			// Snap exactly onto the final tile to kill float drift
+			// Snap to kill float drift
 			const final = this.animPoints[this.animPoints.length - 1];
 			this.currentScreenPos = { x: final.x, y: final.y };
 			this.syncPosition();
@@ -101,25 +92,22 @@ export class Mercenary {
 		}
 	}
 
-	/** Push the tracked screen position onto the Pixi view. */
+	/** Push tracked position onto the Pixi view. */
 	private syncPosition(): void {
 		this.view.x = this.currentScreenPos.x;
 		this.view.y = this.currentScreenPos.y;
 	}
 
-	/** Simple fake-3D sphere placeholder until the sprite sheet lands. */
+	/** Placeholder sphere until the sprite sheet lands. */
 	private drawSphere(): Graphics {
 		const g = new Graphics();
 
-		// Shadow
 		g.ellipse(0, 4, SPHERE_RADIUS * 0.8, SPHERE_RADIUS * 0.3);
 		g.fill({ color: 0x000000, alpha: 0.35 });
 
-		// Body
 		g.circle(0, -SPHERE_RADIUS, SPHERE_RADIUS);
-		g.fill(0xe74c3c);
+		g.fill(this.bodyColor);
 
-		// Highlight
 		g.circle(-SPHERE_RADIUS * 0.3, -SPHERE_RADIUS * 1.4, SPHERE_RADIUS * 0.4);
 		g.fill({ color: 0xffffff, alpha: 0.5 });
 
@@ -127,12 +115,7 @@ export class Mercenary {
 	}
 }
 
-/**
- * Position along a polyline at normalized t, travelling at constant speed.
- * Maps t to distance via cumulative segment lengths so uneven segments
- * don't change the apparent speed — any speed variation comes from easing
- * t before it gets here.
- */
+/** Point along a polyline at normalized t, constant speed via cumulative segment lengths. */
 function interpolatePolyline(
 	points: { x: number; y: number }[],
 	t: number,
@@ -141,7 +124,6 @@ function interpolatePolyline(
 	if (t <= 0) return { ...points[0] };
 	if (t >= 1) return { ...points[points.length - 1] };
 
-	// Cumulative distance along the line
 	const lengths: number[] = [0];
 	let total = 0;
 	for (let i = 1; i < points.length; i++) {
@@ -155,7 +137,6 @@ function interpolatePolyline(
 
 	const targetDist = t * total;
 
-	// Find the segment targetDist lands in, then lerp inside it
 	for (let i = 1; i < lengths.length; i++) {
 		if (targetDist <= lengths[i]) {
 			const segStart = lengths[i - 1];

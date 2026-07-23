@@ -14,6 +14,7 @@ import { ButtonBar } from "@/ui/buttons/ButtonBar";
 import { DeckTracker } from "@/ui/DeckTracker";
 import { InventoryPanel } from "@/ui/InventoryPanel";
 import { PauseOverlay } from "@/ui/overlay/PauseOverlay";
+import { BattleOverlay, type BattleResult } from "@/ui/overlay/BattleOverlay";
 import { MoveController } from "@/systems/MoveController";
 import { TurnManager } from "@/systems/TurnManager";
 import {
@@ -45,25 +46,20 @@ interface PlacedChest {
 	entity: Chest;
 }
 
+/** One enemy on the map — live state paired with its visual token. */
+interface EnemyEntity {
+	state: MercenaryState;
+	mercenary: Mercenary;
+}
+
 const MAX_GENERAL_SLOTS = 6;
 
 /**
- * Tactical map scene: renders the isometric grid, hosts the mercenary,
- * and coordinates the AP turn system, move mode, cards, chests, and the
- * win condition.
- *
- * Button interaction is fully delegated to ButtonBar — MapScene receives
- * a ButtonAction string from handleClick and switches on intent. Pressing
- * Move opens Hand's card-selection mode rather than moving immediately;
- * the actual AP spend and aim mode only begin once a card is confirmed.
- * All turn arithmetic lives in TurnManager. This scene makes decisions and
- * wires systems together; it does none of the work itself.
- *
- * Map generation and chest contents are NOT decided here — LoadingScene
- * decides them (seed, chest plan) and stores them on GameSession before
- * this scene ever constructs, so the pre-match reveal and actual gameplay
- * always agree. A direct MapScene boot with nothing in session (dev/testing)
- * falls back to a fresh random seed and an empty chest plan.
+ * Tactical map scene — grid, mercenary, AP turns, cards, chests, win condition.
+ * Coordinates systems (TurnManager, MoveController, Hand, ButtonBar) rather
+ * than doing the work itself. Map/chest content comes from GameSession
+ * (set by LoadingScene), not decided here.
+ * @author ShaAnder
  */
 export class MapScene implements Scene {
 	readonly view = new Container();
@@ -83,12 +79,23 @@ export class MapScene implements Scene {
 	// Entities
 	private mercState: MercenaryState;
 	private mercenary: Mercenary;
+	// Enemy list — 1 static entry for now, array from the start so targeting
+	// (below) doesn't need a rewrite once real AI hunters/monsters exist.
+	// See 09-enemy-ai-design-v3.md build order.
+	private enemies: EnemyEntity[] = [];
 	private placedChests: PlacedChest[] = [];
 	// True during the Exit card's two-flight teleport sequence — blocks
 	// End Turn / regenerate from interrupting mid-sequence, same role
 	// mercenary.isAnimating plays for normal moves.
 	private exitCardInProgress = false;
 	private turnsTaken = 0;
+
+	// Targeting mode — active while choosing which enemy to attack
+	private targetingActive = false;
+	private targetIndex = -1;
+	private targetReticle = new Graphics();
+	// Which enemy is mid-fight, so onBattleComplete knows who to update
+	private activeCombatEnemyIndex: number | null = null;
 
 	// Character panel (top-right)
 	private characterPanel: CharacterPanel;
@@ -168,6 +175,11 @@ export class MapScene implements Scene {
 		this.mercenary = new Mercenary(this.mercState.coord);
 		this.mercenaryContainer.addChild(this.mercenary.view);
 
+		const enemyState = this.spawnEnemy();
+		const enemyMercenary = new Mercenary(enemyState.coord, 0xe67e22);
+		this.mercenaryContainer.addChild(enemyMercenary.view);
+		this.enemies.push({ state: enemyState, mercenary: enemyMercenary });
+
 		// Item popup rides along as a child of the mercenary's own view,
 		// so it moves with the token automatically — no manual per-frame
 		// position syncing needed.
@@ -179,6 +191,10 @@ export class MapScene implements Scene {
 		this.itemPopup.addChild(this.itemPopupIcon, this.itemPopupText);
 		this.itemPopup.visible = false;
 		this.mercenary.view.addChild(this.itemPopup);
+
+		// Targeting reticle rides along on the player token, same as itemPopup
+		this.targetReticle.visible = false;
+		this.mercenary.view.addChild(this.targetReticle);
 
 		this.spawnChests();
 
@@ -288,14 +304,13 @@ export class MapScene implements Scene {
 		this.hand.update(deltaTime);
 
 		// Lock camera to the mercenary's VISUAL position while aiming,
-		// animating, selecting a card, OR mid-Exit-card-sequence — the
-		// player shouldn't be able to pan away during the linger between
-		// the two flights, when isAnimating is briefly false again.
+		// animating, selecting a card, targeting, OR mid-Exit-card-sequence.
 		if (
 			this.moveController.active ||
 			this.mercenary.isAnimating ||
 			this.hand.isSelecting ||
-			this.exitCardInProgress
+			this.exitCardInProgress ||
+			this.targetingActive
 		) {
 			this.camera.lockTo({
 				x: this.mercenary.view.x,
@@ -349,15 +364,8 @@ export class MapScene implements Scene {
 	// ---------- Move ----------
 
 	/**
-	 * Toggle Move: cancel if currently aiming or selecting a card, otherwise
-	 * open card selection. Guarded by turnManager.canMove up front — a
-	 * greyed-out button can never open selection even if this somehow gets
-	 * called directly, on top of ButtonBar's own disabled hitTest.
-	 *
-	 * The filter always excludes Attack, and additionally excludes Blue
-	 * once a blue card has been played this turn. TurnManager.beginMovement
-	 * already rejects a second blue at the data layer — greying it out here
-	 * means the player never sees it as a live option in the first place.
+	 * Toggle Move: cancel if aiming/selecting, else open card selection.
+	 * Filter excludes Attack and blue if already played this turn.
 	 */
 	private handleMovePressed(): void {
 		if (this.moveController.active) {
@@ -384,11 +392,7 @@ export class MapScene implements Scene {
 		this.buttonBar.closeMenu();
 	}
 
-	/**
-	 * Commit a move path: advance position, deduct tiles, play animation,
-	 * then check for a chest at the destination and whether this move just
-	 * won the match. Resolves when the animation finishes.
-	 */
+	/** Commit a move: update position, deduct tiles, animate, check chest/win. */
 	private async onMoveCommitted(
 		target: GridCoord,
 		path: GridCoord[],
@@ -408,13 +412,7 @@ export class MapScene implements Scene {
 
 	// ---------- Chests & Items ----------
 
-	/**
-	 * Place every chest from the session's chest plan onto distinct random
-	 * walkable tiles, avoiding the exit tile and the player's spawn point.
-	 * If the plan is missing (a direct MapScene boot with no LoadingScene
-	 * run first) this simply places nothing — chests are optional, not a
-	 * hard requirement for the scene to function.
-	 */
+	/** Place chests from the session plan onto walkable tiles. No-ops if plan is missing. */
 	private spawnChests(): void {
 		this.chestContainer.removeChildren();
 		this.placedChests = [];
@@ -467,13 +465,7 @@ export class MapScene implements Scene {
 		return candidates[Math.floor(Math.random() * candidates.length)];
 	}
 
-	/**
-	 * Open the chest at `coord` if one exists and isn't already opened.
-	 * If the inventory's 6 general slots are already full, the chest stays
-	 * closed and unopened — no forced drop, no swap prompt, per
-	 * `11-item-inventory-win-design.md`. The player can return once they
-	 * have room.
-	 */
+	/** Open the chest at coord if unopened. Stays closed if inventory (6 slots) is full. */
 	private tryOpenChestAt(coord: GridCoord): void {
 		const placed = this.placedChests.find(
 			(c) => !c.entity.isOpen && c.coord.x === coord.x && c.coord.y === coord.y,
@@ -500,11 +492,7 @@ export class MapScene implements Scene {
 		this.showItemPopup(placed.plan.item, placed.plan.isTarget);
 	}
 
-	/**
-	 * Float a small icon + item name above the mercenary's head for a
-	 * couple seconds. Placeholder shape until real item sprites exist —
-	 * target items get a gold icon, everything else a plain white one.
-	 */
+	/** Float an icon + item name above the mercenary's head briefly. */
 	private showItemPopup(item: ItemData, isTarget: boolean): void {
 		this.itemPopupIcon.clear();
 		this.itemPopupIcon.circle(0, -46, 10);
@@ -518,11 +506,7 @@ export class MapScene implements Scene {
 		this.itemPopupTimer = 90; // ~1.5s at 60fps, matching feedbackTimer's frame-unit convention
 	}
 
-	/**
-	 * Standing on the Exit tile while holding the match's target item —
-	 * arrived at via a normal move commit only. The Exit (E) card
-	 * deliberately never reaches this check; see handleExitCard.
-	 */
+	/** Win check: standing on Exit with target held, via normal move only. */
 	private checkWinCondition(): void {
 		const exitTile = findExitTile(this.grid);
 		if (!exitTile) return;
@@ -557,25 +541,207 @@ export class MapScene implements Scene {
 
 	// ---------- Actions ----------
 
-	/** Spend 2 AP on Attack and lock Move. Combat resolver deferred to Phase 2. */
+	/** Toggle targeting mode. Requires AP for Attack up front — no point entering otherwise. */
 	private handleAttack(): void {
-		if (!this.turnManager.spendAttack()) return;
+		if (this.targetingActive) {
+			this.exitTargetingMode();
+			return;
+		}
+		if (!this.turnManager.canAttack) {
+			this.showFeedback("⚔ Not enough AP to attack");
+			return;
+		}
+		if (this.livingEnemies().length === 0) {
+			this.showFeedback("⚔ No enemies on the map");
+			return;
+		}
+
 		this.moveController.exit();
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
-		this.showFeedback("⚔ Attack! (combat phase coming soon)");
+		this.enterTargetingMode();
 	}
 
-	/** Spend 1 AP on Rest and lock Move. Card draw deferred to Phase 1 card system. */
+	/** All enemies still standing — the only valid targeting candidates. */
+	private livingEnemies(): EnemyEntity[] {
+		return this.enemies.filter((e) => e.state.currentHp > 0);
+	}
+
+	/** Show the reticle, sword cursor, default-select the nearest living enemy. */
+	private enterTargetingMode(): void {
+		const candidates = this.livingEnemies();
+		if (candidates.length === 0) return;
+
+		this.targetingActive = true;
+		this.game.app.canvas.style.cursor = "crosshair"; // placeholder for a real sword cursor asset
+
+		const nearestIndex = this.enemies.indexOf(
+			candidates.reduce((closest, e) =>
+				this.distanceToPlayer(e) < this.distanceToPlayer(closest) ? e : closest,
+			),
+		);
+		this.setTarget(nearestIndex);
+	}
+
+	/** Hide the reticle, restore the cursor, drop the current selection. */
+	private exitTargetingMode(): void {
+		this.targetingActive = false;
+		this.targetIndex = -1;
+		this.targetReticle.visible = false;
+		this.game.app.canvas.style.cursor = "default";
+	}
+
+	private distanceToPlayer(enemy: EnemyEntity): number {
+		const dx = enemy.state.coord.x - this.mercState.coord.x;
+		const dy = enemy.state.coord.y - this.mercState.coord.y;
+		return Math.sqrt(dx * dx + dy * dy);
+	}
+
+	/** Point the reticle at a specific enemy index and redraw it. */
+	private setTarget(index: number): void {
+		this.targetIndex = index;
+		this.targetReticle.visible = true;
+		this.targetReticle.clear();
+		this.targetReticle.poly([0, 0, 8, -12, -8, -12]);
+		this.targetReticle.fill(0xffd700);
+		this.targetReticle.y = -50;
+	}
+
+	/**
+	 * Directional target cycling — picks the living enemy most aligned with
+	 * the given direction (dot product) among those actually in front of
+	 * the player that way, breaking ties toward the closer one. Logically
+	 * sound but only genuinely testable once multiple enemies exist —
+	 * with one enemy on the map, every direction just resolves to it or
+	 * nothing.
+	 */
+	private cycleTarget(direction: "up" | "down" | "left" | "right"): void {
+		if (!this.targetingActive) return;
+
+		const vectors = {
+			up: { dx: 0, dy: -1 },
+			down: { dx: 0, dy: 1 },
+			left: { dx: -1, dy: 0 },
+			right: { dx: 1, dy: 0 },
+		};
+		const vec = vectors[direction];
+
+		let bestIndex = -1;
+		let bestScore = -Infinity;
+
+		this.enemies.forEach((enemy, i) => {
+			if (enemy.state.currentHp <= 0) return;
+			const dx = enemy.state.coord.x - this.mercState.coord.x;
+			const dy = enemy.state.coord.y - this.mercState.coord.y;
+			const dist = Math.sqrt(dx * dx + dy * dy);
+			if (dist === 0) return;
+
+			const dot = (dx * vec.dx + dy * vec.dy) / dist;
+			if (dot <= 0.3) return; // not meaningfully in that direction
+
+			const score = dot - dist * 0.01;
+			if (score > bestScore) {
+				bestScore = score;
+				bestIndex = i;
+			}
+		});
+
+		if (bestIndex !== -1) this.setTarget(bestIndex);
+	}
+
+	/** Confirm the current target via keyboard (Enter/Space while targeting). */
+	private confirmTarget(): void {
+		if (this.targetIndex === -1) return;
+		this.tryStartCombat(this.targetIndex);
+	}
+
+	/** Range-checks the target, spends AP, opens BattleOverlay if valid. */
+	private tryStartCombat(enemyIndex: number): void {
+		const enemy = this.enemies[enemyIndex];
+		if (!enemy || enemy.state.currentHp <= 0) return;
+
+		const dx = Math.abs(this.mercState.coord.x - enemy.state.coord.x);
+		const dy = Math.abs(this.mercState.coord.y - enemy.state.coord.y);
+		if (Math.max(dx, dy) > 1) {
+			this.showFeedback("⚔ Target out of range");
+			return;
+		}
+		if (!this.turnManager.spendAttack()) return;
+
+		this.exitTargetingMode();
+		this.activeCombatEnemyIndex = enemyIndex;
+
+		void this.game.overlays.show(
+			new BattleOverlay(this.game, this.mercState, enemy.state, (result) =>
+				this.onBattleComplete(result),
+			),
+		);
+	}
+
+	/**
+	 * Click-to-target: hit-tests the click against every living enemy
+	 * token in board-local space. Only active while targeting; clicking
+	 * anywhere that isn't an enemy cancels targeting instead.
+	 */
+	private handleTargetClick(screenX: number, screenY: number): boolean {
+		if (!this.targetingActive) return false;
+
+		const localX =
+			(screenX - this.boardContainer.x) / this.boardContainer.scale.x;
+		const localY =
+			(screenY - this.boardContainer.y) / this.boardContainer.scale.y;
+
+		const hitIndex = this.enemies.findIndex((e) => {
+			if (e.state.currentHp <= 0) return false;
+			const dx = e.mercenary.view.x - localX;
+			const dy = e.mercenary.view.y - localY;
+			return Math.sqrt(dx * dx + dy * dy) <= 20;
+		});
+
+		if (hitIndex !== -1) {
+			this.tryStartCombat(hitIndex);
+		} else {
+			this.exitTargetingMode();
+		}
+		return true;
+	}
+
+	/** Enemy defeat/teleport are BattleOverlay's job via shared state; this handles the rest. */
+	private onBattleComplete(result: BattleResult): void {
+		const enemy =
+			this.activeCombatEnemyIndex !== null
+				? this.enemies[this.activeCombatEnemyIndex]
+				: null;
+		this.activeCombatEnemyIndex = null;
+
+		if (result.enemyDefeated && enemy) {
+			enemy.mercenary.view.visible = false;
+			this.showFeedback("💀 Enemy defeated!");
+		}
+
+		if (result.playerNeedsTeleport) {
+			const destination = this.randomWalkableTile(this.mercState.coord);
+			if (destination) {
+				this.mercState.coord = destination;
+				const screenPos = gridToScreen(destination);
+				this.mercenary.view.x = screenPos.x;
+				this.mercenary.view.y = screenPos.y;
+			}
+		}
+
+		this.syncUI();
+	}
+
+	/** Spend 1 AP on Rest, lock Move, draw up to 2 cards. */
 	private handleRest(): void {
 		if (!this.turnManager.spendRest()) return;
 		this.moveController.exit();
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
-		this.showFeedback("💤 Rested — card draw coming with the hand system");
+		this.showFeedback("💤 Rested — drew cards");
 	}
 
-	/** Spend 1 AP on Disengage. Restricted move deferred to ZoC system. */
+	/** Spend 1 AP on Disengage. ZoC-restricted movement not yet implemented. */
 	private handleDisengage(): void {
 		if (!this.turnManager.spendDisengage()) return;
 		this.moveController.exit();
@@ -586,15 +752,7 @@ export class MapScene implements Scene {
 
 	// ---------- End Turn ----------
 
-	/**
-	 * End the turn — shared by [E] key and the End Turn button.
-	 * No-ops mid-animation so turn state can't desync from visuals.
-	 *
-	 * TEMP TESTING BEHAVIOUR: fully refills the hand back to the starter
-	 * set every turn so the card flow can be exercised repeatedly without
-	 * running out of cards. Replace with the real draw economy (draw 1/round,
-	 * Rest draws up to 2, max hand 5) from `04-card-system-design.md`.
-	 */
+	/** End turn — shared by [E] key and End Turn button. No-ops mid-animation. */
 	private handleEndTurn(): void {
 		if (this.mercenary.isAnimating || this.exitCardInProgress) return;
 		this.moveController.exit();
@@ -607,13 +765,7 @@ export class MapScene implements Scene {
 
 	// ---------- Input ----------
 
-	/**
-	 * [Esc] close local state first (aim/selection), then open Pause if
-	 * nothing else was open — pressing it again while paused closes Pause.
-	 * All other keys are ignored while paused. [E] end turn · [R] regenerate
-	 * map · [←/→] move card caret · [Enter/Space] confirm highlighted card —
-	 * the last two only act while Hand.isSelecting is true.
-	 */
+	/** [Esc] cancel/pause toggle · [E] end turn · [R] regen · arrows+Enter for hand nav. */
 	private handleKeyDown = (event: KeyboardEvent): void => {
 		if (this.game.overlays.isOpen) {
 			if (event.key === "Escape") this.game.overlays.hide();
@@ -622,7 +774,9 @@ export class MapScene implements Scene {
 
 		switch (event.key) {
 			case "Escape":
-				if (this.moveController.active || this.hand.isSelecting) {
+				if (this.targetingActive) {
+					this.exitTargetingMode();
+				} else if (this.moveController.active || this.hand.isSelecting) {
 					this.moveController.exit();
 					this.hand.exitSelectionMode();
 					this.buttonBar.setMoveActive(false);
@@ -639,15 +793,24 @@ export class MapScene implements Scene {
 			case "R":
 				this.regenerateMap();
 				break;
+			case "ArrowUp":
+				if (this.targetingActive) this.cycleTarget("up");
+				break;
+			case "ArrowDown":
+				if (this.targetingActive) this.cycleTarget("down");
+				break;
 			case "ArrowLeft":
-				if (this.hand.isSelecting) this.hand.moveCaret(-1);
+				if (this.targetingActive) this.cycleTarget("left");
+				else if (this.hand.isSelecting) this.hand.moveCaret(-1);
 				break;
 			case "ArrowRight":
-				if (this.hand.isSelecting) this.hand.moveCaret(1);
+				if (this.targetingActive) this.cycleTarget("right");
+				else if (this.hand.isSelecting) this.hand.moveCaret(1);
 				break;
 			case "Enter":
 			case " ":
-				if (this.hand.isSelecting) this.hand.confirmHighlighted();
+				if (this.targetingActive) this.confirmTarget();
+				else if (this.hand.isSelecting) this.hand.confirmHighlighted();
 				break;
 		}
 	};
@@ -681,19 +844,16 @@ export class MapScene implements Scene {
 				this.handleEndTurn();
 				break;
 			case null:
+				if (this.handleTargetClick(screenX, screenY)) break;
 				if (this.moveController.active) this.moveController.tryCommit();
 				break;
 		}
 	};
 
-	/** Feed hovered tiles to the path preview while aiming. */
-	/**
-	 * Hand hover-reveal works regardless of aiming state — computed first,
-	 * unconditionally. The existing move-preview logic still only runs
-	 * while actively aiming, unchanged below it.
-	 */
+	/** Hover threshold for revealing the hand — checked unconditionally, not just while aiming. */
 	private readonly HAND_HOVER_THRESHOLD_PX = 220;
 
+	/** Feed hovered tiles to the path preview while aiming; hand-reveal check always runs. */
 	private handleMouseMove = (event: MouseEvent): void => {
 		if (this.game.overlays.isOpen) return;
 
@@ -709,10 +869,7 @@ export class MapScene implements Scene {
 
 	// ---------- UI ----------
 
-	/**
-	 * Show a temporary feedback message centered near the top of the screen.
-	 * Auto-hides after ~2.5 seconds via the update loop timer.
-	 */
+	/** Show a temporary top-of-screen message, auto-hides after ~2.5s. */
 	private showFeedback(message: string): void {
 		this.feedbackText.text = message;
 		this.feedbackText.visible = true;
@@ -722,11 +879,7 @@ export class MapScene implements Scene {
 		this.feedbackTimer = 150;
 	}
 
-	/**
-	 * Sync ButtonBar and stats overlay to current TurnManager state.
-	 * Guarded against calls during construction — TurnManager fires
-	 * onChanged from its own constructor, before buttonBar exists.
-	 */
+	/** Sync all UI to TurnManager state. Guarded — fires before buttonBar exists during construction. */
 	private syncUI(): void {
 		if (!this.buttonBar || !this.turnManager) return;
 		this.buttonBar.sync(this.turnManager);
@@ -738,22 +891,7 @@ export class MapScene implements Scene {
 
 	// ---------- Cards ----------
 
-	/**
-	 * Apply the gameplay effect for a confirmed card. Hand has already
-	 * shown the detail overlay and exited selection mode by the time this
-	 * fires, but it no longer removes the card itself — Hand only renders
-	 * whatever's in mercState.hand, it doesn't own the data. This method
-	 * removes the card from the real hand first (making mercState.hand
-	 * the immediate source of truth), then spends AP and enters aim mode.
-	 * The visual hand catches up automatically the next time syncUI()
-	 * runs, which beginMovement()'s onChanged() call triggers right below.
-	 *
-	 * Blue E is handled separately (handleExitCard) since it bypasses aim
-	 * mode and normal pathing entirely — it's a teleport, not a move.
-	 *
-	 * Attack never reaches here — it's filtered out of Move-phase selection
-	 * and still runs through the Action button (handleAttack).
-	 */
+	/** Removes card from real hand, spends AP. Blue E routes to handleExitCard; Attack doesn't reach here. */
 	private handleCardConfirmed(card: CardData): void {
 		// Remove the played card from the real hand (source of truth) —
 		// this no-ops harmlessly for the synthetic "No Card" skip option,
@@ -785,30 +923,7 @@ export class MapScene implements Scene {
 		}
 	}
 
-	/**
-	 * Resolve the Blue E (Exit) card as a two-flight sequence: fly to the
-	 * exit tile first, linger there briefly, then fly to a random other
-	 * tile. Per `11-item-inventory-win-design.md`, E never triggers the win
-	 * condition regardless of whether the target item is carried — the win
-	 * check lives specifically in onMoveCommitted, not here, and always
-	 * will. This is purely a flavor/repositioning card.
-	 *
-	 * Guarded by exitCardInProgress so End Turn / regenerate can't fire
-	 * mid-sequence — the same role mercenary.isAnimating plays elsewhere —
-	 * and that flag also keeps the camera locked during the linger, when
-	 * isAnimating briefly goes false between the two flights.
-	 */
-	/**
-	 * Resolve the Blue E (Exit) card as a two-flight sequence: fly to the
-	 * exit tile first, then check whether the target item is carried.
-	 *
-	 * If carrying the target: this wins the match immediately, skipping
-	 * the linger and second flight entirely — reverses an earlier design
-	 * decision (`11-item-inventory-win-design.md`'s original "E never
-	 * triggers win") which this session's requirements explicitly
-	 * override. If NOT carrying the target: linger briefly, then fly to a
-	 * random other tile — a flavor/repositioning gamble, same as before.
-	 */
+	/** Exit card: fly to exit, win immediately if carrying target, else linger + random flight. */
 	private async handleExitCard(): Promise<void> {
 		if (!this.turnManager.beginMovement("blue", 0)) return;
 
@@ -837,23 +952,7 @@ export class MapScene implements Scene {
 		this.exitCardInProgress = false;
 	}
 
-	/**
-	 * Fade out, fly there in a straight line, fade back in on arrival.
-	 *
-	 * The flight itself reuses Mercenary.moveAlongPath with a single
-	 * waypoint — that produces a straight two-point polyline (current
-	 * position → destination) using the same eased position interpolation
-	 * as a normal move, with an explicit duration since a 1-tile "path"
-	 * would otherwise animate far too fast for a cross-map flight.
-	 *
-	 * The sprite is set to alpha 0 for the flight's duration rather than
-	 * `visible = false` — its position keeps updating throughout (that's
-	 * what moveAlongPath is doing), so the camera's existing
-	 * mercenary.isAnimating lock keeps tracking it the whole time even
-	 * though nothing is drawn. It only "reappears" once alpha is restored
-	 * on arrival. This is a placeholder for a real teleport VFX later —
-	 * for now the fade is the whole effect.
-	 */
+	/** Fade out, fly in a straight line, fade in on arrival. Alpha 0 while moving, not visible=false, so the camera still tracks it. */
 	private async flyMercenaryTo(coord: GridCoord): Promise<void> {
 		this.mercenary.view.alpha = 0;
 		this.mercState.coord = coord;
@@ -898,14 +997,7 @@ export class MapScene implements Scene {
 		});
 	}
 
-	/**
-	 * Rebuild the map with a fresh seed and reset turn state.
-	 * No-ops mid-animation to avoid orphaning the moveAlongPath promise.
-	 *
-	 * Note: this generates a brand new seed/chest layout locally rather
-	 * than going back through LoadingScene — [R] is a dev/testing shortcut,
-	 * not part of the normal match flow, so it doesn't re-run the reveal.
-	 */
+	/** [R] dev shortcut: fresh seed/map/chests locally, no LoadingScene round-trip. */
 	private regenerateMap(): void {
 		if (this.mercenary.isAnimating || this.exitCardInProgress) return;
 
@@ -913,6 +1005,7 @@ export class MapScene implements Scene {
 		this.hand.exitSelectionMode();
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
+		this.exitTargetingMode();
 
 		this.mapSeed = Math.floor(Math.random() * 1_000_000);
 		this.grid = this.buildMap();
@@ -922,7 +1015,15 @@ export class MapScene implements Scene {
 		this.mercenary = new Mercenary(this.mercState.coord);
 		this.mercenary.view.addChild(this.itemPopup);
 		this.itemPopup.visible = false;
+		this.targetReticle.visible = false;
+		this.mercenary.view.addChild(this.targetReticle);
 		this.mercenaryContainer.addChild(this.mercenary.view);
+
+		this.enemies = [];
+		const enemyState = this.spawnEnemy();
+		const enemyMercenary = new Mercenary(enemyState.coord, 0xe67e22);
+		this.mercenaryContainer.addChild(enemyMercenary.view);
+		this.enemies.push({ state: enemyState, mercenary: enemyMercenary });
 
 		this.game.session.chestPlan = null;
 		this.game.session.chestPlacements = null;
@@ -987,6 +1088,23 @@ export class MapScene implements Scene {
 			attack: 3,
 			defense: 2,
 			maxHp: 20,
+			ap: 3,
+		});
+	}
+
+	/** Static non-AI enemy near player spawn, for testing combat. See `09-enemy-ai-design-v3.md`. */
+	private spawnEnemy(): MercenaryState {
+		const playerSpawn = this.mercState.coord;
+		const candidate = { x: playerSpawn.x + 3, y: playerSpawn.y };
+		const spawnCoord = this.grid.isWalkable(candidate)
+			? candidate
+			: (findFirstWalkableTile(this.grid) ?? { x: 0, y: 0 });
+
+		return createMercenary("enemy_static_1", spawnCoord, {
+			movement: 3,
+			attack: 3,
+			defense: 2,
+			maxHp: 15,
 			ap: 3,
 		});
 	}

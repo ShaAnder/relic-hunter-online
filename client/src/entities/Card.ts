@@ -6,12 +6,9 @@ export const CARD_HEIGHT = 110;
 
 /**
  * Visual card token shown in the player's hand.
- *
- * Purely a rendering component — disabled (true grayscale via a color
- * matrix filter, always fully opaque) and highlighted (glow behind the
- * card) are the only states Card owns. Position, rotation, and lift are
- * entirely Hand's responsibility, so multiple layout systems never fight
- * over the same transform.
+ * Owns only disabled/highlighted rendering — position and layout are Hand's job.
+ * @param data - the card's data (color, value, etc.)
+ * @author ShaAnder
  */
 export class Card {
 	readonly view = new Container();
@@ -24,7 +21,7 @@ export class Card {
 	private greyedOut = false;
 	private highlighted = false;
 
-	// Shared single instance — desaturate() is a fixed matrix, no per-card state
+	// Shared filter instance — fixed matrix, no per-card state
 	private static readonly grayscaleFilter = (() => {
 		const f = new ColorMatrixFilter();
 		f.desaturate();
@@ -56,34 +53,24 @@ export class Card {
 		return this.data;
 	}
 
-	/**
-	 * Toggle click/hover interactivity. Purely functional — never changes
-	 * how the card looks. Cards are non-interactive at rest (Move not
-	 * pressed) but still shown in full color; see setGreyedOut for the
-	 * visual half of "can't be played right now."
-	 */
+	/** Toggle click/hover. Doesn't affect visuals — see setGreyedOut for that. */
 	setInteractive(interactive: boolean): void {
 		this.view.eventMode = interactive ? "static" : "none";
 	}
 
-	/**
-	 * True grayscale (always opaque, never faded) for a card that fails the
-	 * active selection filter. Independent of interactivity — a card can be
-	 * full color and non-interactive (resting) or gray and non-interactive
-	 * (ineligible during selection), but never gray while still clickable.
-	 */
+	/** True grayscale, always opaque — for a card that fails the active filter. */
 	setGreyedOut(greyed: boolean): void {
 		this.greyedOut = greyed;
 		this.redraw();
 	}
 
-	/** Show/hide the glow — used when the selection caret rests on this card. */
+	/** Show/hide the highlight glow. */
 	setHighlighted(highlighted: boolean): void {
 		this.highlighted = highlighted;
 		this.redraw();
 	}
 
-	/** Redraw body, label, and glow for the current state. Never touches position. */
+	/** Redraw body/label/glow for current state. Never touches position. */
 	private redraw(): void {
 		const colors: Record<CardColor, number> = {
 			blue: 0x4a9eff,
@@ -102,7 +89,7 @@ export class Card {
 		this.label.x = CARD_WIDTH / 2;
 		this.label.y = CARD_HEIGHT / 2;
 
-		// Always fully opaque — solid, never transparent, in either state
+		// Always fully opaque, never transparent
 		this.view.alpha = 1;
 
 		if (this.greyedOut) {
