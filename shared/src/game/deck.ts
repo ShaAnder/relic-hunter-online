@@ -197,3 +197,29 @@ export function buildSharedDeck(): CardData[] {
 	];
 	return shuffle(deck);
 }
+
+/** Max cards any hunter can hold — player or AI. Single source of truth. */
+export const MAX_HAND_SIZE = 5;
+
+/**
+ * Draw up to `count` cards from `deck` into `hand`, capped by MAX_HAND_SIZE
+ * and by whatever's left in the deck. Mutates both arrays in place. Used
+ * identically by TurnManager (player) and enemy AI turn processing — one
+ * draw implementation, not two that could quietly diverge.
+ * @param hand - mutated in place
+ * @param deck - mutated in place, shift() removes from the front
+ * @param count - cards to attempt to draw
+ */
+export function drawCardsInto(
+	hand: CardData[],
+	deck: CardData[],
+	count: number,
+): void {
+	const roomInHand = MAX_HAND_SIZE - hand.length;
+	const actualDraw = Math.min(count, roomInHand, deck.length);
+
+	for (let i = 0; i < actualDraw; i++) {
+		const card = deck.shift();
+		if (card) hand.push(card);
+	}
+}
