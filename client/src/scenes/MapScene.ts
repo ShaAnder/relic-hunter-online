@@ -18,6 +18,11 @@ import { BattleOverlay, type BattleResult } from "@/ui/overlay/BattleOverlay";
 import { MoveController } from "@/systems/MoveController";
 import { TurnManager } from "@/systems/TurnManager";
 import {
+	decideMovementTarget,
+	decideEngagement,
+	type ChestInfo,
+} from "@relic-hunter/shared";
+import {
 	Grid,
 	TileType,
 	type GridCoord,
@@ -31,6 +36,10 @@ import {
 	createMercenary,
 	spawnFromCharacter,
 	buildSharedDeck,
+	drawCardsInto,
+	computeMovementRange,
+	getPathTo,
+	findNearestReachableTile,
 	type MercenaryState,
 } from "@relic-hunter/shared";
 import { Hand } from "@/ui/Hand";
@@ -96,6 +105,8 @@ export class MapScene implements Scene {
 	private targetReticle = new Graphics();
 	// Which enemy is mid-fight, so onBattleComplete knows who to update
 	private activeCombatEnemyIndex: number | null = null;
+	// Guards End Turn from re-firing while enemies are mid-move/mid-fight
+	private processingEnemyTurns = false;
 
 	// Character panel (top-right)
 	private characterPanel: CharacterPanel;
@@ -506,6 +517,119 @@ export class MapScene implements Scene {
 		this.itemPopupTimer = 90; // ~1.5s at 60fps, matching feedbackTimer's frame-unit convention
 	}
 
+	// ---------- Enemy AI ----------
+
+	/**
+	 * Process every living enemy's turn, one at a time, after the player
+	 * ends theirs. Each draws a card from the shared deck first — same
+	 * mechanic as the player, and the reason every hunter drawing from one
+	 * pool actually depletes it in a real match length instead of only the
+	 * player ever touching it.
+	 */
+	private async processEnemyTurns(): Promise<void> {
+		this.processingEnemyTurns = true;
+
+		const sharedDeck = (this.game.session.sharedDeck ??= buildSharedDeck());
+
+		for (const enemy of this.enemies) {
+			if (enemy.state.currentHp <= 0) continue;
+			drawCardsInto(enemy.state.hand, sharedDeck, 1);
+			await this.processOneEnemyTurn(enemy);
+		}
+
+		this.processingEnemyTurns = false;
+		this.syncUI();
+	}
+
+	/** Move toward the Balanced target, check for a chest, then decide whether to engage. */
+	private async processOneEnemyTurn(enemy: EnemyEntity): Promise<void> {
+		const chestInfos: ChestInfo[] = this.placedChests.map((c) => ({
+			coord: c.coord,
+			isOpen: c.entity.isOpen,
+		}));
+
+		const target = decideMovementTarget(
+			enemy.state.coord,
+			this.mercState.coord,
+			this.isCarryingTarget(),
+			chestInfos,
+		);
+
+		const range = computeMovementRange(
+			this.grid,
+			enemy.state.coord,
+			enemy.state.stats.movement,
+		);
+		const reachable =
+			findNearestReachableTile(range, target) ?? enemy.state.coord;
+		const path = getPathTo(range, reachable) ?? [];
+
+		if (path.length > 0) {
+			enemy.state.coord = reachable;
+			await enemy.mercenary.moveAlongPath(path);
+		}
+
+		this.tryEnemyOpenChest(enemy, enemy.state.coord);
+
+		// Chebyshev adjacency, matching the player's own attack-range check
+		// elsewhere — a pre-existing inconsistency with this grid's actual
+		// cardinal-only movement (see EnemyAI.ts's Manhattan distance use),
+		// not fixed here since it's a separate behavior change.
+		const dx = Math.abs(enemy.state.coord.x - this.mercState.coord.x);
+		const dy = Math.abs(enemy.state.coord.y - this.mercState.coord.y);
+		if (Math.max(dx, dy) > 1) return;
+
+		const shouldEngage = decideEngagement(
+			enemy.state.stats,
+			enemy.state.currentHp,
+			this.mercState.stats,
+			this.mercState.items.length,
+		);
+		if (shouldEngage) await this.aiInitiateCombat(enemy);
+	}
+
+	/** Chest pickup for an enemy — same rules as the player, no floating popup. */
+	private tryEnemyOpenChest(enemy: EnemyEntity, coord: GridCoord): void {
+		const placed = this.placedChests.find(
+			(c) => !c.entity.isOpen && c.coord.x === coord.x && c.coord.y === coord.y,
+		);
+		if (!placed) return;
+		if (enemy.state.items.length >= MAX_GENERAL_SLOTS) return;
+
+		placed.entity.open();
+		enemy.state.items.push(placed.plan.item);
+
+		if (placed.plan.isTarget) {
+			this.showFeedback("⚠️ An enemy hunter found the target item!");
+		}
+	}
+
+	/**
+	 * Opens the same BattleOverlay a player-initiated attack uses — the
+	 * player still reacts interactively regardless of who started the
+	 * fight. Returns a promise resolving once the fight ends, so
+	 * processEnemyTurns correctly pauses on this enemy until the player
+	 * actually resolves it before moving to the next one.
+	 */
+	private aiInitiateCombat(enemy: EnemyEntity): Promise<void> {
+		return new Promise((resolve) => {
+			const enemyIndex = this.enemies.indexOf(enemy);
+			if (enemyIndex === -1) {
+				resolve();
+				return;
+			}
+
+			this.activeCombatEnemyIndex = enemyIndex;
+
+			void this.game.overlays.show(
+				new BattleOverlay(this.game, this.mercState, enemy.state, (result) => {
+					this.onBattleComplete(result);
+					resolve();
+				}),
+			);
+		});
+	}
+
 	/** Win check: standing on Exit with target held, via normal move only. */
 	private checkWinCondition(): void {
 		const exitTile = findExitTile(this.grid);
@@ -754,13 +878,20 @@ export class MapScene implements Scene {
 
 	/** End turn — shared by [E] key and End Turn button. No-ops mid-animation. */
 	private handleEndTurn(): void {
-		if (this.mercenary.isAnimating || this.exitCardInProgress) return;
+		if (
+			this.mercenary.isAnimating ||
+			this.exitCardInProgress ||
+			this.processingEnemyTurns
+		) {
+			return;
+		}
 		this.moveController.exit();
 		this.hand.exitSelectionMode();
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
 		this.turnManager.endTurn();
 		this.turnsTaken++;
+		void this.processEnemyTurns();
 	}
 
 	// ---------- Input ----------

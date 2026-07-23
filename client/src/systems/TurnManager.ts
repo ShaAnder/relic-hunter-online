@@ -1,10 +1,10 @@
 import type { CardData, MercenaryState } from "@relic-hunter/shared";
+import { drawCardsInto } from "@relic-hunter/shared";
 
 export type TurnAction = "move" | "action" | "pass";
 
-/** Max cards a mercenary can hold. Draws (turn-start or Rest) never exceed this. */
+/** Starting hand size — tops up toward MAX_HAND_SIZE via subsequent draws. */
 const STARTING_HAND_SIZE = 4;
-const MAX_HAND_SIZE = 5;
 
 /**
  * Manages the AP-based turn cycle for a single match.
@@ -295,18 +295,8 @@ export class TurnManager {
 	 * hand, capped by MAX_HAND_SIZE and by whatever's actually left in the
 	 * deck. No reshuffle when the deck runs dry — draws just stop.
 	 */
+	/** Draw up to `count` cards — delegates to the shared implementation AI turns also use. */
 	private drawCards(count: number): void {
-		const merc = this.getMercState();
-		const sharedDeck = this.getSharedDeck();
-		const roomInHand = MAX_HAND_SIZE - merc.hand.length;
-		const actualDraw = Math.min(count, roomInHand, sharedDeck.length);
-
-		// .shift() is O(n) (removes from the front, re-indexes the rest) —
-		// fine at this deck size (75 cards); would be worth a head-pointer/
-		// queue if deck sizes ever grew by orders of magnitude.
-		for (let i = 0; i < actualDraw; i++) {
-			const card = sharedDeck.shift();
-			if (card) merc.hand.push(card);
-		}
+		drawCardsInto(this.getMercState().hand, this.getSharedDeck(), count);
 	}
 }

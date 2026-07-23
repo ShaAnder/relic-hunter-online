@@ -3,6 +3,7 @@ import type { Overlay } from "@/core/overlays/Overlay";
 import type { Game } from "@/core/game/Game";
 import { Hand, SKIP_CARD_ID } from "@/ui/Hand";
 import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
+import { chooseCombatAction } from "@relic-hunter/shared";
 import type {
 	CardData,
 	CardColor,
@@ -391,9 +392,9 @@ export class BattleOverlay implements Overlay {
 	// ---------- Resolution ----------
 
 	/** Enemy's choice — random Attack/Defend, no card. Stand-in until real AI lands. */
+	/** Delegates to the shared Balanced-archetype card logic — Attack/Defend, best available card. */
 	private chooseEnemyAction(): CombatChoice {
-		const action: CombatAction = Math.random() < 0.5 ? "attack" : "defend";
-		return { action, stats: this.enemyState.stats };
+		return chooseCombatAction(this.enemyState.hand, this.enemyState.stats);
 	}
 
 	private resolveRound(playerChoice: CombatChoice): void {
@@ -408,6 +409,14 @@ export class BattleOverlay implements Overlay {
 		}
 
 		const enemyChoice = this.chooseEnemyAction();
+
+		if (enemyChoice.card) {
+			const idx = this.enemyState.hand.findIndex(
+				(c) => c.id === enemyChoice.card!.id,
+			);
+			if (idx !== -1) this.enemyState.hand.splice(idx, 1);
+		}
+
 		const result = resolveCombatRound(playerChoice, enemyChoice);
 
 		this.playerState.currentHp -= result.a.damageTaken;
