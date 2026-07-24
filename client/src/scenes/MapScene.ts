@@ -19,8 +19,11 @@ import { MoveController } from "@/systems/MoveController";
 import { TurnManager } from "@/systems/TurnManager";
 import {
 	decideMovementTarget,
-	decideEngagement,
+	pickEngagementTarget,
+	chooseCombatAction,
 	type ChestInfo,
+	type AiArchetype,
+	type AiCombatant,
 } from "@relic-hunter/shared";
 import {
 	Grid,
@@ -29,6 +32,7 @@ import {
 	type ItemData,
 	type ChestPlan,
 	type CardData,
+	type MercenaryState,
 	generateDungeon,
 	findFirstWalkableTile,
 	findExitTile,
@@ -40,7 +44,8 @@ import {
 	computeMovementRange,
 	getPathTo,
 	findNearestReachableTile,
-	type MercenaryState,
+	resolveCombatRound,
+	resolveDefeat,
 } from "@relic-hunter/shared";
 import { Hand } from "@/ui/Hand";
 import { CharacterPanel } from "@/ui/CharacterPanel";
@@ -59,6 +64,7 @@ interface PlacedChest {
 interface EnemyEntity {
 	state: MercenaryState;
 	mercenary: Mercenary;
+	archetype: AiArchetype;
 }
 
 const MAX_GENERAL_SLOTS = 6;
@@ -98,7 +104,7 @@ export class MapScene implements Scene {
 	// mercenary.isAnimating plays for normal moves.
 	private exitCardInProgress = false;
 	private turnsTaken = 0;
-
+	private activeCombatVictimId: string | null = null;
 	// Targeting mode — active while choosing which enemy to attack
 	private targetingActive = false;
 	private targetIndex = -1;
@@ -186,10 +192,16 @@ export class MapScene implements Scene {
 		this.mercenary = new Mercenary(this.mercState.coord);
 		this.mercenaryContainer.addChild(this.mercenary.view);
 
+		this.spawnEnemyHunters();
+
 		const enemyState = this.spawnEnemy();
 		const enemyMercenary = new Mercenary(enemyState.coord, 0xe67e22);
 		this.mercenaryContainer.addChild(enemyMercenary.view);
-		this.enemies.push({ state: enemyState, mercenary: enemyMercenary });
+		this.enemies.push({
+			state: enemyState,
+			mercenary: enemyMercenary,
+			archetype: "balanced",
+		});
 
 		// Item popup rides along as a child of the mercenary's own view,
 		// so it moves with the token automatically — no manual per-frame
@@ -312,6 +324,9 @@ export class MapScene implements Scene {
 			this.game.app.screen.height,
 		);
 		this.mercenary.update(deltaTime);
+		for (const enemy of this.enemies) {
+			enemy.mercenary.update(deltaTime);
+		}
 		this.hand.update(deltaTime);
 
 		// Lock camera to the mercenary's VISUAL position while aiming,
@@ -516,16 +531,35 @@ export class MapScene implements Scene {
 		this.itemPopup.visible = true;
 		this.itemPopupTimer = 90; // ~1.5s at 60fps, matching feedbackTimer's frame-unit convention
 	}
-
 	// ---------- Enemy AI ----------
 
-	/**
-	 * Process every living enemy's turn, one at a time, after the player
-	 * ends theirs. Each draws a card from the shared deck first — same
-	 * mechanic as the player, and the reason every hunter drawing from one
-	 * pool actually depletes it in a real match length instead of only the
-	 * player ever touching it.
-	 */
+	private toCombatant(state: MercenaryState): AiCombatant {
+		return {
+			id: state.id,
+			coord: state.coord,
+			stats: state.stats,
+			currentHp: state.currentHp,
+			items: state.items,
+		};
+	}
+
+	/** Every living combatant except excludeId (player + other AI hunters). */
+	private buildOtherCombatants(excludeId: string): AiCombatant[] {
+		const list: AiCombatant[] = [];
+
+		if (this.mercState.id !== excludeId && this.mercState.currentHp > 0) {
+			list.push(this.toCombatant(this.mercState));
+		}
+
+		for (const e of this.enemies) {
+			if (e.state.id === excludeId) continue;
+			if (e.state.currentHp <= 0) continue;
+			list.push(this.toCombatant(e.state));
+		}
+
+		return list;
+	}
+
 	private async processEnemyTurns(): Promise<void> {
 		this.processingEnemyTurns = true;
 
@@ -541,18 +575,23 @@ export class MapScene implements Scene {
 		this.syncUI();
 	}
 
-	/** Move toward the Balanced target, check for a chest, then decide whether to engage. */
 	private async processOneEnemyTurn(enemy: EnemyEntity): Promise<void> {
+		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
+
+		const self = this.toCombatant(enemy.state);
+		const others = this.buildOtherCombatants(enemy.state.id);
+
 		const chestInfos: ChestInfo[] = this.placedChests.map((c) => ({
 			coord: c.coord,
 			isOpen: c.entity.isOpen,
 		}));
 
 		const target = decideMovementTarget(
-			enemy.state.coord,
-			this.mercState.coord,
-			this.isCarryingTarget(),
+			enemy.archetype,
+			self,
+			others,
 			chestInfos,
+			targetItemId,
 		);
 
 		const range = computeMovementRange(
@@ -571,24 +610,18 @@ export class MapScene implements Scene {
 
 		this.tryEnemyOpenChest(enemy, enemy.state.coord);
 
-		// Chebyshev adjacency, matching the player's own attack-range check
-		// elsewhere — a pre-existing inconsistency with this grid's actual
-		// cardinal-only movement (see EnemyAI.ts's Manhattan distance use),
-		// not fixed here since it's a separate behavior change.
-		const dx = Math.abs(enemy.state.coord.x - this.mercState.coord.x);
-		const dy = Math.abs(enemy.state.coord.y - this.mercState.coord.y);
-		if (Math.max(dx, dy) > 1) return;
-
-		const shouldEngage = decideEngagement(
-			enemy.state.stats,
-			enemy.state.currentHp,
-			this.mercState.stats,
-			this.mercState.items.length,
+		const selfAfter = this.toCombatant(enemy.state);
+		const othersAfter = this.buildOtherCombatants(enemy.state.id);
+		const victim = pickEngagementTarget(
+			enemy.archetype,
+			selfAfter,
+			othersAfter,
 		);
-		if (shouldEngage) await this.aiInitiateCombat(enemy);
+		if (victim) {
+			await this.aiInitiateCombatAgainst(enemy, victim.id);
+		}
 	}
 
-	/** Chest pickup for an enemy — same rules as the player, no floating popup. */
 	private tryEnemyOpenChest(enemy: EnemyEntity, coord: GridCoord): void {
 		const placed = this.placedChests.find(
 			(c) => !c.entity.isOpen && c.coord.x === coord.x && c.coord.y === coord.y,
@@ -605,12 +638,26 @@ export class MapScene implements Scene {
 	}
 
 	/**
-	 * Opens the same BattleOverlay a player-initiated attack uses — the
-	 * player still reacts interactively regardless of who started the
-	 * fight. Returns a promise resolving once the fight ends, so
-	 * processEnemyTurns correctly pauses on this enemy until the player
-	 * actually resolves it before moving to the next one.
+	 * Open combat vs player (interactive) or vs another AI (auto both sides
+	 * through BattleOverlay until true spectator UI lands).
 	 */
+	private aiInitiateCombatAgainst(
+		attacker: EnemyEntity,
+		victimId: string,
+	): Promise<void> {
+		if (victimId === this.mercState.id) {
+			return this.aiInitiateCombat(attacker);
+		}
+
+		const defender = this.enemies.find((e) => e.state.id === victimId);
+		if (!defender || defender.state.currentHp <= 0) {
+			return Promise.resolve();
+		}
+
+		return this.resolveAiVsAi(attacker, defender);
+	}
+
+	/** Player is defender — existing interactive BattleOverlay. */
 	private aiInitiateCombat(enemy: EnemyEntity): Promise<void> {
 		return new Promise((resolve) => {
 			const enemyIndex = this.enemies.indexOf(enemy);
@@ -620,6 +667,7 @@ export class MapScene implements Scene {
 			}
 
 			this.activeCombatEnemyIndex = enemyIndex;
+			this.activeCombatVictimId = this.mercState.id;
 
 			void this.game.overlays.show(
 				new BattleOverlay(this.game, this.mercState, enemy.state, (result) => {
@@ -628,6 +676,135 @@ export class MapScene implements Scene {
 				}),
 			);
 		});
+	}
+
+	/**
+	 * AI vs AI: both sides auto-pick via chooseCombatAction, resolve through
+	 * shared combat, apply HP/loot. Still one combat pipeline — spectator
+	 * BattleOverlay can wrap this same resolve later.
+	 */
+	private async resolveAiVsAi(
+		attacker: EnemyEntity,
+		defender: EnemyEntity,
+	): Promise<void> {
+		this.showFeedback(`⚔ ${attacker.archetype} engages ${defender.archetype}`);
+
+		const aChoice = chooseCombatAction(
+			attacker.state.hand,
+			attacker.state.stats,
+			attacker.archetype,
+		);
+		const bChoice = chooseCombatAction(
+			defender.state.hand,
+			defender.state.stats,
+			defender.archetype,
+		);
+
+		if (aChoice.card) {
+			const idx = attacker.state.hand.findIndex(
+				(c) => c.id === aChoice.card!.id,
+			);
+			if (idx !== -1) attacker.state.hand.splice(idx, 1);
+		}
+		if (bChoice.card) {
+			const idx = defender.state.hand.findIndex(
+				(c) => c.id === bChoice.card!.id,
+			);
+			if (idx !== -1) defender.state.hand.splice(idx, 1);
+		}
+
+		const result = resolveCombatRound(aChoice, bChoice);
+		attacker.state.currentHp -= result.a.damageTaken;
+		defender.state.currentHp -= result.b.damageTaken;
+
+		if (attacker.state.currentHp <= 0) {
+			attacker.mercenary.view.visible = false;
+			const consequence = resolveDefeat(attacker.state.stats, false);
+			attacker.state.currentHp = consequence.hpCeiling;
+			if (consequence.itemStolen && attacker.state.items.length > 0) {
+				const stolen = attacker.state.items.shift();
+				if (stolen) defender.state.items.push(stolen);
+			}
+		}
+
+		if (defender.state.currentHp <= 0) {
+			defender.mercenary.view.visible = false;
+			const consequence = resolveDefeat(defender.state.stats, false);
+			defender.state.currentHp = consequence.hpCeiling;
+			if (consequence.itemStolen && defender.state.items.length > 0) {
+				const stolen = defender.state.items.shift();
+				if (stolen) attacker.state.items.push(stolen);
+			}
+		}
+
+		await this.delay(800);
+	}
+
+	// ---------- Spawn ----------
+
+	private static readonly ENEMY_COLORS = [
+		0xe67e22, 0x9b59b6, 0x1abc9c,
+	] as const;
+
+	private static readonly ENEMY_ARCHETYPES: AiArchetype[] = [
+		"aggressive",
+		"treasure",
+		"balanced",
+	];
+
+	private spawnEnemyHunters(): void {
+		this.enemies = [];
+
+		const used = new Set<string>();
+		used.add(coordKey(this.mercState.coord));
+		const exitTile = findExitTile(this.grid);
+		if (exitTile) used.add(coordKey(exitTile));
+
+		for (let i = 0; i < MapScene.ENEMY_ARCHETYPES.length; i++) {
+			const archetype = MapScene.ENEMY_ARCHETYPES[i];
+			const coord = this.pickEnemySpawnTile(used) ?? {
+				x: this.mercState.coord.x + 2 + i,
+				y: this.mercState.coord.y,
+			};
+			used.add(coordKey(coord));
+
+			const state = createMercenary(`enemy_${archetype}_${i}`, coord, {
+				movement: 3 + (archetype === "aggressive" ? 1 : 0),
+				attack: archetype === "aggressive" ? 4 : 3,
+				defense: archetype === "treasure" ? 3 : 2,
+				maxHp: 15,
+				ap: 3,
+			});
+
+			const mercenary = new Mercenary(
+				coord,
+				MapScene.ENEMY_COLORS[i] ?? 0xe67e22,
+			);
+			this.mercenaryContainer.addChild(mercenary.view);
+			this.enemies.push({ state, mercenary, archetype });
+		}
+	}
+
+	private pickEnemySpawnTile(used: Set<string>): GridCoord | null {
+		const preferred: GridCoord[] = [];
+		const fallback: GridCoord[] = [];
+		const px = this.mercState.coord.x;
+		const py = this.mercState.coord.y;
+
+		for (let x = 0; x < this.grid.width; x++) {
+			for (let y = 0; y < this.grid.height; y++) {
+				const coord = { x, y };
+				if (!this.grid.isWalkable(coord)) continue;
+				if (used.has(coordKey(coord))) continue;
+				fallback.push(coord);
+				const dist = Math.abs(x - px) + Math.abs(y - py);
+				if (dist >= 4) preferred.push(coord);
+			}
+		}
+
+		const pool = preferred.length > 0 ? preferred : fallback;
+		if (pool.length === 0) return null;
+		return pool[Math.floor(Math.random() * pool.length)];
 	}
 
 	/** Win check: standing on Exit with target held, via normal move only. */
@@ -1154,7 +1331,11 @@ export class MapScene implements Scene {
 		const enemyState = this.spawnEnemy();
 		const enemyMercenary = new Mercenary(enemyState.coord, 0xe67e22);
 		this.mercenaryContainer.addChild(enemyMercenary.view);
-		this.enemies.push({ state: enemyState, mercenary: enemyMercenary });
+		this.enemies.push({
+			state: enemyState,
+			mercenary: enemyMercenary,
+			archetype: "balanced",
+		});
 
 		this.game.session.chestPlan = null;
 		this.game.session.chestPlacements = null;
