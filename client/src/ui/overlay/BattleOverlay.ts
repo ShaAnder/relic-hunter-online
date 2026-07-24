@@ -10,6 +10,7 @@ import type {
 	CombatAction,
 	CombatChoice,
 	MercenaryState,
+	AiArchetype,
 } from "@relic-hunter/shared";
 import {
 	resolveCombatRound,
@@ -59,6 +60,7 @@ export interface BattleResult {
  * @param playerState - player's live combat state
  * @param enemyState - enemy's live combat state
  * @param onComplete - fired once the round resolves and the overlay hides
+ * @param enemyArchetype - biases the enemy's Attack/Defend choice, defaults to balanced
  * @author ShaAnder
  */
 export class BattleOverlay implements Overlay {
@@ -95,6 +97,7 @@ export class BattleOverlay implements Overlay {
 		private playerState: MercenaryState,
 		private enemyState: MercenaryState,
 		private onComplete: (result: BattleResult) => void,
+		private enemyArchetype: AiArchetype = "balanced",
 	) {}
 
 	onShow(): void {
@@ -392,9 +395,13 @@ export class BattleOverlay implements Overlay {
 	// ---------- Resolution ----------
 
 	/** Enemy's choice — random Attack/Defend, no card. Stand-in until real AI lands. */
-	/** Delegates to the shared Balanced-archetype card logic — Attack/Defend, best available card. */
+	/** Delegates to the shared archetype-aware combat logic — Attack/Defend bias, best available card. */
 	private chooseEnemyAction(): CombatChoice {
-		return chooseCombatAction(this.enemyState.hand, this.enemyState.stats);
+		return chooseCombatAction(
+			this.enemyState.hand,
+			this.enemyState.stats,
+			this.enemyArchetype,
+		);
 	}
 
 	private resolveRound(playerChoice: CombatChoice): void {

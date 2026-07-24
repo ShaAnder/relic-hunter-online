@@ -21,6 +21,7 @@ import {
 	decideMovementTarget,
 	pickEngagementTarget,
 	chooseCombatAction,
+	isAdjacent,
 	type ChestInfo,
 	type AiArchetype,
 	type AiCombatant,
@@ -104,7 +105,7 @@ export class MapScene implements Scene {
 	// mercenary.isAnimating plays for normal moves.
 	private exitCardInProgress = false;
 	private turnsTaken = 0;
-	private activeCombatVictimId: string | null = null;
+
 	// Targeting mode — active while choosing which enemy to attack
 	private targetingActive = false;
 	private targetIndex = -1;
@@ -193,15 +194,6 @@ export class MapScene implements Scene {
 		this.mercenaryContainer.addChild(this.mercenary.view);
 
 		this.spawnEnemyHunters();
-
-		const enemyState = this.spawnEnemy();
-		const enemyMercenary = new Mercenary(enemyState.coord, 0xe67e22);
-		this.mercenaryContainer.addChild(enemyMercenary.view);
-		this.enemies.push({
-			state: enemyState,
-			mercenary: enemyMercenary,
-			archetype: "balanced",
-		});
 
 		// Item popup rides along as a child of the mercenary's own view,
 		// so it moves with the token automatically — no manual per-frame
@@ -560,6 +552,46 @@ export class MapScene implements Scene {
 		return list;
 	}
 
+	/**
+	 * If `target` is occupied by a living entity, returns the closest
+	 * walkable, unoccupied cardinal neighbor instead — never the occupied
+	 * tile itself. Returns null if every neighbor is blocked/occupied too,
+	 * meaning the caller should skip movement this turn rather than risk
+	 * landing on someone. Unoccupied targets (including chests) pass
+	 * through unchanged.
+	 */
+	private resolveApproachTile(
+		target: GridCoord,
+		occupied: GridCoord[],
+		selfCoord: GridCoord,
+	): GridCoord | null {
+		const isOccupied = occupied.some(
+			(c) => c.x === target.x && c.y === target.y,
+		);
+		if (!isOccupied) return target;
+
+		const neighbors = [
+			{ x: target.x + 1, y: target.y },
+			{ x: target.x - 1, y: target.y },
+			{ x: target.x, y: target.y + 1 },
+			{ x: target.x, y: target.y - 1 },
+		];
+
+		let best: GridCoord | null = null;
+		let bestDist = Infinity;
+		for (const n of neighbors) {
+			if (!this.grid.isWalkable(n)) continue;
+			if (occupied.some((c) => c.x === n.x && c.y === n.y)) continue;
+			const dist = Math.abs(n.x - selfCoord.x) + Math.abs(n.y - selfCoord.y);
+			if (dist < bestDist) {
+				bestDist = dist;
+				best = n;
+			}
+		}
+
+		return best;
+	}
+
 	private async processEnemyTurns(): Promise<void> {
 		this.processingEnemyTurns = true;
 
@@ -594,18 +626,31 @@ export class MapScene implements Scene {
 			targetItemId,
 		);
 
-		const range = computeMovementRange(
-			this.grid,
+		// If the decided target is another living entity's own tile, redirect
+		// to the nearest free tile adjacent to it instead — never path onto
+		// an occupied tile. Chests are untouched (walking onto one is the
+		// intended way to open it, and won't match any occupied coord here).
+		const occupied = others.map((o) => o.coord);
+		const approachTarget = this.resolveApproachTile(
+			target,
+			occupied,
 			enemy.state.coord,
-			enemy.state.stats.movement,
 		);
-		const reachable =
-			findNearestReachableTile(range, target) ?? enemy.state.coord;
-		const path = getPathTo(range, reachable) ?? [];
 
-		if (path.length > 0) {
-			enemy.state.coord = reachable;
-			await enemy.mercenary.moveAlongPath(path);
+		if (approachTarget) {
+			const range = computeMovementRange(
+				this.grid,
+				enemy.state.coord,
+				enemy.state.stats.movement,
+			);
+			const reachable =
+				findNearestReachableTile(range, approachTarget) ?? enemy.state.coord;
+			const path = getPathTo(range, reachable) ?? [];
+
+			if (path.length > 0) {
+				enemy.state.coord = reachable;
+				await enemy.mercenary.moveAlongPath(path);
+			}
 		}
 
 		this.tryEnemyOpenChest(enemy, enemy.state.coord);
@@ -667,7 +712,6 @@ export class MapScene implements Scene {
 			}
 
 			this.activeCombatEnemyIndex = enemyIndex;
-			this.activeCombatVictimId = this.mercState.id;
 
 			void this.game.overlays.show(
 				new BattleOverlay(this.game, this.mercState, enemy.state, (result) => {
@@ -961,9 +1005,7 @@ export class MapScene implements Scene {
 		const enemy = this.enemies[enemyIndex];
 		if (!enemy || enemy.state.currentHp <= 0) return;
 
-		const dx = Math.abs(this.mercState.coord.x - enemy.state.coord.x);
-		const dy = Math.abs(this.mercState.coord.y - enemy.state.coord.y);
-		if (Math.max(dx, dy) > 1) {
+		if (!isAdjacent(this.mercState.coord, enemy.state.coord)) {
 			this.showFeedback("⚔ Target out of range");
 			return;
 		}
@@ -1327,15 +1369,7 @@ export class MapScene implements Scene {
 		this.mercenary.view.addChild(this.targetReticle);
 		this.mercenaryContainer.addChild(this.mercenary.view);
 
-		this.enemies = [];
-		const enemyState = this.spawnEnemy();
-		const enemyMercenary = new Mercenary(enemyState.coord, 0xe67e22);
-		this.mercenaryContainer.addChild(enemyMercenary.view);
-		this.enemies.push({
-			state: enemyState,
-			mercenary: enemyMercenary,
-			archetype: "balanced",
-		});
+		this.spawnEnemyHunters();
 
 		this.game.session.chestPlan = null;
 		this.game.session.chestPlacements = null;
@@ -1400,23 +1434,6 @@ export class MapScene implements Scene {
 			attack: 3,
 			defense: 2,
 			maxHp: 20,
-			ap: 3,
-		});
-	}
-
-	/** Static non-AI enemy near player spawn, for testing combat. See `09-enemy-ai-design-v3.md`. */
-	private spawnEnemy(): MercenaryState {
-		const playerSpawn = this.mercState.coord;
-		const candidate = { x: playerSpawn.x + 3, y: playerSpawn.y };
-		const spawnCoord = this.grid.isWalkable(candidate)
-			? candidate
-			: (findFirstWalkableTile(this.grid) ?? { x: 0, y: 0 });
-
-		return createMercenary("enemy_static_1", spawnCoord, {
-			movement: 3,
-			attack: 3,
-			defense: 2,
-			maxHp: 15,
 			ap: 3,
 		});
 	}

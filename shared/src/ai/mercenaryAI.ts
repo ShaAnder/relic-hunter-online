@@ -92,7 +92,8 @@ function nearestUnopenedChest(
  * @param b - second tile
  */
 export function isAdjacent(a: GridCoord, b: GridCoord): boolean {
-	return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) <= 1;
+	const dist = Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+	return dist >= 1 && dist <= 1;
 }
 
 /**
