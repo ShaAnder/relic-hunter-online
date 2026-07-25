@@ -1,5 +1,5 @@
 import type { CardData, MercenaryState } from "@relic-hunter/shared";
-import { drawCardsInto } from "@relic-hunter/shared";
+import { drawCardsInto, applyRestHeal } from "@relic-hunter/shared";
 
 export type TurnAction = "move" | "action" | "pass";
 
@@ -225,13 +225,9 @@ export class TurnManager {
 	 */
 	spendRest(): boolean {
 		if (!this.canRest) return false;
-
-		this._apRemaining -= 1;
 		this._hasRestedThisTurn = true;
-		this._moveLocked = true;
-		this._movementRemaining = 0;
 		this.drawCards(2);
-		this.onChanged();
+		applyRestHeal(this.getMercState());
 		return true;
 	}
 

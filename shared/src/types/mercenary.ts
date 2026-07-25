@@ -20,19 +20,9 @@ export interface MercenaryState {
 	coord: GridCoord;
 	stats: MercenaryStats;
 	currentHp: number;
-	/**
-	 * General item slots (max 6, per `11-item-inventory-win-design.md`).
-	 * Gear (weapon/armor/accessory) isn't tracked here yet — no gear items
-	 * exist in the pool, those 3 slots are currently UI-only placeholders.
-	 */
+	/** Current effective max HP — normally equals stats.maxHp, but drops to a knockout ceiling after a defeat */
+	hpCeiling: number;
 	items: ItemData[];
-	/**
-	 * Cards currently held, max 5. There is no personal deck field here —
-	 * every mercenary draws from the ONE shared match deck
-	 * (`GameSession.sharedDeck`, built once via `buildSharedDeck()`), not
-	 * from a deck of their own. Only the hand — what's actually in a given
-	 * mercenary's grasp right now — is personal state.
-	 */
 	hand: CardData[];
 }
 
@@ -42,5 +32,13 @@ export function createMercenary(
 	coord: GridCoord,
 	stats: MercenaryStats,
 ): MercenaryState {
-	return { id, coord, stats, currentHp: stats.maxHp, items: [], hand: [] };
+	return {
+		id,
+		coord,
+		stats,
+		currentHp: stats.maxHp,
+		hpCeiling: stats.maxHp,
+		items: [],
+		hand: [],
+	};
 }

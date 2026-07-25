@@ -1,11 +1,14 @@
-import type { GridCoord } from "../game/grid";
+import type { MovementRangeEntry } from "../game/movement";
 import type { MercenaryStats } from "../types/mercenary";
 import type { CardData } from "../game/card";
 import type { ItemData } from "../game/item";
 import type { CombatAction, CombatChoice } from "../game/combat";
+import type { GridCoord } from "../game/grid";
 
 /** Hostile hunter behavior profile — see `09-enemy-ai-design-v3.md`. */
 export type AiArchetype = "aggressive" | "treasure" | "balanced";
+
+export type AiFallbackAction = "rest" | "retreat" | "hold";
 
 /** Minimal unit snapshot the AI reasons over — no Pixi, no scene refs. */
 export interface AiCombatant {
@@ -156,6 +159,45 @@ export function decideMovementTarget(
 			return distChest < distFoe ? chest : foe.coord;
 		}
 	}
+}
+
+/**
+ * What to do on a turn where this hunter didn't fight — either nothing
+ * adjacent was worth engaging, or decideEngagement declined. Retreat takes
+ * priority over resting: standing next to a threat you just chose not to
+ * fight, resting, is worse than moving off first. Rest only applies when
+ * genuinely clear of adjacent threats and HP is low.
+ */
+export function decideFallbackAction(
+	self: AiCombatant,
+	adjacentThreats: AiCombatant[],
+): AiFallbackAction {
+	if (adjacentThreats.length > 0) return "retreat";
+
+	const hpRatio = self.currentHp / Math.max(1, self.stats.maxHp);
+	if (hpRatio < 0.5) return "rest";
+
+	return "hold";
+}
+
+/** Reachable tile farthest (by real path distance) from `threat` — used for retreat movement. */
+export function pickRetreatTile(
+	range: Map<string, MovementRangeEntry>,
+	threat: GridCoord,
+): GridCoord | null {
+	let best: GridCoord | null = null;
+	let bestDist = -Infinity;
+
+	for (const entry of range.values()) {
+		const dist =
+			Math.abs(entry.coord.x - threat.x) + Math.abs(entry.coord.y - threat.y);
+		if (dist > bestDist) {
+			bestDist = dist;
+			best = entry.coord;
+		}
+	}
+
+	return best;
 }
 
 /**

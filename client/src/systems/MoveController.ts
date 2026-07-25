@@ -14,11 +14,9 @@ interface MoveControllerOptions {
 	grid: Grid;
 	camera: Camera;
 	mercenary: Mercenary;
-	/** Returns the mercenary's current logical grid position. */
 	getMercenaryCoord: () => GridCoord;
-	/** Returns the movement budget remaining this turn. */
 	getMovementRemaining: () => number;
-	/** Called when the player commits a move; scene applies it. */
+	getBlockedCoords: () => GridCoord[];
 	onMoveCommitted: (target: GridCoord, path: GridCoord[]) => void;
 }
 
@@ -96,10 +94,13 @@ export class MoveController {
 		// Initial lock so aiming starts centered on the hunter
 		this.options.camera.lockTo(gridToScreen(this.options.getMercenaryCoord()));
 
+		const blocked = new Set(this.options.getBlockedCoords().map(coordKey));
+
 		this.movementRange = computeMovementRange(
 			this.options.grid,
 			this.options.getMercenaryCoord(),
 			this.options.getMovementRemaining(),
+			blocked,
 		);
 
 		this.renderRange();
@@ -134,12 +135,15 @@ export class MoveController {
 	onHover(hovered: GridCoord): void {
 		if (!this.isActive || !this.movementRange) return;
 
+		const blocked = new Set(this.options.getBlockedCoords().map(coordKey));
+
 		const target = this.movementRange.has(coordKey(hovered))
 			? hovered
 			: findNearestReachableTile(
 					this.options.grid,
 					this.movementRange,
 					hovered,
+					blocked,
 				);
 
 		if (!target) {

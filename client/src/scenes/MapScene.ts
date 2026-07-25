@@ -18,9 +18,13 @@ import { BattleOverlay, type BattleResult } from "@/ui/overlay/BattleOverlay";
 import { MoveController } from "@/systems/MoveController";
 import { TurnManager } from "@/systems/TurnManager";
 import {
+	decideEngagement,
 	decideMovementTarget,
 	pickEngagementTarget,
+	decideFallbackAction,
+	pickRetreatTile,
 	isAdjacent,
+	applyRestHeal,
 	type ChestInfo,
 	type AiArchetype,
 	type AiCombatant,
@@ -550,46 +554,6 @@ export class MapScene implements Scene {
 		return list;
 	}
 
-	/**
-	 * If `target` is occupied by a living entity, returns the closest
-	 * walkable, unoccupied cardinal neighbor instead — never the occupied
-	 * tile itself. Returns null if every neighbor is blocked/occupied too,
-	 * meaning the caller should skip movement this turn rather than risk
-	 * landing on someone. Unoccupied targets (including chests) pass
-	 * through unchanged.
-	 */
-	private resolveApproachTile(
-		target: GridCoord,
-		occupied: GridCoord[],
-		selfCoord: GridCoord,
-	): GridCoord | null {
-		const isOccupied = occupied.some(
-			(c) => c.x === target.x && c.y === target.y,
-		);
-		if (!isOccupied) return target;
-
-		const neighbors = [
-			{ x: target.x + 1, y: target.y },
-			{ x: target.x - 1, y: target.y },
-			{ x: target.x, y: target.y + 1 },
-			{ x: target.x, y: target.y - 1 },
-		];
-
-		let best: GridCoord | null = null;
-		let bestDist = Infinity;
-		for (const n of neighbors) {
-			if (!this.grid.isWalkable(n)) continue;
-			if (occupied.some((c) => c.x === n.x && c.y === n.y)) continue;
-			const dist = Math.abs(n.x - selfCoord.x) + Math.abs(n.y - selfCoord.y);
-			if (dist < bestDist) {
-				bestDist = dist;
-				best = n;
-			}
-		}
-
-		return best;
-	}
-
 	private async processEnemyTurns(): Promise<void> {
 		this.processingEnemyTurns = true;
 
@@ -640,25 +604,27 @@ export class MapScene implements Scene {
 			targetItemId,
 		);
 
-		// If the decided target is another living entity's own tile, redirect
-		// to the nearest free tile adjacent to it instead — never path onto
-		// an occupied tile. Chests are untouched (walking onto one is the
-		// intended way to open it, and won't match any occupied coord here).
-		const occupied = others.map((o) => o.coord);
-		const approachTarget = this.resolveApproachTile(
-			target,
-			occupied,
-			enemy.state.coord,
+		// If the movement target is a living combatant we'd decline to fight
+		// anyway, don't approach at all — walking toward someone just to retreat
+		// again next turn is the oscillation bug. Skip straight to the fallback.
+		const targetCombatant = others.find(
+			(o) => o.coord.x === target.x && o.coord.y === target.y,
 		);
+		const wouldDeclineOnArrival =
+			targetCombatant !== undefined &&
+			!decideEngagement(enemy.archetype, self, targetCombatant);
 
-		if (approachTarget) {
+		if (!wouldDeclineOnArrival) {
+			const blocked = new Set(others.map((o) => coordKey(o.coord)));
+
 			const range = computeMovementRange(
 				this.grid,
 				enemy.state.coord,
 				enemy.state.stats.movement,
+				blocked,
 			);
 			const reachable =
-				findNearestReachableTile(this.grid, range, approachTarget) ??
+				findNearestReachableTile(this.grid, range, target, blocked) ??
 				enemy.state.coord;
 			const path = getPathTo(range, reachable) ?? [];
 
@@ -691,6 +657,39 @@ export class MapScene implements Scene {
 					await this.delay(500);
 					this.hideTargetMarker();
 					await this.resolveAiVsAi(enemy, defender);
+				}
+			}
+		} else {
+			const adjacentThreats = othersAfter.filter((o) =>
+				isAdjacent(enemy.state.coord, o.coord),
+			);
+			const fallback = decideFallbackAction(selfAfter, adjacentThreats);
+
+			if (fallback === "rest") {
+				const sharedDeck = (this.game.session.sharedDeck ??= buildSharedDeck());
+				drawCardsInto(enemy.state.hand, sharedDeck, 2);
+				applyRestHeal(enemy.state);
+				this.showFeedback(`💤 ${enemy.archetype} hunter rests`);
+			} else if (fallback === "retreat" && adjacentThreats.length > 0) {
+				const retreatBlocked = new Set(
+					othersAfter.map((o) => coordKey(o.coord)),
+				);
+				const retreatRange = computeMovementRange(
+					this.grid,
+					enemy.state.coord,
+					enemy.state.stats.movement,
+					retreatBlocked,
+				);
+				const retreatTile = pickRetreatTile(
+					retreatRange,
+					adjacentThreats[0].coord,
+				);
+				if (retreatTile) {
+					const retreatPath = getPathTo(retreatRange, retreatTile) ?? [];
+					if (retreatPath.length > 0) {
+						enemy.state.coord = retreatTile;
+						await enemy.mercenary.moveAlongPath(retreatPath);
+					}
 				}
 			}
 		}
@@ -1355,6 +1354,10 @@ export class MapScene implements Scene {
 			mercenary: this.mercenary,
 			getMercenaryCoord: () => this.mercState.coord,
 			getMovementRemaining: () => this.turnManager.movementRemaining,
+			getBlockedCoords: () =>
+				this.enemies
+					.filter((e) => e.state.currentHp > 0)
+					.map((e) => e.state.coord),
 			onMoveCommitted: (target: GridCoord, path: GridCoord[]) =>
 				this.onMoveCommitted(target, path),
 		});

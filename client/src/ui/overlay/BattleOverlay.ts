@@ -544,9 +544,15 @@ export class BattleOverlay implements Overlay {
 				}
 				attackerNeedsTeleport = true;
 			}
-
-			if (this.enemyState.currentHp <= 0) {
-				defenderNeedsTeleport = true;
+			if (this.playerState.currentHp <= 0) {
+				const consequence = resolveDefeat(this.playerState.stats, true);
+				this.playerState.currentHp = consequence.hpCeiling;
+				this.playerState.hpCeiling = consequence.hpCeiling;
+				if (consequence.itemStolen && this.playerState.items.length > 0) {
+					const stolen = this.playerState.items.shift();
+					if (stolen) this.enemyState.items.push(stolen);
+				}
+				attackerNeedsTeleport = true;
 			}
 		}
 
