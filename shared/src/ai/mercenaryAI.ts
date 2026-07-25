@@ -92,8 +92,7 @@ function nearestUnopenedChest(
  * @param b - second tile
  */
 export function isAdjacent(a: GridCoord, b: GridCoord): boolean {
-	const dist = Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
-	return dist >= 1 && dist <= 1;
+	return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) === 1;
 }
 
 /**
@@ -213,9 +212,7 @@ export function pickEngagementTarget(
 	for (const candidate of adjacent) {
 		if (!decideEngagement(archetype, self, candidate)) continue;
 
-		const hpRatio = candidate.currentHp / Math.max(1, candidate.stats.maxHp);
-		const loot = candidate.items.length;
-		const score = loot * 2 + (1 - hpRatio);
+		const score = engagementScore(archetype, self, candidate);
 		if (score > bestScore) {
 			bestScore = score;
 			best = candidate;
@@ -223,6 +220,33 @@ export function pickEngagementTarget(
 	}
 
 	return best;
+}
+
+/** Higher = more attractive fight for this archetype. */
+function engagementScore(
+	archetype: AiArchetype,
+	self: AiCombatant,
+	opponent: AiCombatant,
+): number {
+	const oppHpRatio = opponent.currentHp / Math.max(1, opponent.stats.maxHp);
+	const ownPower = self.stats.attack + self.stats.defense + self.stats.movement;
+	const oppPower =
+		opponent.stats.attack + opponent.stats.defense + opponent.stats.movement;
+	const powerEdge = ownPower / Math.max(1, oppPower);
+	const loot = opponent.items.length;
+
+	switch (archetype) {
+		case "aggressive":
+			// Prefer targets we're most likely to beat
+			return powerEdge * 3 + (1 - oppHpRatio) * 2;
+		case "treasure":
+			// Rare fights: lean loot when the bar already passed
+			return loot * 3 + powerEdge;
+		case "balanced":
+		default:
+			// Opportunist: loot + soft matchup + hurt targets
+			return loot * 2 + powerEdge + (1 - oppHpRatio);
+	}
 }
 
 /** Relative strength for card pick — specials outrank numerics. */

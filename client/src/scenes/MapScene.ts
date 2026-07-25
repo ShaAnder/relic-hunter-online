@@ -114,6 +114,7 @@ export class MapScene implements Scene {
 	private activeCombatEnemyIndex: number | null = null;
 	// Guards End Turn from re-firing while enemies are mid-move/mid-fight
 	private processingEnemyTurns = false;
+	private activeAi: EnemyEntity | null = null;
 
 	// Character panel (top-right)
 	private characterPanel: CharacterPanel;
@@ -204,8 +205,8 @@ export class MapScene implements Scene {
 		});
 		this.itemPopupText.anchor.set(0.5, 1);
 		this.itemPopup.addChild(this.itemPopupIcon, this.itemPopupText);
-		this.itemPopup.visible = false;
-		this.mercenary.view.addChild(this.itemPopup);
+		this.targetReticle.visible = false;
+		this.mercenaryContainer.addChild(this.targetReticle);
 
 		// Targeting reticle rides along on the player token, same as itemPopup
 		this.targetReticle.visible = false;
@@ -323,7 +324,12 @@ export class MapScene implements Scene {
 
 		// Lock camera to the mercenary's VISUAL position while aiming,
 		// animating, selecting a card, targeting, OR mid-Exit-card-sequence.
-		if (
+		if (this.processingEnemyTurns && this.activeAi) {
+			this.camera.lockTo({
+				x: this.activeAi.mercenary.view.x,
+				y: this.activeAi.mercenary.view.y,
+			});
+		} else if (
 			this.moveController.active ||
 			this.mercenary.isAnimating ||
 			this.hand.isSelecting ||
@@ -597,8 +603,18 @@ export class MapScene implements Scene {
 
 		const sharedDeck = (this.game.session.sharedDeck ??= buildSharedDeck());
 
+		/** Beat between AI turns so each one reads as its own turn. */
+		const BETWEEN_AI_MS = 600;
+
+		let isFirst = true;
 		for (const enemy of this.enemies) {
 			if (enemy.state.currentHp <= 0) continue;
+
+			if (!isFirst) {
+				await this.delay(BETWEEN_AI_MS);
+			}
+			isFirst = false;
+
 			drawCardsInto(enemy.state.hand, sharedDeck, 1);
 			await this.processOneEnemyTurn(enemy);
 		}
@@ -608,6 +624,12 @@ export class MapScene implements Scene {
 	}
 
 	private async processOneEnemyTurn(enemy: EnemyEntity): Promise<void> {
+		this.activeAi = enemy;
+		this.camera.centerOn(
+			{ x: enemy.mercenary.view.x, y: enemy.mercenary.view.y },
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
 		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
 
 		const self = this.toCombatant(enemy.state);
@@ -662,9 +684,20 @@ export class MapScene implements Scene {
 			selfAfter,
 			othersAfter,
 		);
+
 		if (victim) {
-			await this.aiInitiateCombatAgainst(enemy, victim.id);
+			if (victim.id === this.mercState.id) {
+				await this.aiInitiateCombat(enemy);
+			} else {
+				const defender = this.enemies.find((e) => e.state.id === victim.id);
+				if (defender && defender.state.currentHp > 0) {
+					await this.resolveAiVsAi(enemy, defender);
+				}
+			}
 		}
+
+		this.activeAi = null;
+		this.camera.unlock();
 	}
 
 	private tryEnemyOpenChest(enemy: EnemyEntity, coord: GridCoord): void {
@@ -682,37 +715,14 @@ export class MapScene implements Scene {
 		}
 	}
 
-	/**
-	 * Open combat vs player (interactive) or vs another AI (auto both sides
-	 * through BattleOverlay until true spectator UI lands).
-	 */
-	private aiInitiateCombatAgainst(
-		attacker: EnemyEntity,
-		victimId: string,
-	): Promise<void> {
-		if (victimId === this.mercState.id) {
-			return this.aiInitiateCombat(attacker);
-		}
-
-		const defender = this.enemies.find((e) => e.state.id === victimId);
-		if (!defender || defender.state.currentHp <= 0) {
-			return Promise.resolve();
-		}
-
-		return this.resolveAiVsAi(attacker, defender);
-	}
-
 	/** Player is defender — existing interactive BattleOverlay. */
-	private aiInitiateCombat(enemy: EnemyEntity): Promise<void> {
-		return new Promise((resolve) => {
-			const enemyIndex = this.enemies.indexOf(enemy);
-			if (enemyIndex === -1) {
-				resolve();
-				return;
-			}
+	private async aiInitiateCombat(enemy: EnemyEntity): Promise<void> {
+		const enemyIndex = this.enemies.indexOf(enemy);
+		if (enemyIndex === -1) return;
 
-			this.activeCombatEnemyIndex = enemyIndex;
+		this.activeCombatEnemyIndex = enemyIndex;
 
+		await new Promise<void>((resolve) => {
 			void this.game.overlays.show(
 				new BattleOverlay(this.game, this.mercState, enemy.state, (result) => {
 					this.onBattleComplete(result);
@@ -945,11 +955,18 @@ export class MapScene implements Scene {
 	/** Point the reticle at a specific enemy index and redraw it. */
 	private setTarget(index: number): void {
 		this.targetIndex = index;
+		const enemy = this.enemies[index];
+		if (!enemy || enemy.state.currentHp <= 0) {
+			this.targetReticle.visible = false;
+			return;
+		}
+
 		this.targetReticle.visible = true;
 		this.targetReticle.clear();
 		this.targetReticle.poly([0, 0, 8, -12, -8, -12]);
 		this.targetReticle.fill(0xffd700);
-		this.targetReticle.y = -50;
+		this.targetReticle.x = enemy.mercenary.view.x;
+		this.targetReticle.y = enemy.mercenary.view.y - 50;
 	}
 
 	/**
@@ -1365,11 +1382,12 @@ export class MapScene implements Scene {
 		this.mercenary = new Mercenary(this.mercState.coord);
 		this.mercenary.view.addChild(this.itemPopup);
 		this.itemPopup.visible = false;
-		this.targetReticle.visible = false;
-		this.mercenary.view.addChild(this.targetReticle);
 		this.mercenaryContainer.addChild(this.mercenary.view);
 
 		this.spawnEnemyHunters();
+
+		this.targetReticle.visible = false;
+		this.mercenaryContainer.addChild(this.targetReticle);
 
 		this.game.session.chestPlan = null;
 		this.game.session.chestPlacements = null;
