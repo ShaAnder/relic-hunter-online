@@ -136,7 +136,11 @@ export class MoveController {
 
 		const target = this.movementRange.has(coordKey(hovered))
 			? hovered
-			: findNearestReachableTile(this.movementRange, hovered);
+			: findNearestReachableTile(
+					this.options.grid,
+					this.movementRange,
+					hovered,
+				);
 
 		if (!target) {
 			this.clearPreview();

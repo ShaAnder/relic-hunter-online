@@ -20,7 +20,6 @@ import { TurnManager } from "@/systems/TurnManager";
 import {
 	decideMovementTarget,
 	pickEngagementTarget,
-	chooseCombatAction,
 	isAdjacent,
 	type ChestInfo,
 	type AiArchetype,
@@ -45,8 +44,6 @@ import {
 	computeMovementRange,
 	getPathTo,
 	findNearestReachableTile,
-	resolveCombatRound,
-	resolveDefeat,
 } from "@relic-hunter/shared";
 import { Hand } from "@/ui/Hand";
 import { CharacterPanel } from "@/ui/CharacterPanel";
@@ -158,9 +155,7 @@ export class MapScene implements Scene {
 	};
 
 	// Stats overlay timing
-	private tileCount = 0;
-	private lastGenerationMs = 0;
-	private lastRenderMs = 0;
+
 	private fpsAccumulator = 0;
 
 	constructor(private game: Game) {
@@ -205,12 +200,9 @@ export class MapScene implements Scene {
 		});
 		this.itemPopupText.anchor.set(0.5, 1);
 		this.itemPopup.addChild(this.itemPopupIcon, this.itemPopupText);
+
 		this.targetReticle.visible = false;
 		this.mercenaryContainer.addChild(this.targetReticle);
-
-		// Targeting reticle rides along on the player token, same as itemPopup
-		this.targetReticle.visible = false;
-		this.mercenary.view.addChild(this.targetReticle);
 
 		this.spawnChests();
 
@@ -666,7 +658,8 @@ export class MapScene implements Scene {
 				enemy.state.stats.movement,
 			);
 			const reachable =
-				findNearestReachableTile(range, approachTarget) ?? enemy.state.coord;
+				findNearestReachableTile(this.grid, range, approachTarget) ??
+				enemy.state.coord;
 			const path = getPathTo(range, reachable) ?? [];
 
 			if (path.length > 0) {
@@ -687,10 +680,16 @@ export class MapScene implements Scene {
 
 		if (victim) {
 			if (victim.id === this.mercState.id) {
+				this.showTargetMarker(this.mercenary);
+				await this.delay(500);
+				this.hideTargetMarker();
 				await this.aiInitiateCombat(enemy);
 			} else {
 				const defender = this.enemies.find((e) => e.state.id === victim.id);
 				if (defender && defender.state.currentHp > 0) {
+					this.showTargetMarker(defender.mercenary);
+					await this.delay(500);
+					this.hideTargetMarker();
 					await this.resolveAiVsAi(enemy, defender);
 				}
 			}
@@ -741,57 +740,27 @@ export class MapScene implements Scene {
 		attacker: EnemyEntity,
 		defender: EnemyEntity,
 	): Promise<void> {
-		this.showFeedback(`⚔ ${attacker.archetype} engages ${defender.archetype}`);
-
-		const aChoice = chooseCombatAction(
-			attacker.state.hand,
-			attacker.state.stats,
-			attacker.archetype,
-		);
-		const bChoice = chooseCombatAction(
-			defender.state.hand,
-			defender.state.stats,
-			defender.archetype,
-		);
-
-		if (aChoice.card) {
-			const idx = attacker.state.hand.findIndex(
-				(c) => c.id === aChoice.card!.id,
+		await new Promise<void>((resolve) => {
+			void this.game.overlays.show(
+				new BattleOverlay(
+					this.game,
+					attacker.state,
+					defender.state,
+					(result) => {
+						if (result.attackerNeedsTeleport) {
+							this.teleportEntity(attacker.state, attacker.mercenary);
+						}
+						if (result.defenderNeedsTeleport) {
+							this.teleportEntity(defender.state, defender.mercenary);
+						}
+						resolve();
+					},
+					defender.archetype,
+					true,
+					attacker.archetype,
+				),
 			);
-			if (idx !== -1) attacker.state.hand.splice(idx, 1);
-		}
-		if (bChoice.card) {
-			const idx = defender.state.hand.findIndex(
-				(c) => c.id === bChoice.card!.id,
-			);
-			if (idx !== -1) defender.state.hand.splice(idx, 1);
-		}
-
-		const result = resolveCombatRound(aChoice, bChoice);
-		attacker.state.currentHp -= result.a.damageTaken;
-		defender.state.currentHp -= result.b.damageTaken;
-
-		if (attacker.state.currentHp <= 0) {
-			attacker.mercenary.view.visible = false;
-			const consequence = resolveDefeat(attacker.state.stats, false);
-			attacker.state.currentHp = consequence.hpCeiling;
-			if (consequence.itemStolen && attacker.state.items.length > 0) {
-				const stolen = attacker.state.items.shift();
-				if (stolen) defender.state.items.push(stolen);
-			}
-		}
-
-		if (defender.state.currentHp <= 0) {
-			defender.mercenary.view.visible = false;
-			const consequence = resolveDefeat(defender.state.stats, false);
-			defender.state.currentHp = consequence.hpCeiling;
-			if (consequence.itemStolen && defender.state.items.length > 0) {
-				const stolen = defender.state.items.shift();
-				if (stolen) attacker.state.items.push(stolen);
-			}
-		}
-
-		await this.delay(800);
+		});
 	}
 
 	// ---------- Spawn ----------
@@ -942,7 +911,7 @@ export class MapScene implements Scene {
 	private exitTargetingMode(): void {
 		this.targetingActive = false;
 		this.targetIndex = -1;
-		this.targetReticle.visible = false;
+		this.hideTargetMarker();
 		this.game.app.canvas.style.cursor = "default";
 	}
 
@@ -952,21 +921,29 @@ export class MapScene implements Scene {
 		return Math.sqrt(dx * dx + dy * dy);
 	}
 
-	/** Point the reticle at a specific enemy index and redraw it. */
-	private setTarget(index: number): void {
-		this.targetIndex = index;
-		const enemy = this.enemies[index];
-		if (!enemy || enemy.state.currentHp <= 0) {
-			this.targetReticle.visible = false;
-			return;
-		}
-
+	/** Points the shared marker at any entity's token — used by the player's manual targeting, and by any AI/monster/boss engagement preview. */
+	private showTargetMarker(target: { view: { x: number; y: number } }): void {
 		this.targetReticle.visible = true;
 		this.targetReticle.clear();
 		this.targetReticle.poly([0, 0, 8, -12, -8, -12]);
 		this.targetReticle.fill(0xffd700);
-		this.targetReticle.x = enemy.mercenary.view.x;
-		this.targetReticle.y = enemy.mercenary.view.y - 50;
+		this.targetReticle.x = target.view.x;
+		this.targetReticle.y = target.view.y - 50;
+	}
+
+	private hideTargetMarker(): void {
+		this.targetReticle.visible = false;
+	}
+
+	/** Point the reticle at a specific enemy index — player's manual targeting entry point. */
+	private setTarget(index: number): void {
+		this.targetIndex = index;
+		const enemy = this.enemies[index];
+		if (!enemy || enemy.state.currentHp <= 0) {
+			this.hideTargetMarker();
+			return;
+		}
+		this.showTargetMarker(enemy.mercenary);
 	}
 
 	/**
@@ -1074,24 +1051,17 @@ export class MapScene implements Scene {
 				: null;
 		this.activeCombatEnemyIndex = null;
 
-		if (result.enemyDefeated && enemy) {
-			enemy.mercenary.view.visible = false;
-			this.showFeedback("💀 Enemy defeated!");
+		if (result.defenderNeedsTeleport && enemy) {
+			this.teleportEntity(enemy.state, enemy.mercenary);
+			this.showFeedback("💨 Enemy hunter fled the fight!");
 		}
 
-		if (result.playerNeedsTeleport) {
-			const destination = this.randomWalkableTile(this.mercState.coord);
-			if (destination) {
-				this.mercState.coord = destination;
-				const screenPos = gridToScreen(destination);
-				this.mercenary.view.x = screenPos.x;
-				this.mercenary.view.y = screenPos.y;
-			}
+		if (result.attackerNeedsTeleport) {
+			this.teleportEntity(this.mercState, this.mercenary);
 		}
 
 		this.syncUI();
 	}
-
 	/** Spend 1 AP on Rest, lock Move, draw up to 2 cards. */
 	private handleRest(): void {
 		if (!this.turnManager.spendRest()) return;
@@ -1333,7 +1303,10 @@ export class MapScene implements Scene {
 	}
 
 	/** Pick a random walkable (Floor) tile on the grid, excluding one coord. */
-	private randomWalkableTile(exclude: GridCoord): GridCoord | null {
+	private randomWalkableTile(
+		exclude: GridCoord,
+		alsoExclude: GridCoord[] = [],
+	): GridCoord | null {
 		const candidates: GridCoord[] = [];
 
 		for (let x = 0; x < this.grid.width; x++) {
@@ -1341,12 +1314,35 @@ export class MapScene implements Scene {
 				const tile = this.grid.getTile({ x, y });
 				if (!tile || tile.type !== TileType.Floor) continue;
 				if (tile.coord.x === exclude.x && tile.coord.y === exclude.y) continue;
+				if (
+					alsoExclude.some((c) => c.x === tile.coord.x && c.y === tile.coord.y)
+				)
+					continue;
 				candidates.push(tile.coord);
 			}
 		}
 
 		if (candidates.length === 0) return null;
 		return candidates[Math.floor(Math.random() * candidates.length)];
+	}
+
+	private teleportEntity(state: MercenaryState, mercenary: Mercenary): void {
+		const occupied: GridCoord[] = [];
+		if (state.id !== this.mercState.id && this.mercState.currentHp > 0) {
+			occupied.push(this.mercState.coord);
+		}
+		for (const e of this.enemies) {
+			if (e.state.id === state.id) continue;
+			if (e.state.currentHp <= 0) continue;
+			occupied.push(e.state.coord);
+		}
+
+		const destination = this.randomWalkableTile(state.coord, occupied);
+		if (!destination) return;
+		state.coord = destination;
+		const screenPos = gridToScreen(destination);
+		mercenary.view.x = screenPos.x;
+		mercenary.view.y = screenPos.y;
 	}
 
 	// ---------- Helpers ----------
@@ -1428,12 +1424,11 @@ export class MapScene implements Scene {
 
 	/** Generate the map grid, timing it for the stats overlay. */
 	private buildMap(): Grid {
-		const start = performance.now();
 		const grid = generateDungeon(this.mapWidth, this.mapHeight, {
 			seed: this.mapSeed,
 			roomCount: this.roomCount,
 		});
-		this.lastGenerationMs = performance.now() - start;
+
 		return grid;
 	}
 
@@ -1458,7 +1453,6 @@ export class MapScene implements Scene {
 
 	/** Draw every tile diamond, timing the build for the stats overlay. */
 	private renderMap(): void {
-		const start = performance.now();
 		this.tilesContainer.removeChildren();
 
 		let count = 0;
@@ -1474,9 +1468,6 @@ export class MapScene implements Scene {
 				this.tilesContainer.addChild(diamond);
 			}
 		}
-
-		this.tileCount = count;
-		this.lastRenderMs = performance.now() - start;
 	}
 
 	/** Build one iso diamond tile graphic in the given color. */
@@ -1506,18 +1497,4 @@ export class MapScene implements Scene {
 			this.game.app.screen.height,
 		);
 	}
-
-	// /** Rebuild the debug/stats overlay text. */
-	// private refreshStatsText(): void {
-	// 	const tm = this.turnManager;
-	// 	this.statsText.text = [
-	// 		`Map: ${this.mapWidth}x${this.mapHeight} Rooms: ${this.roomCount} Seed: ${this.mapSeed}`,
-	// 		`Tiles: ${this.tileCount} Gen: ${this.lastGenerationMs.toFixed(1)}ms Build: ${this.lastRenderMs.toFixed(1)}ms`,
-	// 		`FPS: ${Math.round(this.game.app.ticker.FPS)}`,
-	// 		`AP: ${tm.apRemaining}/${tm.baseAP}  |  Moves: ${tm.movePressesUsed}/2  |  Locked: ${tm.moveLocked ? "YES" : "no"}`,
-	// 		`Attacked: ${tm.hasAttackedThisTurn ? "YES" : "no"}  |  Rested: ${tm.hasRestedThisTurn ? "YES" : "no"}  |  Pool: ${tm.movementRemaining}`,
-	// 		`Turns: ${this.turnsTaken}  |  Items: ${this.mercState.items.length}/${MAX_GENERAL_SLOTS}`,
-	// 		`[Esc] cancel  ·  [E] end turn  ·  [R] regenerate`,
-	// 	].join("\n");
-	// }
 }

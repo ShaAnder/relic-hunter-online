@@ -48,8 +48,8 @@ const PLAYER_TILE = { x: 1, y: MID_ROW };
 const ENEMY_TILE = { x: ARENA_COLS - 2, y: MID_ROW };
 
 export interface BattleResult {
-	enemyDefeated: boolean;
-	playerNeedsTeleport: boolean;
+	attackerNeedsTeleport: boolean;
+	defenderNeedsTeleport: boolean;
 }
 
 /**
@@ -98,6 +98,8 @@ export class BattleOverlay implements Overlay {
 		private enemyState: MercenaryState,
 		private onComplete: (result: BattleResult) => void,
 		private enemyArchetype: AiArchetype = "balanced",
+		private isSpectator: boolean = false,
+		private playerArchetype: AiArchetype = "balanced",
 	) {}
 
 	onShow(): void {
@@ -117,10 +119,39 @@ export class BattleOverlay implements Overlay {
 		this.layout(width, height);
 	}
 
+	archetypeLabel(archetype: AiArchetype): string {
+		const names: Record<AiArchetype, string> = {
+			aggressive: "Aggressive Hunter",
+			treasure: "Treasure Hunter",
+			balanced: "Balanced Hunter",
+		};
+		return names[archetype];
+	}
+
+	private async runSpectatorFight(): Promise<void> {
+		const playerChoice = chooseCombatAction(
+			this.playerState.hand,
+			this.playerState.stats,
+			this.playerArchetype,
+		);
+		const enemyChoice = chooseCombatAction(
+			this.enemyState.hand,
+			this.enemyState.stats,
+			this.enemyArchetype,
+		);
+
+		this.playerIndicator.text = ACTION_LABELS[playerChoice.action];
+		this.enemyIndicator.text = ACTION_LABELS[enemyChoice.action];
+
+		await new Promise((resolve) => setTimeout(resolve, 700));
+
+		this.resolveRound(playerChoice, enemyChoice);
+	}
+
 	// ---------- UI construction ----------
 
 	private buildUI(): void {
-		this.backdrop.eventMode = "static"; // blocks clicks to MapScene underneath
+		this.backdrop.eventMode = "static";
 		this.view.addChild(this.backdrop);
 		this.view.addChild(this.arena);
 
@@ -128,12 +159,14 @@ export class BattleOverlay implements Overlay {
 		this.buildCombatantTokens();
 		this.buildCornerPanels();
 		this.buildEnemyIndicator();
-		this.buildActionSelector();
 
-		// Added last so it renders above the arena/panels — real Hand
-		// component, own bottom-center anchor, same as the overworld
-		this.view.addChild(this.playerHand.view);
-		this.playerHand.syncFromHand(this.playerState.hand);
+		if (this.isSpectator) {
+			this.buildPlayerIndicator();
+		} else {
+			this.buildActionSelector();
+			this.view.addChild(this.playerHand.view);
+			this.playerHand.syncFromHand(this.playerState.hand);
+		}
 
 		this.roundText = new Text({
 			text: "",
@@ -144,6 +177,24 @@ export class BattleOverlay implements Overlay {
 		this.arena.addChild(this.roundText);
 
 		this.syncHpDisplay();
+
+		if (this.isSpectator) {
+			void this.runSpectatorFight();
+		}
+	}
+
+	private playerIndicator!: Text;
+
+	private buildPlayerIndicator(): void {
+		const pos = this.arenaGridToScreen(PLAYER_TILE.x, PLAYER_TILE.y);
+		this.playerIndicator = new Text({
+			text: "?",
+			style: { fill: 0xffffff, fontSize: 24, fontWeight: "bold" },
+		});
+		this.playerIndicator.anchor.set(0.5);
+		this.playerIndicator.x = pos.x;
+		this.playerIndicator.y = pos.y - 70;
+		this.arena.addChild(this.playerIndicator);
 	}
 
 	/** Iso projection for an arena grid coord, centered so the whole grid sits around (0,0). */
@@ -203,19 +254,26 @@ export class BattleOverlay implements Overlay {
 
 	/** Bottom-left/right stat panels: name, Mv/At/Df row, HP number + bar. */
 	private buildCornerPanels(): void {
+		const leftLabel = this.isSpectator
+			? this.archetypeLabel(this.playerArchetype)
+			: "You";
+		const rightLabel = this.archetypeLabel(this.enemyArchetype);
+
 		this.buildOnePanel(
 			this.playerPanel,
 			this.playerHpBar,
-			"You",
+			leftLabel,
 			this.playerState,
 			0x4a9eff,
+			true,
 		);
 		this.buildOnePanel(
 			this.enemyPanel,
 			this.enemyHpBar,
-			"Enemy",
+			rightLabel,
 			this.enemyState,
 			0xe67e22,
+			false,
 		);
 		this.view.addChild(this.playerPanel);
 		this.view.addChild(this.enemyPanel);
@@ -227,6 +285,7 @@ export class BattleOverlay implements Overlay {
 		label: string,
 		state: MercenaryState,
 		accent: number,
+		isPlayerSlot: boolean,
 	): void {
 		const bg = new Graphics();
 		bg.roundRect(0, 0, 190, 100, 8);
@@ -257,7 +316,7 @@ export class BattleOverlay implements Overlay {
 		hpText.x = 10;
 		hpText.y = 54;
 		panel.addChild(hpText);
-		if (label === "You") this.playerHpText = hpText;
+		if (isPlayerSlot) this.playerHpText = hpText;
 		else this.enemyHpText = hpText;
 
 		hpBar.x = 10;
@@ -404,7 +463,10 @@ export class BattleOverlay implements Overlay {
 		);
 	}
 
-	private resolveRound(playerChoice: CombatChoice): void {
+	private resolveRound(
+		playerChoice: CombatChoice,
+		precomputedEnemyChoice?: CombatChoice,
+	): void {
 		if (this.resolved) return;
 		this.resolved = true;
 
@@ -415,7 +477,7 @@ export class BattleOverlay implements Overlay {
 			if (idx !== -1) this.playerState.hand.splice(idx, 1);
 		}
 
-		const enemyChoice = this.chooseEnemyAction();
+		const enemyChoice = precomputedEnemyChoice ?? this.chooseEnemyAction();
 
 		if (enemyChoice.card) {
 			const idx = this.enemyState.hand.findIndex(
@@ -462,17 +524,16 @@ export class BattleOverlay implements Overlay {
 
 	/** Apply round consequences to shared state, then report what MapScene needs to do. */
 	private finishBattle(playerChoice: CombatChoice): void {
-		let playerNeedsTeleport = false;
-		let enemyDefeated = false;
+		let attackerNeedsTeleport = false;
+		let defenderNeedsTeleport = false;
 
 		if (playerChoice.action === "surrender") {
 			const consequence = resolveSurrender(this.playerState.items.length);
 			if (consequence.itemGiven) {
-				// Takes the first item for now — a real item-picker is a follow-up
 				const given = this.playerState.items.shift();
 				if (given) this.enemyState.items.push(given);
 			}
-			playerNeedsTeleport = true;
+			attackerNeedsTeleport = true;
 		} else {
 			if (this.playerState.currentHp <= 0) {
 				const consequence = resolveDefeat(this.playerState.stats, true);
@@ -481,17 +542,17 @@ export class BattleOverlay implements Overlay {
 					const stolen = this.playerState.items.shift();
 					if (stolen) this.enemyState.items.push(stolen);
 				}
-				playerNeedsTeleport = true;
+				attackerNeedsTeleport = true;
 			}
 
 			if (this.enemyState.currentHp <= 0) {
-				enemyDefeated = true;
+				defenderNeedsTeleport = true;
 			}
 		}
 
 		setTimeout(() => {
 			this.game.overlays.hide();
-			this.onComplete({ enemyDefeated, playerNeedsTeleport });
+			this.onComplete({ attackerNeedsTeleport, defenderNeedsTeleport });
 		}, RESULT_LINGER_MS);
 	}
 
