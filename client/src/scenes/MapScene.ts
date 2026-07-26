@@ -382,10 +382,10 @@ export class MapScene implements Scene {
 		this.buttonBar.layout(cy);
 		this.bagButton.layout(
 			this.characterPanel.view.x,
-			cy,
 			this.characterPanel.panelWidth,
+			h,
 		);
-		this.inventoryPanel.layoutAbove(cy);
+		this.inventoryPanel.layoutRightOfBag(this.bagButton.view.x, h);
 		this.deckTracker.layout(w);
 		this.hand.resize(w, h);
 	}

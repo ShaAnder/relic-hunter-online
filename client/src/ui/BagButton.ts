@@ -32,9 +32,14 @@ export class BagButton {
 		this.view.cursor = "pointer";
 	}
 
-	layout(characterX: number, characterY: number, characterW: number): void {
-		this.view.x = characterX + characterW + 8;
-		this.view.y = characterY + 34; // vertically centred on the panel
+	/** Right of the profile panel, bottom-aligned to the same margin the panel itself uses. */
+	layout(
+		characterX: number,
+		characterWidth: number,
+		screenHeight: number,
+	): void {
+		this.view.x = characterX + characterWidth + 8;
+		this.view.y = screenHeight - 16 - 40;
 	}
 
 	hitTest(screenX: number, screenY: number): boolean {

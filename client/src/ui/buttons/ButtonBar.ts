@@ -1,4 +1,4 @@
-import { Container } from "pixi.js";
+import { Container, Graphics } from "pixi.js";
 import { MoveButton } from "./MoveButton";
 import { ActionButton } from "./ActionButton";
 import { EndTurnButton } from "./EndTurnButton";
@@ -14,7 +14,7 @@ export type ButtonAction =
 
 const BTN_W = 100;
 const BTN_H = 40;
-const GAP = 10;
+const GAP = 20;
 
 /**
  * Horizontal Move / Action / End Turn row sitting above CharacterPanel.
@@ -28,6 +28,7 @@ export class ButtonBar {
 	private moveButton: MoveButton;
 	private actionButton: ActionButton;
 	private endTurnButton: EndTurnButton;
+	private bg = new Graphics();
 
 	constructor() {
 		this.moveButton = new MoveButton();
@@ -40,15 +41,22 @@ export class ButtonBar {
 		this.actionButton.view.x = BTN_W + GAP;
 		this.endTurnButton.view.x = (BTN_W + GAP) * 2;
 
+		const totalWidth = BTN_W * 3 + GAP * 2;
+		this.bg.roundRect(-8, -8, totalWidth + 16, BTN_H + 16, 10);
+		this.bg.fill({ color: 0x1a1a1a, alpha: 0.9 });
+		this.bg.stroke({ width: 1, color: 0x555555 });
+		this.view.addChild(this.bg);
+
 		this.view.addChild(this.moveButton.view);
 		this.view.addChild(this.actionButton.view);
 		this.view.addChild(this.endTurnButton.view);
 	}
 
 	/** Place the row directly above the CharacterPanel. */
+
 	layout(characterY: number): void {
 		this.view.x = 16;
-		this.view.y = characterY - BTN_H - 10;
+		this.view.y = characterY - BTN_H - 2;
 	}
 
 	sync(tm: TurnManager): void {
