@@ -17,6 +17,7 @@ import {
 	resolveDefeat,
 	resolveSurrender,
 } from "@relic-hunter/shared";
+import { PlayZone } from "@/ui/PlayZone";
 
 /** Card colors each action allows. */
 const ALLOWED_COLORS: Record<CombatAction, CardColor[]> = {
@@ -98,6 +99,7 @@ export class BattleOverlay implements Overlay {
 	// Real Hand component — same fan/caret/selection logic as the overworld,
 	// synced from whichever role the local human actually controls.
 	private localHand!: Hand;
+	private localPlayZone = new PlayZone();
 	private pendingAction: CombatAction | null = null;
 
 	private resolved = false;
@@ -116,7 +118,7 @@ export class BattleOverlay implements Overlay {
 		private localHumanRole: LocalHumanRole = "attacker",
 		private mirrored: boolean = false,
 	) {
-		this.localHand = new Hand(this.game.app.stage, (card) =>
+		this.localHand = new Hand(this.game.app.stage, this.localPlayZone, (card) =>
 			this.onHandCardConfirmed(card),
 		);
 	}
@@ -132,6 +134,7 @@ export class BattleOverlay implements Overlay {
 
 	update(deltaTime: number): void {
 		this.localHand.update(deltaTime);
+		this.localPlayZone.update(deltaTime);
 	}
 
 	onResize(width: number, height: number): void {
@@ -169,6 +172,10 @@ export class BattleOverlay implements Overlay {
 		this.buildArenaGrid();
 		this.buildCombatantTokens();
 		this.buildCornerPanels();
+
+		this.arena.addChild(this.localPlayZone.view);
+		this.localPlayZone.view.x = 0;
+		this.localPlayZone.view.y = 0;
 
 		if (this.localHumanRole === "none") {
 			this.buildAttackerIndicator();

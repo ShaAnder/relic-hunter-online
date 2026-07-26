@@ -9,7 +9,7 @@ const CONTENT_X = 14 + PORTRAIT_SIZE + 16;
 const HP_BAR_WIDTH = PANEL_W - CONTENT_X - 14;
 
 /**
- * Bottom-left hunter readout: silhouette, HP bar, Mov/Atk/Def/AP.
+ * Top-left hunter readout: silhouette, HP bar, Mov/Atk/Def/AP.
  * Live values come from MercenaryState + TurnManager AP.
  * @param none - constructed empty, fed via setFromState
  * @author ShaAnder
@@ -109,10 +109,10 @@ export class CharacterPanel {
 		this.hpBarFill.fill(hpRatio > 0.3 ? 0x2ecc71 : 0xe74c3c);
 	}
 
-	/* Bottom-left coner with small margin */
-	layout(_screenWidth: number, screenHeight: number): void {
+	/** Top-left corner, small margin. */
+	layout(_screenWidth: number, _screenHeight: number): void {
 		this.view.x = 16;
-		this.view.y = screenHeight - PANEL_H - 16;
+		this.view.y = 16;
 	}
 
 	get panelWidth(): number {
@@ -125,13 +125,10 @@ export class CharacterPanel {
 
 	private drawPortrait(color: number): void {
 		this.portrait.clear();
-		// Head
 		this.portrait.circle(PORTRAIT_SIZE / 2, 14, 12);
 		this.portrait.fill(color);
-		// Body
 		this.portrait.ellipse(PORTRAIT_SIZE / 2, 42, 18, 16);
 		this.portrait.fill(color);
-		// Frame
 		this.portrait.roundRect(0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE, 6);
 		this.portrait.stroke({ width: 2, color: 0x555555 });
 	}

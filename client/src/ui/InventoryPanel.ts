@@ -11,7 +11,7 @@ const PANEL_H = PAD * 2 + 18 + SLOT + GAP + SLOT + 50;
 
 /**
  * 9-slot icon inventory — 3 gear silhouettes + 6 general item orbs.
- * Hidden by default; toggled via the bag icon next to CharacterPanel.
+ * Hidden by default; toggled via the bag icon below CharacterPanel.
  * @author ShaAnder
  */
 export class InventoryPanel {
@@ -60,7 +60,6 @@ export class InventoryPanel {
 			slot.stroke({ width: 1, color: 0x666666 });
 			slot.x = PAD + (i % 3) * (SLOT + GAP);
 			slot.y = 26 + SLOT + GAP + Math.floor(i / 3) * (SLOT + GAP);
-			// second row of 3 for the remaining 3 slots
 			if (i >= 3) {
 				slot.y = 26 + SLOT + GAP + (SLOT + GAP);
 				slot.x = PAD + (i - 3) * (SLOT + GAP);
@@ -93,7 +92,6 @@ export class InventoryPanel {
 			slot.fill(0x222222);
 			slot.stroke({ width: 1, color: item ? 0xd4af37 : 0x666666 });
 			if (item) {
-				// Simple orb placeholder for any item
 				slot.circle(SLOT / 2, SLOT / 2, 12);
 				slot.fill(
 					item.id.includes("crown") || item.id.includes("ember")
@@ -119,10 +117,14 @@ export class InventoryPanel {
 		return this.open;
 	}
 
-	/** Right of the bag icon, bottom-aligned to the same margin CharacterPanel uses. */
-	layoutRightOfBag(bagX: number, screenHeight: number): void {
-		this.view.x = bagX + 40 + 8;
-		this.view.y = screenHeight - 16 - PANEL_H;
+	/** Right of CharacterPanel directly, top-aligned to it. */
+	layoutRightOfCharacter(
+		characterX: number,
+		characterY: number,
+		characterWidth: number,
+	): void {
+		this.view.x = characterX + characterWidth + 8;
+		this.view.y = characterY;
 	}
 
 	get panelWidth(): number {

@@ -56,8 +56,9 @@ import { CharacterPanel } from "@/ui/CharacterPanel";
 import { MAP_SIZE_DIMENSIONS } from "@/core/game/GameSession";
 import { MatchResultScene } from "./MatchResultScene";
 import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
-import { BagButton } from "@/ui/BagButton";
+import { BagButton } from "@/ui/buttons/BagButton";
 import { RadialActionWheel } from "@/ui/buttons/RadialActionWheel";
+import { PlayZone } from "@/ui/PlayZone";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -142,6 +143,7 @@ export class MapScene implements Scene {
 
 	// Cards
 	private hand: Hand;
+	private playZone: PlayZone;
 
 	// Map config — dimensions and seed come from GameSession (set by
 	// LoadingScene) rather than being hardcoded, so mission map size
@@ -227,8 +229,12 @@ export class MapScene implements Scene {
 		this.bagButton = new BagButton();
 		this.view.addChild(this.bagButton.view);
 
+		// setup playzone;
+		this.playZone = new PlayZone();
+		this.view.addChild(this.playZone.view);
+
 		// add hand
-		this.hand = new Hand(this.game.app.stage, (card: CardData) =>
+		this.hand = new Hand(this.game.app.stage, this.playZone, (card: CardData) =>
 			this.handleCardConfirmed(card),
 		);
 		this.view.addChild(this.hand.view);
@@ -388,7 +394,11 @@ export class MapScene implements Scene {
 			this.characterPanel.panelWidth,
 			h,
 		);
-		this.inventoryPanel.layoutRightOfBag(this.bagButton.view.x, h);
+		this.inventoryPanel.layoutRightOfCharacter(
+			this.characterPanel.view.x,
+			this.characterPanel.view.y,
+			this.characterPanel.panelWidth,
+		);
 		this.deckTracker.layout(w);
 		this.hand.resize(this.characterPanel.view.x, this.characterPanel.view.y);
 	}

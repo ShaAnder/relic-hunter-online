@@ -2,7 +2,7 @@ import { Container, Graphics } from "pixi.js";
 
 /**
  * Clickable bag icon that toggles InventoryPanel.
- * Sits immediately right of CharacterPanel.
+ * Sits directly below CharacterPanel.
  * @author ShaAnder
  */
 export class BagButton {
@@ -32,14 +32,14 @@ export class BagButton {
 		this.view.cursor = "pointer";
 	}
 
-	/** Right of the profile panel, bottom-aligned to the same margin the panel itself uses. */
+	/** Directly below the profile panel, left-aligned to it, small gap. */
 	layout(
 		characterX: number,
-		characterWidth: number,
-		screenHeight: number,
+		characterY: number,
+		characterHeight: number,
 	): void {
-		this.view.x = characterX + characterWidth + 8;
-		this.view.y = screenHeight - 16 - 40;
+		this.view.x = characterX;
+		this.view.y = characterY + characterHeight + 8;
 	}
 
 	hitTest(screenX: number, screenY: number): boolean {
