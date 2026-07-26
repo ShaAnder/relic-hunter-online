@@ -10,7 +10,7 @@ import {
 } from "@/math/isoGridMath";
 import { Mercenary } from "@/entities/Mercenary";
 import { Chest } from "@/entities/Chest";
-import { ButtonBar } from "@/ui/buttons/ButtonBar";
+
 import { DeckTracker } from "@/ui/DeckTracker";
 import { InventoryPanel } from "@/ui/InventoryPanel";
 import { PauseOverlay } from "@/ui/overlay/PauseOverlay";
@@ -57,6 +57,7 @@ import { MAP_SIZE_DIMENSIONS } from "@/core/game/GameSession";
 import { MatchResultScene } from "./MatchResultScene";
 import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
 import { BagButton } from "@/ui/BagButton";
+import { RadialActionWheel } from "@/ui/buttons/RadialActionWheel";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -127,7 +128,7 @@ export class MapScene implements Scene {
 
 	// UI
 	private bagButton: BagButton;
-	private buttonBar: ButtonBar;
+	private buttonBar: RadialActionWheel;
 	private statsText: Text;
 	private feedbackText: Text;
 	private feedbackTimer = 0;
@@ -227,7 +228,9 @@ export class MapScene implements Scene {
 		this.view.addChild(this.bagButton.view);
 
 		// add hand
-		this.hand = new Hand((card: CardData) => this.handleCardConfirmed(card));
+		this.hand = new Hand(this.game.app.stage, (card: CardData) =>
+			this.handleCardConfirmed(card),
+		);
 		this.view.addChild(this.hand.view);
 
 		// TurnManager fires syncUI on every state change. The shared deck
@@ -249,7 +252,7 @@ export class MapScene implements Scene {
 		this.moveController = this.createMoveController();
 		this.boardContainer.addChild(this.moveController.view);
 
-		this.buttonBar = new ButtonBar();
+		this.buttonBar = new RadialActionWheel();
 		this.view.addChild(this.buttonBar.view);
 
 		this.statsText = new Text({
@@ -310,6 +313,7 @@ export class MapScene implements Scene {
 			enemy.mercenary.update(deltaTime);
 		}
 		this.hand.update(deltaTime);
+		this.buttonBar.update(deltaTime);
 
 		// Lock camera to the mercenary's VISUAL position while aiming,
 		// animating, selecting a card, targeting, OR mid-Exit-card-sequence.
@@ -377,9 +381,8 @@ export class MapScene implements Scene {
 		const h = this.game.app.screen.height;
 
 		this.characterPanel.layout(w, h);
-		const cy = this.characterPanel.view.y;
 
-		this.buttonBar.layout(cy);
+		this.buttonBar.layout(this.game.app.screen.width, h);
 		this.bagButton.layout(
 			this.characterPanel.view.x,
 			this.characterPanel.panelWidth,
@@ -387,7 +390,7 @@ export class MapScene implements Scene {
 		);
 		this.inventoryPanel.layoutRightOfBag(this.bagButton.view.x, h);
 		this.deckTracker.layout(w);
-		this.hand.resize(w, h);
+		this.hand.resize(this.characterPanel.view.x, this.characterPanel.view.y);
 	}
 
 	// ---------- Move ----------

@@ -4,12 +4,10 @@ import type { ItemData } from "@relic-hunter/shared";
 const GENERAL_SLOTS = 6;
 const GEAR_SLOTS = 3;
 const SLOT = 40;
-const BTN_W = 100;
-const BTN_H = 40;
-const GAP = 8;
+const GAP = 10;
 const PAD = 10;
 const PANEL_W = PAD * 2 + GEAR_SLOTS * SLOT + (GEAR_SLOTS - 1) * GAP;
-const PANEL_H = PAD * 2 + 18 + SLOT + GAP + SLOT + 8;
+const PANEL_H = PAD * 2 + 18 + SLOT + GAP + SLOT + 50;
 
 /**
  * 9-slot icon inventory — 3 gear silhouettes + 6 general item orbs.
@@ -27,8 +25,8 @@ export class InventoryPanel {
 	private open = false;
 
 	constructor() {
-		this.bg.roundRect(0, -6, BTN_W * 3 + GAP * 2, BTN_H + 12, 10);
-		this.bg.fill({ color: 0x1a1a1a, alpha: 0.9 });
+		this.bg.roundRect(0, 0, PANEL_W, PANEL_H, 8);
+		this.bg.fill({ color: 0x1a1a1a, alpha: 0.92 });
 		this.bg.stroke({ width: 1, color: 0x555555 });
 		this.view.addChild(this.bg);
 

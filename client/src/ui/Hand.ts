@@ -1,61 +1,84 @@
 import { Container, Graphics, Text } from "pixi.js";
+import type { FederatedPointerEvent } from "pixi.js";
 import type { CardData } from "@relic-hunter/shared";
 import { Card, CARD_WIDTH, CARD_HEIGHT } from "@/entities/Card";
 
-const CARET_PULSE_SPEED = 0.006; // radians per ms — tuned for a gentle bob
-const CARET_PULSE_RANGE = 6; // pixels
+const CARET_PULSE_SPEED = 0.006;
+const CARET_PULSE_RANGE = 6;
 const OVERLAY_DURATION_MS = 1500;
 
-// Fan layout tuning — a wider spread or step reads as more "spread open"
-const FAN_ROTATION_STEP = 0.09; // radians per card offset from center (~5°)
-const FAN_X_STEP = 55; // horizontal spacing — tighter than CARD_WIDTH so cards overlap
-const FAN_Y_RISE = 8; // px each card drops per offset unit from center
-const HIGHLIGHT_LIFT = 34; // px the selected card slides outward along its fan angle
-const CARET_GAP = 18; // px between a card's top edge and the caret
+// Straight-line layout — no more fan rotation/arc
+const HAND_CARD_SCALE = 0.65; // smaller cards, Card's own base size is untouched elsewhere
+const CARD_GAP = 14;
+const HIGHLIGHT_LIFT = 22; // px the selected/hovered card rises straight up
+const CARET_GAP = 14;
 
-// Hide/reveal tuning — see class docblock for the container split this drives
-const REVEALED_Y_OFFSET = -40; // matches the hand's old fixed resting position
-const HIDDEN_Y_OFFSET = CARD_HEIGHT - 25; // ~85px down; leaves a ~25px peek above the screen edge
-const HOVER_EASE_MS = 180; // how quickly the fan responds to a hover state change
+const REVEALED_Y_OFFSET = -30;
+const HIDDEN_Y_OFFSET = CARD_HEIGHT * HAND_CARD_SCALE - 20;
+const HOVER_EASE_MS = 180;
 
-/** Reserved id for the permanent "No Card" option — never removed on play, never part of mercState.hand. */
+// Play zone — sits above the hand tray, the drag target
+const ZONE_WIDTH = 140;
+const ZONE_HEIGHT = 100;
+const ZONE_Y_OFFSET = -140; // above the resting card row
+
+// Slam sequence timing (Inscryption-style: grow, slam down, vanish)
+const SLAM_GROW_MS = 120;
+const SLAM_IMPACT_MS = 90;
+const SLAM_VANISH_MS = 140;
+const SLAM_SCALE = 1.35;
+
 export const SKIP_CARD_ID = "__skip__";
 
 /**
- * Renders the player's hand as a fanned arc (rotation + arc offset per
- * card, pivoting from the bottom-center of each card) and owns
- * card-selection during the Move action.
+ * Renders the hand as a straight line of small cards above CharacterPanel.
+ * Confirming a card (by click, Enter, or dragging it into the play zone)
+ * always plays the same grow-slam-vanish sequence before firing the real
+ * confirm callback — dragging isn't the only way in, it's just the most
+ * satisfying one.
+ * @param stage - a screen-spanning interactive container, needed so a
+ *   drag can keep tracking the pointer once it moves off the card itself
+ * @param onCardConfirmed - fired once a card's slam sequence finishes
+ * @author ShaAnder
  */
 export class Hand {
 	readonly view = new Container();
 	private fanContainer = new Container();
+	private playZone = new Graphics();
+	private playZoneLabel: Text;
 
 	private cards: Card[] = [];
 	private onCardConfirmed?: (card: CardData) => void;
 
-	// Selection state
 	private selecting = false;
 	private highlightedIndex = -1;
 	private selectableFilter: (data: CardData) => boolean = () => true;
 
-	// Hover/reveal state
 	private isHovered = false;
 	private forceRevealed = false;
 
-	// Caret indicator
 	private caret = new Container();
 	private caretElapsedMs = 0;
 
-	// Transient "card played" detail overlay
 	private overlayBg = new Graphics();
 	private overlayText: Text;
 	private overlayTimerMs = 0;
 
-	constructor(onCardConfirmed?: (card: CardData) => void) {
+	// Drag state
+	private draggingCard: Card | null = null;
+	private dragOffset = { x: 0, y: 0 };
+	private resolved = false; // guards against double-confirm mid-slam
+
+	constructor(
+		private stage: Container,
+		onCardConfirmed?: (card: CardData) => void,
+	) {
 		this.onCardConfirmed = onCardConfirmed;
 
 		this.view.addChild(this.fanContainer);
 		this.fanContainer.y = HIDDEN_Y_OFFSET;
+
+		this.buildPlayZone();
 
 		this.buildCaret();
 		this.caret.visible = false;
@@ -70,35 +93,24 @@ export class Hand {
 		this.fanContainer.addChild(this.overlayText);
 		this.overlayBg.visible = false;
 		this.overlayText.visible = false;
+
+		this.playZoneLabel = new Text({
+			text: "Play",
+			style: { fill: 0xffffff, fontSize: 12, fontWeight: "bold" },
+		});
+		this.playZoneLabel.anchor.set(0.5);
+		this.playZoneLabel.alpha = 0.5;
 	}
 
-	/** Whether card selection is currently active (a Move is in progress). */
 	get isSelecting(): boolean {
 		return this.selecting;
 	}
 
-	/**
-	 * Tell the fan whether the mouse is currently over its reveal zone.
-	 * MapScene calls this from its own mousemove handler based on raw
-	 * screen-Y position — deliberately not driven by Pixi pointerover/out
-	 * on a dedicated hit zone, since an interactive card sitting on top of
-	 * such a zone would steal those events and cause the fan to flicker
-	 * hidden while the player is still trying to use it.
-	 */
 	setHovered(isHovered: boolean): void {
 		this.isHovered = isHovered;
 	}
 
-	/**
-	 * Rebuild the displayed cards to match the mercenary's actual hand,
-	 * plus the permanent skip slot appended at the end. This is the only
-	 * way cards get onto the fan — there is no local test/starter hand.
-	 *
-	 * Full teardown-and-rebuild rather than diffing against the previous
-	 * cards — simpler and correct. Hand changes are infrequent (once or
-	 * twice a turn), not a hot per-frame path, so the rebuild cost is
-	 * irrelevant.
-	 */
+	/** Rebuild the displayed cards from the real hand — full teardown/rebuild, infrequent, not a hot path. */
 	syncFromHand(hand: CardData[]): void {
 		this.clear();
 
@@ -106,32 +118,25 @@ export class Hand {
 
 		displayCards.forEach((data) => {
 			const card = new Card(data);
-			// Resting state: full color, just not clickable until Move is pressed
 			card.setInteractive(false);
 			card.setGreyedOut(false);
-			// Bottom-center pivot so rotation reads as fanning from a grip
-			// point below the hand, not spinning around each card's corner
 			card.view.pivot.set(CARD_WIDTH / 2, CARD_HEIGHT);
+			card.view.scale.set(HAND_CARD_SCALE);
 			this.cards.push(card);
 			this.fanContainer.addChild(card.view);
 
-			// Bound to the Card object, not a captured index — see file JSDoc
 			card.view.on("pointerover", () => this.handlePointerOverCard(card));
-			card.view.on("pointerdown", () => this.handlePointerDownCard(card));
+			card.view.on("pointerdown", (e) => this.handlePointerDownCard(card, e));
 		});
 
 		this.layoutCards();
 	}
 
-	/**
-	 * Begin card selection: grey out cards that fail the filter, highlight
-	 * the first selectable card, show the caret, and force the fan
-	 * revealed regardless of hover state. Call when Move is pressed.
-	 */
 	enterSelectionMode(filter: (data: CardData) => boolean): void {
 		this.selectableFilter = filter;
 		this.selecting = true;
 		this.forceRevealed = true;
+		this.resolved = false;
 
 		this.cards.forEach((card) => {
 			const selectable = this.isSelectable(card);
@@ -145,10 +150,6 @@ export class Hand {
 		this.applyHighlight();
 	}
 
-	/**
-	 * Exit selection mode: hide the caret, return every card to full-color
-	 * rest, and let the fan go back to hover-driven hide/reveal.
-	 */
 	exitSelectionMode(): void {
 		this.selecting = false;
 		this.forceRevealed = false;
@@ -162,7 +163,6 @@ export class Hand {
 		this.layoutCards();
 	}
 
-	/** Move the caret to the next selectable card in the given direction. */
 	moveCaret(direction: 1 | -1): void {
 		if (!this.selecting || this.cards.length === 0) return;
 
@@ -179,25 +179,17 @@ export class Hand {
 		}
 	}
 
-	/** Play whichever card the caret currently rests on. */
+	/** Keyboard confirm — plays the same slam sequence as a successful drag. */
 	confirmHighlighted(): void {
 		if (!this.selecting) return;
 		if (this.highlightedIndex < 0 || this.highlightedIndex >= this.cards.length)
 			return;
-		this.playCard(this.cards[this.highlightedIndex]);
+		void this.playCard(this.cards[this.highlightedIndex]);
 	}
 
-	/**
-	 * Per-frame tick: eases the fan toward its hidden/revealed target,
-	 * pulses the caret, and counts down the played-card overlay.
-	 */
 	update(deltaTime: number): void {
 		const deltaMs = (deltaTime / 60) * 1000;
 
-		// Ease-toward-target: moves a fraction of the remaining distance
-		// each frame rather than a fixed-duration tween. Simple, framerate-
-		// tolerant enough for a UI polish detail, no separate timer state
-		// needed the way Camera.panTo's cinematic pan requires.
 		const targetY =
 			this.isHovered || this.forceRevealed
 				? REVEALED_Y_OFFSET
@@ -221,10 +213,11 @@ export class Hand {
 		}
 	}
 
-	/** Anchor the hand at the fixed bottom-center of the screen. Never animated directly. */
-	resize(width: number, height: number): void {
-		this.view.x = width / 2;
-		this.view.y = height;
+	/** Positioned above CharacterPanel — the hand no longer anchors to the full screen's bottom-center. */
+	resize(characterX: number, characterY: number): void {
+		this.view.x = characterX + 160; // roughly centered above the panel's width
+		this.view.y = characterY - 20;
+		this.playZone.x = this.playZoneLabel.x = 0;
 		this.layoutCards();
 	}
 
@@ -234,46 +227,121 @@ export class Hand {
 
 	// ---------- private ----------
 
-	/** Whether a card can be selected right now: skip is always eligible. */
 	private isSelectable(card: Card): boolean {
 		const data = card.getData();
 		if (data.id === SKIP_CARD_ID) return true;
 		return this.selectableFilter(data);
 	}
 
-	/** Mouse hover moves the caret while selection is active. Resolves the
-	 *  card's CURRENT index via indexOf — never trust a captured index. */
 	private handlePointerOverCard(card: Card): void {
-		if (!this.selecting || !this.isSelectable(card)) return;
+		if (!this.selecting || !this.isSelectable(card) || this.draggingCard)
+			return;
 		const index = this.cards.indexOf(card);
 		if (index === -1) return;
 		this.highlightedIndex = index;
 		this.applyHighlight();
 	}
 
-	/** Clicking a selectable card plays it immediately. */
-	private handlePointerDownCard(card: Card): void {
+	/** Click starts a drag attempt — a plain click-and-release with no real movement still counts as a confirm. */
+	private handlePointerDownCard(
+		card: Card,
+		event: FederatedPointerEvent,
+	): void {
 		if (!this.selecting || !this.isSelectable(card)) return;
-		this.playCard(card);
+
+		this.draggingCard = card;
+		const localPos = this.fanContainer.toLocal(event.global);
+		this.dragOffset = {
+			x: card.view.x - localPos.x,
+			y: card.view.y - localPos.y,
+		};
+
+		this.stage.on("pointermove", this.onDragMove);
+		this.stage.on("pointerup", this.onDragEnd);
+		this.stage.on("pointerupoutside", this.onDragEnd);
+	}
+
+	private onDragMove = (event: FederatedPointerEvent): void => {
+		if (!this.draggingCard) return;
+		const localPos = this.fanContainer.toLocal(event.global);
+		this.draggingCard.view.x = localPos.x + this.dragOffset.x;
+		this.draggingCard.view.y = localPos.y + this.dragOffset.y;
+	};
+
+	private onDragEnd = (): void => {
+		if (!this.draggingCard) return;
+		this.stage.off("pointermove", this.onDragMove);
+		this.stage.off("pointerup", this.onDragEnd);
+		this.stage.off("pointerupoutside", this.onDragEnd);
+
+		const card = this.draggingCard;
+		this.draggingCard = null;
+
+		if (this.isOverPlayZone(card)) {
+			void this.playCard(card);
+		} else {
+			this.layoutCards(); // snaps back to its resting slot
+		}
+	};
+
+	private isOverPlayZone(card: Card): boolean {
+		const dx = card.view.x - this.playZone.x;
+		const dy = card.view.y - (this.playZone.y + ZONE_HEIGHT / 2);
+		return Math.abs(dx) < ZONE_WIDTH / 2 && Math.abs(dy) < ZONE_HEIGHT / 2;
 	}
 
 	/**
-	 * Play the given card: show the brief detail overlay, fire the effect
-	 * callback, and exit selection mode. Does NOT remove the card from
-	 * `this.cards` directly — the caller (MapScene) removes it from the
-	 * real mercState.hand as the first thing it does with the callback,
-	 * which triggers a syncFromHand() rebuild through the normal
-	 * onChanged → syncUI cascade. That rebuild is what actually makes the
-	 * played card disappear from the fan.
+	 * Grow → slam into the zone center → vanish, then fire the real
+	 * confirm callback. Same sequence regardless of how it was triggered
+	 * (drag, click, or Enter) — the visual payoff isn't drag-exclusive.
+	 * First-pass timing (~350ms total), not tuned against a real render.
 	 */
-	private playCard(card: Card): void {
+	private async playCard(card: Card): Promise<void> {
+		if (this.resolved) return;
+		this.resolved = true;
+
 		const data = card.getData();
 		this.showPlayedOverlay(data);
+		card.setInteractive(false);
+
+		const startX = card.view.x;
+		const startY = card.view.y;
+		const zoneCenterX = this.playZone.x;
+		const zoneCenterY = this.playZone.y + ZONE_HEIGHT / 2;
+
+		await this.tween(SLAM_GROW_MS, (t) => {
+			const s = HAND_CARD_SCALE + (SLAM_SCALE - HAND_CARD_SCALE) * t;
+			card.view.scale.set(s);
+		});
+
+		await this.tween(SLAM_IMPACT_MS, (t) => {
+			card.view.x = startX + (zoneCenterX - startX) * t;
+			card.view.y = startY + (zoneCenterY - startY) * t;
+		});
+
+		await this.tween(SLAM_VANISH_MS, (t) => {
+			card.view.alpha = 1 - t;
+			card.view.scale.set(SLAM_SCALE * (1 - t * 0.3));
+		});
+
 		this.onCardConfirmed?.(data);
 		this.exitSelectionMode();
 	}
 
-	/** Apply the highlighted visual to exactly the current caret index. */
+	/** Simple linear tween helper — runs a callback from t=0 to t=1 over `ms`, resolving when done. */
+	private tween(ms: number, onStep: (t: number) => void): Promise<void> {
+		return new Promise((resolve) => {
+			const start = performance.now();
+			const frame = (): void => {
+				const t = Math.min(1, (performance.now() - start) / ms);
+				onStep(t);
+				if (t < 1) requestAnimationFrame(frame);
+				else resolve();
+			};
+			requestAnimationFrame(frame);
+		});
+	}
+
 	private applyHighlight(): void {
 		this.cards.forEach((card, i) =>
 			card.setHighlighted(i === this.highlightedIndex),
@@ -281,45 +349,30 @@ export class Hand {
 		this.layoutCards();
 	}
 
-	/**
-	 * Recompute every card's fan position, rotation, and pivot — all
-	 * relative to fanContainer's own origin, unaffected by whatever the
-	 * hide/reveal animation is doing to fanContainer.y itself.
-	 *
-	 * The highlighted card doesn't lift straight up or straighten its
-	 * rotation — it slides outward along the direction its own fan angle
-	 * already points, using sin/cos of baseRotation as the direction
-	 * vector, and keeps that same rotation the whole time.
-	 */
+	/** Straight-line layout — no rotation, no arc. Highlighted card lifts straight up. */
 	private layoutCards(): void {
 		const n = this.cards.length;
 		if (n === 0) return;
 
-		const center = (n - 1) / 2;
+		const cardWidth = CARD_WIDTH * HAND_CARD_SCALE;
+		const step = cardWidth + CARD_GAP;
+		const totalWidth = step * (n - 1);
+		const startX = -totalWidth / 2;
 
 		this.cards.forEach((card, i) => {
-			const offset = i - center;
+			if (card === this.draggingCard) return; // dragged card ignores layout until dropped
+
 			const isHighlighted = i === this.highlightedIndex && this.selecting;
-
-			const baseRotation = offset * FAN_ROTATION_STEP;
-			const baseX = offset * FAN_X_STEP;
-			const baseY = Math.abs(offset) * FAN_Y_RISE;
-
-			card.view.rotation = baseRotation;
-
-			if (isHighlighted) {
-				card.view.x = baseX + HIGHLIGHT_LIFT * Math.sin(baseRotation);
-				card.view.y = baseY - HIGHLIGHT_LIFT * Math.cos(baseRotation);
-			} else {
-				card.view.x = baseX;
-				card.view.y = baseY;
-			}
+			card.view.rotation = 0;
+			card.view.x = startX + i * step;
+			card.view.y = isHighlighted ? -HIGHLIGHT_LIFT : 0;
+			if (!this.resolved) card.view.scale.set(HAND_CARD_SCALE);
+			card.view.alpha = 1;
 		});
 
 		if (this.selecting) this.positionCaret(0);
 	}
 
-	/** Build the small pulsing downward-pointing triangle caret. */
 	private buildCaret(): void {
 		const g = new Graphics();
 		g.poly([0, 0, 16, 0, 8, 12]);
@@ -327,23 +380,41 @@ export class Hand {
 		this.caret.addChild(g);
 	}
 
-	/**
-	 * Move the caret above the currently highlighted card's actual position,
-	 * accounting for its fan lift. `bob` is the pulse offset applied on top.
-	 */
 	private positionCaret(bob: number): void {
 		if (this.highlightedIndex < 0 || this.highlightedIndex >= this.cards.length)
 			return;
 		const card = this.cards[this.highlightedIndex];
-		this.caret.x = card.view.x - 8; // card.view.x is already horizontal center (bottom-center pivot)
-		this.caret.y = card.view.y - CARD_HEIGHT - CARET_GAP + bob;
+		this.caret.x = card.view.x;
+		this.caret.y =
+			card.view.y -
+			CARD_HEIGHT * HAND_CARD_SCALE -
+			CARET_GAP -
+			HIGHLIGHT_LIFT +
+			bob;
 	}
 
-	/** Show the brief "card played" detail overlay above the hand. */
+	/** The drop target — sits above the resting card row. */
+	private buildPlayZone(): void {
+		this.playZone.roundRect(
+			-ZONE_WIDTH / 2,
+			ZONE_Y_OFFSET,
+			ZONE_WIDTH,
+			ZONE_HEIGHT,
+			10,
+		);
+		this.playZone.fill({ color: 0xffffff, alpha: 0.06 });
+		this.playZone.stroke({ width: 2, color: 0xffd700, alpha: 0.5 });
+		this.fanContainer.addChild(this.playZone);
+		this.playZone.y = ZONE_Y_OFFSET;
+
+		this.playZoneLabel.y = ZONE_Y_OFFSET + ZONE_HEIGHT / 2;
+		this.fanContainer.addChild(this.playZoneLabel);
+	}
+
 	private showPlayedOverlay(data: CardData): void {
 		this.overlayText.text = `${data.name}\n${data.description}`;
 		this.overlayText.x = 0;
-		this.overlayText.y = -CARD_HEIGHT - 70;
+		this.overlayText.y = ZONE_Y_OFFSET - 60;
 		this.overlayText.visible = true;
 
 		const bounds = this.overlayText.getLocalBounds();
@@ -361,7 +432,6 @@ export class Hand {
 		this.overlayTimerMs = OVERLAY_DURATION_MS;
 	}
 
-	/** Data for the permanent "No Card" slot — always last, never spent, never real hand data. */
 	private buildSkipCardData(): CardData {
 		return {
 			id: SKIP_CARD_ID,
@@ -373,9 +443,9 @@ export class Hand {
 		};
 	}
 
-	/** Remove all current cards from view and state. */
 	private clear(): void {
 		this.cards.forEach((c) => c.view.removeFromParent());
 		this.cards = [];
+		this.resolved = false;
 	}
 }

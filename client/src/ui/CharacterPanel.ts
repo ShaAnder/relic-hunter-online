@@ -3,9 +3,10 @@ import type { CharacterData } from "@relic-hunter/shared";
 import type { MercenaryState } from "@relic-hunter/shared";
 
 const PANEL_W = 316;
-const PANEL_H = 180;
+const PANEL_H = 110;
 const PORTRAIT_SIZE = 74;
-const HP_BAR_WIDTH = 190;
+const CONTENT_X = 14 + PORTRAIT_SIZE + 16;
+const HP_BAR_WIDTH = PANEL_W - CONTENT_X - 14;
 
 /**
  * Bottom-left hunter readout: silhouette, HP bar, Mov/Atk/Def/AP.
@@ -31,49 +32,46 @@ export class CharacterPanel {
 		this.bg.stroke({ width: 1, color: 0x555555 });
 		this.view.addChild(this.bg);
 
-		// Portrait — centered horizontally, near the top
+		// Portrait — left side, vertically centered in the panel
 		this.drawPortrait(0x4a9eff);
-		this.portrait.x = (PANEL_W - PORTRAIT_SIZE) / 2;
-		this.portrait.y = 10;
+		this.portrait.x = 14;
+		this.portrait.y = (PANEL_H - PORTRAIT_SIZE) / 2;
 		this.view.addChild(this.portrait);
 
-		// Info block: name → HP bar → stats, all children of ONE container so
-		// centering it once (below) centers all three at once, on the same
-		// center line as the portrait above.
+		// Info block sits BESIDE the portrait, left-aligned starting at CONTENT_X —
+		// not centered under it, this is a side-by-side layout, not a stack.
 		this.nameText = new Text({
 			text: "",
 			style: { fill: 0xffffff, fontSize: 14, fontWeight: "bold" },
 		});
-		this.nameText.anchor.set(0.5, 0);
-		this.nameText.y = 0;
+		this.nameText.x = CONTENT_X;
+		this.nameText.y = this.portrait.y;
 		this.infoBlock.addChild(this.nameText);
 
-		this.hpBarBg.roundRect(-HP_BAR_WIDTH / 2, 0, HP_BAR_WIDTH, 14, 3);
+		this.hpBarBg.roundRect(CONTENT_X, 0, HP_BAR_WIDTH, 14, 3);
+		this.hpBarBg.y = this.portrait.y + 22;
 		this.hpBarBg.fill(0x333333);
-		this.hpBarBg.y = 22;
 		this.infoBlock.addChild(this.hpBarBg);
 
-		this.hpBarFill.y = 22;
+		this.hpBarFill.y = this.portrait.y + 22;
 		this.infoBlock.addChild(this.hpBarFill);
 
 		this.hpText = new Text({
 			text: "",
 			style: { fill: 0xffffff, fontSize: 10, fontWeight: "bold" },
 		});
-		this.hpText.anchor.set(0.5, 0);
-		this.hpText.y = 38;
+		this.hpText.x = CONTENT_X;
+		this.hpText.y = this.portrait.y + 38;
 		this.infoBlock.addChild(this.hpText);
 
 		this.statsText = new Text({
 			text: "",
 			style: { fill: 0x88ccff, fontSize: 13 },
 		});
-		this.statsText.anchor.set(0.5, 0);
-		this.statsText.y = 54;
+		this.statsText.x = CONTENT_X;
+		this.statsText.y = this.portrait.y + 54;
 		this.infoBlock.addChild(this.statsText);
 
-		this.infoBlock.x = PANEL_W / 2;
-		this.infoBlock.y = 10 + PORTRAIT_SIZE + 8;
 		this.view.addChild(this.infoBlock);
 	}
 
@@ -107,13 +105,7 @@ export class CharacterPanel {
 		this.hpText.text = `${state.currentHp}/${maxHp}`;
 
 		this.hpBarFill.clear();
-		this.hpBarFill.roundRect(
-			-HP_BAR_WIDTH / 2,
-			0,
-			HP_BAR_WIDTH * hpRatio,
-			14,
-			3,
-		);
+		this.hpBarFill.roundRect(CONTENT_X, 0, HP_BAR_WIDTH * hpRatio, 14, 3);
 		this.hpBarFill.fill(hpRatio > 0.3 ? 0x2ecc71 : 0xe74c3c);
 	}
 

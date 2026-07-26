@@ -97,7 +97,7 @@ export class BattleOverlay implements Overlay {
 
 	// Real Hand component — same fan/caret/selection logic as the overworld,
 	// synced from whichever role the local human actually controls.
-	private localHand: Hand = new Hand((card) => this.onHandCardConfirmed(card));
+	private localHand!: Hand;
 	private pendingAction: CombatAction | null = null;
 
 	private resolved = false;
@@ -115,7 +115,11 @@ export class BattleOverlay implements Overlay {
 		private defenderArchetype: AiArchetype = "balanced",
 		private localHumanRole: LocalHumanRole = "attacker",
 		private mirrored: boolean = false,
-	) {}
+	) {
+		this.localHand = new Hand(this.game.app.stage, (card) =>
+			this.onHandCardConfirmed(card),
+		);
+	}
 
 	onShow(): void {
 		this.buildUI();
