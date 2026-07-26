@@ -2,78 +2,157 @@ import { Container, Graphics, Text } from "pixi.js";
 import type { ItemData } from "@relic-hunter/shared";
 
 const GENERAL_SLOTS = 6;
-const PANEL_WIDTH = 260;
-const PANEL_HEIGHT = 190;
+const GEAR_SLOTS = 3;
+const SLOT = 40;
+const GAP = 6;
+const PAD = 10;
+const PANEL_W = PAD * 2 + GEAR_SLOTS * SLOT + (GEAR_SLOTS - 1) * GAP;
+const PANEL_H = PAD * 2 + 18 + SLOT + GAP + SLOT + 8; // title + gear row + general row
 
 /**
- * Compact inventory readout — 3 gear placeholders (Weapon/Armor/Accessory,
- * always empty per `11-item-inventory-win-design.md`, no gear items exist
- * in the pool yet) + the 6 general slots that chests actually fill.
- *
- * General slots always render as a fixed 6 rows (item name or "—" for an
- * empty slot) rather than a variable-length list — this keeps the panel's
- * height constant as items are found, instead of it growing/shrinking and
- * shoving whatever's below it around.
- *
- * Positioned directly beneath CharacterPanel — same width, same x, stacked
- * via a fixed vertical offset in layout().
+ * 9-slot icon inventory — 3 gear silhouettes + 6 general item orbs.
+ * Hidden by default; toggled via the bag icon next to CharacterPanel.
+ * @author ShaAnder
  */
 export class InventoryPanel {
 	readonly view = new Container();
 
 	private bg = new Graphics();
 	private titleText: Text;
-	private gearText: Text;
-	private slotTexts: Text[] = [];
+	private gearSlots: Graphics[] = [];
+	private generalSlots: Graphics[] = [];
+	private generalLabels: Text[] = [];
+	private open = false;
 
 	constructor() {
-		this.bg.roundRect(0, 0, PANEL_WIDTH, PANEL_HEIGHT, 8);
-		this.bg.fill({ color: 0x1a1a1a, alpha: 0.85 });
+		this.bg.roundRect(0, 0, PANEL_W, PANEL_H, 8);
+		this.bg.fill({ color: 0x1a1a1a, alpha: 0.92 });
 		this.bg.stroke({ width: 1, color: 0x555555 });
 		this.view.addChild(this.bg);
 
 		this.titleText = new Text({
 			text: "Inventory",
-			style: { fill: 0xffffff, fontSize: 14, fontWeight: "bold" },
+			style: { fill: 0xffffff, fontSize: 13, fontWeight: "bold" },
 		});
-		this.titleText.x = 12;
-		this.titleText.y = 10;
+		this.titleText.x = PAD;
+		this.titleText.y = 6;
 		this.view.addChild(this.titleText);
 
-		this.gearText = new Text({
-			text: "Weapon: —   Armor: —   Acc: —",
-			style: { fill: 0x777777, fontSize: 11 },
-		});
-		this.gearText.x = 12;
-		this.gearText.y = 32;
-		this.view.addChild(this.gearText);
-
-		for (let i = 0; i < GENERAL_SLOTS; i++) {
-			const slotText = new Text({
-				text: "—",
-				style: { fill: 0xcccccc, fontSize: 13 },
-			});
-			slotText.x = 12;
-			slotText.y = 56 + i * 20;
-			this.slotTexts.push(slotText);
-			this.view.addChild(slotText);
+		// Gear row (Weapon / Armor / Accessory silhouettes)
+		const gearIcons = [this.drawSword, this.drawShield, this.drawRing];
+		for (let i = 0; i < GEAR_SLOTS; i++) {
+			const slot = new Graphics();
+			slot.roundRect(0, 0, SLOT, SLOT, 4);
+			slot.fill(0x222222);
+			slot.stroke({ width: 1, color: 0x666666 });
+			gearIcons[i].call(this, slot);
+			slot.x = PAD + i * (SLOT + GAP);
+			slot.y = 26;
+			this.gearSlots.push(slot);
+			this.view.addChild(slot);
 		}
+
+		// General row (6 empty orbs)
+		for (let i = 0; i < GENERAL_SLOTS; i++) {
+			const slot = new Graphics();
+			slot.roundRect(0, 0, SLOT, SLOT, 4);
+			slot.fill(0x222222);
+			slot.stroke({ width: 1, color: 0x666666 });
+			slot.x = PAD + (i % 3) * (SLOT + GAP);
+			slot.y = 26 + SLOT + GAP + Math.floor(i / 3) * (SLOT + GAP);
+			// second row of 3 for the remaining 3 slots
+			if (i >= 3) {
+				slot.y = 26 + SLOT + GAP + (SLOT + GAP);
+				slot.x = PAD + (i - 3) * (SLOT + GAP);
+			}
+			this.generalSlots.push(slot);
+			this.view.addChild(slot);
+
+			const label = new Text({
+				text: "",
+				style: { fill: 0xffffff, fontSize: 9 },
+			});
+			label.anchor.set(0.5);
+			label.x = slot.x + SLOT / 2;
+			label.y = slot.y + SLOT / 2;
+			this.generalLabels.push(label);
+			this.view.addChild(label);
+		}
+
+		this.view.visible = false;
 	}
 
-	/** Refresh the 6 general slots from the mercenary's current items. */
+	/** Refresh the 6 general slots from live items. Gear stays empty placeholders. */
 	sync(items: ItemData[]): void {
 		this.titleText.text = `Inventory (${items.length}/${GENERAL_SLOTS})`;
-
 		for (let i = 0; i < GENERAL_SLOTS; i++) {
 			const item = items[i];
-			this.slotTexts[i].text = item ? `• ${item.name}` : "—";
-			this.slotTexts[i].style.fill = item ? 0xffffff : 0x555555;
+			const slot = this.generalSlots[i];
+			slot.clear();
+			slot.roundRect(0, 0, SLOT, SLOT, 4);
+			slot.fill(0x222222);
+			slot.stroke({ width: 1, color: item ? 0xd4af37 : 0x666666 });
+			if (item) {
+				// Simple orb placeholder for any item
+				slot.circle(SLOT / 2, SLOT / 2, 12);
+				slot.fill(
+					item.id.includes("crown") || item.id.includes("ember")
+						? 0xffd700
+						: 0x88ccff,
+				);
+			}
+			this.generalLabels[i].text = item ? item.name.slice(0, 4) : "";
 		}
 	}
 
-	/** Position directly beneath CharacterPanel (260×110 at y=12). */
-	layout(screenWidth: number): void {
-		this.view.x = screenWidth - 280;
-		this.view.y = 12 + 110 + 8; // CharacterPanel's y + height + a small gap
+	toggle(): void {
+		this.open = !this.open;
+		this.view.visible = this.open;
+	}
+
+	close(): void {
+		this.open = false;
+		this.view.visible = false;
+	}
+
+	get isOpen(): boolean {
+		return this.open;
+	}
+
+	/** Sit just above the CharacterPanel (same left margin). */
+	layoutAbove(characterY: number): void {
+		this.view.x = 16;
+		this.view.y = characterY - PANEL_H - 8;
+	}
+
+	get panelWidth(): number {
+		return PANEL_W;
+	}
+
+	// --- gear silhouettes ---
+	private drawSword(g: Graphics): void {
+		g.moveTo(20, 8);
+		g.lineTo(20, 32);
+		g.stroke({ width: 3, color: 0x888888 });
+		g.moveTo(14, 14);
+		g.lineTo(26, 14);
+		g.stroke({ width: 2, color: 0x888888 });
+	}
+
+	private drawShield(g: Graphics): void {
+		g.moveTo(12, 10);
+		g.lineTo(28, 10);
+		g.lineTo(28, 22);
+		g.lineTo(20, 32);
+		g.lineTo(12, 22);
+		g.closePath();
+		g.stroke({ width: 2, color: 0x888888 });
+	}
+
+	private drawRing(g: Graphics): void {
+		g.circle(20, 20, 10);
+		g.stroke({ width: 2, color: 0x888888 });
+		g.circle(20, 20, 5);
+		g.stroke({ width: 1, color: 0x888888 });
 	}
 }

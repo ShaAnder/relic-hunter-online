@@ -56,6 +56,7 @@ import { CharacterPanel } from "@/ui/CharacterPanel";
 import { MAP_SIZE_DIMENSIONS } from "@/core/game/GameSession";
 import { MatchResultScene } from "./MatchResultScene";
 import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
+import { BagButton } from "@/ui/BagButton";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -125,6 +126,7 @@ export class MapScene implements Scene {
 	private inventoryPanel: InventoryPanel;
 
 	// UI
+	private bagButton: BagButton;
 	private buttonBar: ButtonBar;
 	private statsText: Text;
 	private feedbackText: Text;
@@ -221,6 +223,9 @@ export class MapScene implements Scene {
 		this.deckTracker = new DeckTracker();
 		this.view.addChild(this.deckTracker.view);
 
+		this.bagButton = new BagButton();
+		this.view.addChild(this.bagButton.view);
+
 		// add hand
 		this.hand = new Hand((card: CardData) => this.handleCardConfirmed(card));
 		this.view.addChild(this.hand.view);
@@ -268,22 +273,8 @@ export class MapScene implements Scene {
 		this.renderMap();
 		this.centerCameraOnActiveHunter();
 		this.camera.attach(this.game.app.canvas);
-		this.buttonBar.resize(
-			this.game.app.screen.width,
-			this.game.app.screen.height,
-		);
 		this.hand.syncFromHand(this.mercState.hand);
-		this.hand.resize(this.game.app.screen.width, this.game.app.screen.height);
-
-		this.characterPanel.setCharacter(this.game.session.character);
-		this.characterPanel.layout(this.game.app.screen.width);
-		this.inventoryPanel.layout(this.game.app.screen.width);
-		this.inventoryPanel.sync(this.mercState.items);
-		this.deckTracker.layout(
-			this.game.app.screen.width - 280,
-			12 + 110 + 8 + 190 + 8,
-		);
-
+		this.layoutHud();
 		this.syncUI();
 
 		window.addEventListener("keydown", this.handleKeyDown);
@@ -364,12 +355,8 @@ export class MapScene implements Scene {
 	}
 
 	/** Reposition UI on window resize. */
-	onResize(_width: number, height: number): void {
-		this.buttonBar.resize(this.game.app.screen.width, height);
-		this.hand.resize(this.game.app.screen.width, this.game.app.screen.height);
-		this.characterPanel.layout(_width);
-		this.inventoryPanel.layout(_width);
-		this.deckTracker.layout(_width - 280, 12 + 110 + 8 + 190 + 8);
+	onResize(_width: number): void {
+		this.layoutHud();
 	}
 
 	// ---------- Camera ----------
@@ -381,6 +368,26 @@ export class MapScene implements Scene {
 			this.game.app.screen.width,
 			this.game.app.screen.height,
 		);
+	}
+
+	// ---------- Hud ----------
+
+	private layoutHud(): void {
+		const w = this.game.app.screen.width;
+		const h = this.game.app.screen.height;
+
+		this.characterPanel.layout(w, h);
+		const cy = this.characterPanel.view.y;
+
+		this.buttonBar.layout(cy);
+		this.bagButton.layout(
+			this.characterPanel.view.x,
+			cy,
+			this.characterPanel.panelWidth,
+		);
+		this.inventoryPanel.layoutAbove(cy);
+		this.deckTracker.layout(w);
+		this.hand.resize(w, h);
 	}
 
 	// ---------- Move ----------
@@ -1212,6 +1219,11 @@ export class MapScene implements Scene {
 		const { screenX, screenY } = this.getScreenPoint(event);
 		const action = this.buttonBar.handleClick(screenX, screenY);
 
+		if (this.bagButton.hitTest(screenX, screenY)) {
+			this.inventoryPanel.toggle();
+			return;
+		}
+
 		switch (action) {
 			case "move":
 				this.handleMovePressed();
@@ -1271,7 +1283,12 @@ export class MapScene implements Scene {
 		this.hand.syncFromHand(this.mercState.hand);
 		this.deckTracker.sync(this.turnManager);
 		this.inventoryPanel.sync(this.mercState.items);
-		// this.refreshStatsText();
+		this.characterPanel.setFromState(
+			this.game.session.character,
+			this.mercState,
+			this.turnManager.apRemaining,
+			this.turnManager.baseAP,
+		);
 	}
 
 	// ---------- Cards ----------
