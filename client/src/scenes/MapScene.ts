@@ -18,13 +18,15 @@ import { BattleOverlay, type BattleResult } from "@/ui/overlay/BattleOverlay";
 import { MoveController } from "@/systems/MoveController";
 import { TurnManager } from "@/systems/TurnManager";
 import {
-	decideEngagement,
 	decideMovementTarget,
 	pickEngagementTarget,
+	decideEngagement,
 	decideFallbackAction,
 	pickRetreatTile,
-	isAdjacent,
 	applyRestHeal,
+	isAdjacent,
+	ARCHETYPE_COLORS,
+	archetypeLabel,
 	type ChestInfo,
 	type AiArchetype,
 	type AiCombatant,
@@ -576,6 +578,13 @@ export class MapScene implements Scene {
 		}
 
 		this.processingEnemyTurns = false;
+
+		this.camera.centerOn(
+			{ x: this.mercenary.view.x, y: this.mercenary.view.y },
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
+
 		this.syncUI();
 	}
 
@@ -720,12 +729,32 @@ export class MapScene implements Scene {
 
 		this.activeCombatEnemyIndex = enemyIndex;
 
+		const mirrored = enemy.state.coord.y < this.mercState.coord.y;
+
 		await new Promise<void>((resolve) => {
 			void this.game.overlays.show(
-				new BattleOverlay(this.game, this.mercState, enemy.state, (result) => {
-					this.onBattleComplete(result);
-					resolve();
-				}),
+				new BattleOverlay(
+					this.game,
+					enemy.state,
+					this.mercState,
+					(result) => {
+						if (result.attackerNeedsTeleport) {
+							this.teleportEntity(enemy.state, enemy.mercenary);
+						}
+						if (result.defenderNeedsTeleport) {
+							this.teleportEntity(this.mercState, this.mercenary);
+						}
+						resolve();
+					},
+					ARCHETYPE_COLORS[enemy.archetype],
+					archetypeLabel(enemy.archetype),
+					0x4a9eff,
+					"You",
+					enemy.archetype,
+					"balanced",
+					"defender",
+					mirrored,
+				),
 			);
 		});
 	}
@@ -739,6 +768,8 @@ export class MapScene implements Scene {
 		attacker: EnemyEntity,
 		defender: EnemyEntity,
 	): Promise<void> {
+		const mirrored = attacker.state.coord.y < defender.state.coord.y;
+
 		await new Promise<void>((resolve) => {
 			void this.game.overlays.show(
 				new BattleOverlay(
@@ -754,9 +785,14 @@ export class MapScene implements Scene {
 						}
 						resolve();
 					},
-					defender.archetype,
-					true,
+					ARCHETYPE_COLORS[attacker.archetype],
+					archetypeLabel(attacker.archetype),
+					ARCHETYPE_COLORS[defender.archetype],
+					archetypeLabel(defender.archetype),
 					attacker.archetype,
+					defender.archetype,
+					"none",
+					mirrored,
 				),
 			);
 		});
@@ -1007,9 +1043,22 @@ export class MapScene implements Scene {
 		this.exitTargetingMode();
 		this.activeCombatEnemyIndex = enemyIndex;
 
+		const mirrored = this.mercState.coord.y < enemy.state.coord.y;
+
 		void this.game.overlays.show(
-			new BattleOverlay(this.game, this.mercState, enemy.state, (result) =>
-				this.onBattleComplete(result),
+			new BattleOverlay(
+				this.game,
+				this.mercState,
+				enemy.state,
+				(result) => this.onBattleComplete(result),
+				0x4a9eff,
+				"You",
+				ARCHETYPE_COLORS[enemy.archetype],
+				archetypeLabel(enemy.archetype),
+				"balanced",
+				enemy.archetype,
+				"attacker",
+				mirrored,
 			),
 		);
 	}

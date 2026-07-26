@@ -5,8 +5,23 @@ import type { ItemData } from "../game/item";
 import type { CombatAction, CombatChoice } from "../game/combat";
 import type { GridCoord } from "../game/grid";
 
-/** Hostile hunter behavior profile — see `09-enemy-ai-design-v3.md`. */
+/** Hostile hunter behavior profile */
 export type AiArchetype = "aggressive" | "treasure" | "balanced";
+
+export const ARCHETYPE_COLORS: Record<AiArchetype, number> = {
+	aggressive: 0xe67e22,
+	treasure: 0x9b59b6,
+	balanced: 0x1abc9c,
+};
+
+export function archetypeLabel(archetype: AiArchetype): string {
+	const names: Record<AiArchetype, string> = {
+		aggressive: "Aggressive Hunter",
+		treasure: "Treasure Hunter",
+		balanced: "Balanced Hunter",
+	};
+	return names[archetype];
+}
 
 export type AiFallbackAction = "rest" | "retreat" | "hold";
 

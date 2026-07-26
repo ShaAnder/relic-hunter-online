@@ -225,9 +225,14 @@ export class TurnManager {
 	 */
 	spendRest(): boolean {
 		if (!this.canRest) return false;
+
+		this._apRemaining -= 1;
 		this._hasRestedThisTurn = true;
+		this._moveLocked = true;
+		this._movementRemaining = 0;
 		this.drawCards(2);
 		applyRestHeal(this.getMercState());
+		this.onChanged();
 		return true;
 	}
 

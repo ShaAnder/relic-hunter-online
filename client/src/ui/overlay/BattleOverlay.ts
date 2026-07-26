@@ -35,17 +35,17 @@ const ACTION_LABELS: Record<CombatAction, string> = {
 };
 
 const RESULT_LINGER_MS = 2200;
-// Real map tile size — same coordinate math as MapScene, so a future
-// run/attack animation can reuse Mercenary's moveAlongPath against these
-// grid coords unchanged.
 const ARENA_COLS = 15;
 const ARENA_ROWS = 7;
 const MID_ROW = Math.floor(ARENA_ROWS / 2);
 
-// Both combatants on the middle row, one tile in from each edge — not
-// opposite corners, facing each other along the center line.
-const PLAYER_TILE = { x: 1, y: MID_ROW };
-const ENEMY_TILE = { x: ARENA_COLS - 2, y: MID_ROW };
+// Attacker always renders lower on screen, defender always upper — trivial
+// by design, no branching. Whoever attacked gets this tile, full stop.
+const ATTACKER_TILE = { x: ARENA_COLS - 2, y: MID_ROW };
+const DEFENDER_TILE = { x: 1, y: MID_ROW };
+
+/** Which role (if any) the person looking at this screen is controlling. "none" = spectator, both sides auto-decide. */
+export type LocalHumanRole = "attacker" | "defender" | "none";
 
 export interface BattleResult {
 	attackerNeedsTeleport: boolean;
@@ -53,14 +53,24 @@ export interface BattleResult {
 }
 
 /**
- * Iso arena combat overlay, layered on MapScene via OverlayManager. Both
- * combatants stand at opposite corners of an asymmetrical iso grid; the
- * player picks an action via a cycling selector above their own token.
+ * Iso arena combat overlay, layered on MapScene via OverlayManager.
+ * Attacker/defender are roles, not fixed identities — the caller supplies
+ * each role's actual state, color, label, and archetype directly rather
+ * than this class inferring "is this human." That's deliberate: once
+ * live multiplayer exists, both roles could be real distinct players, and
+ * a single "the player" assumption baked in here wouldn't generalize.
  * @param game - active Game instance
- * @param playerState - player's live combat state
- * @param enemyState - enemy's live combat state
+ * @param attackerState - live state of whoever initiated this fight
+ * @param defenderState - live state of whoever's being fought
  * @param onComplete - fired once the round resolves and the overlay hides
- * @param enemyArchetype - biases the enemy's Attack/Defend choice, defaults to balanced
+ * @param attackerColor - display color for the attacker's token/panel
+ * @param attackerLabel - display name for the attacker
+ * @param defenderColor - display color for the defender's token/panel
+ * @param defenderLabel - display name for the defender
+ * @param attackerArchetype - biases the attacker's auto-decided actions, if not the local human
+ * @param defenderArchetype - biases the defender's auto-decided actions, if not the local human
+ * @param localHumanRole - which role (if any) is interactively controlled this session
+ * @param mirrored - flips the arena left/right so the attacker's real map-relative side is preserved
  * @author ShaAnder
  */
 export class BattleOverlay implements Overlay {
@@ -69,15 +79,16 @@ export class BattleOverlay implements Overlay {
 	private backdrop = new Graphics();
 	private arena = new Container();
 
-	private playerPanel = new Container();
-	private enemyPanel = new Container();
-	private playerHpBar = new Graphics();
-	private enemyHpBar = new Graphics();
-	private playerHpText!: Text;
-	private enemyHpText!: Text;
+	private attackerPanel = new Container();
+	private defenderPanel = new Container();
+	private attackerHpBar = new Graphics();
+	private defenderHpBar = new Graphics();
+	private attackerHpText!: Text;
+	private defenderHpText!: Text;
 
 	private roundText!: Text;
-	private enemyIndicator!: Text;
+	private attackerIndicator?: Text;
+	private defenderIndicator?: Text;
 
 	// Action selector — cycles through ACTIONS, confirms on center-label click
 	private selectorContainer = new Container();
@@ -85,21 +96,25 @@ export class BattleOverlay implements Overlay {
 	private selectorLabel!: Text;
 
 	// Real Hand component — same fan/caret/selection logic as the overworld,
-	// not a separate ad-hoc picker. Card confirmation always resolves
-	// whatever action is currently pending.
-	private playerHand: Hand = new Hand((card) => this.onHandCardConfirmed(card));
+	// synced from whichever role the local human actually controls.
+	private localHand: Hand = new Hand((card) => this.onHandCardConfirmed(card));
 	private pendingAction: CombatAction | null = null;
 
 	private resolved = false;
 
 	constructor(
 		private game: Game,
-		private playerState: MercenaryState,
-		private enemyState: MercenaryState,
+		private attackerState: MercenaryState,
+		private defenderState: MercenaryState,
 		private onComplete: (result: BattleResult) => void,
-		private enemyArchetype: AiArchetype = "balanced",
-		private isSpectator: boolean = false,
-		private playerArchetype: AiArchetype = "balanced",
+		private attackerColor: number,
+		private attackerLabel: string,
+		private defenderColor: number,
+		private defenderLabel: string,
+		private attackerArchetype: AiArchetype = "balanced",
+		private defenderArchetype: AiArchetype = "balanced",
+		private localHumanRole: LocalHumanRole = "attacker",
+		private mirrored: boolean = false,
 	) {}
 
 	onShow(): void {
@@ -108,44 +123,36 @@ export class BattleOverlay implements Overlay {
 	}
 
 	onHide(): void {
-		this.playerHand.exitSelectionMode();
+		this.localHand.exitSelectionMode();
 	}
 
 	update(deltaTime: number): void {
-		this.playerHand.update(deltaTime);
+		this.localHand.update(deltaTime);
 	}
 
 	onResize(width: number, height: number): void {
 		this.layout(width, height);
 	}
 
-	archetypeLabel(archetype: AiArchetype): string {
-		const names: Record<AiArchetype, string> = {
-			aggressive: "Aggressive Hunter",
-			treasure: "Treasure Hunter",
-			balanced: "Balanced Hunter",
-		};
-		return names[archetype];
+	private mirrorPos(pos: { x: number; y: number }): { x: number; y: number } {
+		return this.mirrored ? { x: -pos.x, y: pos.y } : pos;
 	}
 
-	private async runSpectatorFight(): Promise<void> {
-		const playerChoice = chooseCombatAction(
-			this.playerState.hand,
-			this.playerState.stats,
-			this.playerArchetype,
-		);
-		const enemyChoice = chooseCombatAction(
-			this.enemyState.hand,
-			this.enemyState.stats,
-			this.enemyArchetype,
-		);
-
-		this.playerIndicator.text = ACTION_LABELS[playerChoice.action];
-		this.enemyIndicator.text = ACTION_LABELS[enemyChoice.action];
-
+	private async runAutoFight(): Promise<void> {
 		await new Promise((resolve) => setTimeout(resolve, 700));
 
-		this.resolveRound(playerChoice, enemyChoice);
+		const attackerChoice = chooseCombatAction(
+			this.attackerState.hand,
+			this.attackerState.stats,
+			this.attackerArchetype,
+		);
+		const defenderChoice = chooseCombatAction(
+			this.defenderState.hand,
+			this.defenderState.stats,
+			this.defenderArchetype,
+		);
+
+		void this.resolveRound(attackerChoice, defenderChoice);
 	}
 
 	// ---------- UI construction ----------
@@ -158,14 +165,20 @@ export class BattleOverlay implements Overlay {
 		this.buildArenaGrid();
 		this.buildCombatantTokens();
 		this.buildCornerPanels();
-		this.buildEnemyIndicator();
 
-		if (this.isSpectator) {
-			this.buildPlayerIndicator();
+		if (this.localHumanRole === "none") {
+			this.buildAttackerIndicator();
+			this.buildDefenderIndicator();
+		} else if (this.localHumanRole === "attacker") {
+			this.buildDefenderIndicator();
+			this.buildActionSelector(ATTACKER_TILE);
+			this.view.addChild(this.localHand.view);
+			this.localHand.syncFromHand(this.attackerState.hand);
 		} else {
-			this.buildActionSelector();
-			this.view.addChild(this.playerHand.view);
-			this.playerHand.syncFromHand(this.playerState.hand);
+			this.buildAttackerIndicator();
+			this.buildActionSelector(DEFENDER_TILE);
+			this.view.addChild(this.localHand.view);
+			this.localHand.syncFromHand(this.defenderState.hand);
 		}
 
 		this.roundText = new Text({
@@ -178,26 +191,11 @@ export class BattleOverlay implements Overlay {
 
 		this.syncHpDisplay();
 
-		if (this.isSpectator) {
-			void this.runSpectatorFight();
+		if (this.localHumanRole === "none") {
+			void this.runAutoFight();
 		}
 	}
 
-	private playerIndicator!: Text;
-
-	private buildPlayerIndicator(): void {
-		const pos = this.arenaGridToScreen(PLAYER_TILE.x, PLAYER_TILE.y);
-		this.playerIndicator = new Text({
-			text: "?",
-			style: { fill: 0xffffff, fontSize: 24, fontWeight: "bold" },
-		});
-		this.playerIndicator.anchor.set(0.5);
-		this.playerIndicator.x = pos.x;
-		this.playerIndicator.y = pos.y - 70;
-		this.arena.addChild(this.playerIndicator);
-	}
-
-	/** Iso projection for an arena grid coord, centered so the whole grid sits around (0,0). */
 	/** Same projection MapScene uses, just centered so the grid sits around (0,0). */
 	private arenaGridToScreen(gx: number, gy: number): { x: number; y: number } {
 		return gridToScreen({
@@ -233,50 +231,49 @@ export class BattleOverlay implements Overlay {
 		this.arena.addChild(tileLayer);
 	}
 
-	/** Sphere tokens at opposite corners of the grid. */
+	/** Tokens colored per the caller-supplied identity — no inference, just rendered as given. */
 	private buildCombatantTokens(): void {
-		const playerPos = this.arenaGridToScreen(PLAYER_TILE.x, PLAYER_TILE.y);
-		const playerToken = new Graphics();
-		playerToken.circle(0, 0, 20);
-		playerToken.fill(0x4a9eff);
-		playerToken.x = playerPos.x;
-		playerToken.y = playerPos.y - 14;
-		this.arena.addChild(playerToken);
+		const attackerPos = this.mirrorPos(
+			this.arenaGridToScreen(ATTACKER_TILE.x, ATTACKER_TILE.y),
+		);
+		const attackerToken = new Graphics();
+		attackerToken.circle(0, 0, 20);
+		attackerToken.fill(this.attackerColor);
+		attackerToken.x = attackerPos.x;
+		attackerToken.y = attackerPos.y - 14;
+		this.arena.addChild(attackerToken);
 
-		const enemyPos = this.arenaGridToScreen(ENEMY_TILE.x, ENEMY_TILE.y);
-		const enemyToken = new Graphics();
-		enemyToken.circle(0, 0, 20);
-		enemyToken.fill(0xe67e22);
-		enemyToken.x = enemyPos.x;
-		enemyToken.y = enemyPos.y - 14;
-		this.arena.addChild(enemyToken);
+		const defenderPos = this.mirrorPos(
+			this.arenaGridToScreen(DEFENDER_TILE.x, DEFENDER_TILE.y),
+		);
+		const defenderToken = new Graphics();
+		defenderToken.circle(0, 0, 20);
+		defenderToken.fill(this.defenderColor);
+		defenderToken.x = defenderPos.x;
+		defenderToken.y = defenderPos.y - 14;
+		this.arena.addChild(defenderToken);
 	}
 
-	/** Bottom-left/right stat panels: name, Mv/At/Df row, HP number + bar. */
+	/** Corner panels — attacker left, defender right, always (not mirrored, this is UI chrome not battlefield). */
 	private buildCornerPanels(): void {
-		const leftLabel = this.isSpectator
-			? this.archetypeLabel(this.playerArchetype)
-			: "You";
-		const rightLabel = this.archetypeLabel(this.enemyArchetype);
-
 		this.buildOnePanel(
-			this.playerPanel,
-			this.playerHpBar,
-			leftLabel,
-			this.playerState,
-			0x4a9eff,
+			this.attackerPanel,
+			this.attackerHpBar,
+			this.attackerLabel,
+			this.attackerState,
+			this.attackerColor,
 			true,
 		);
 		this.buildOnePanel(
-			this.enemyPanel,
-			this.enemyHpBar,
-			rightLabel,
-			this.enemyState,
-			0xe67e22,
+			this.defenderPanel,
+			this.defenderHpBar,
+			this.defenderLabel,
+			this.defenderState,
+			this.defenderColor,
 			false,
 		);
-		this.view.addChild(this.playerPanel);
-		this.view.addChild(this.enemyPanel);
+		this.view.addChild(this.attackerPanel);
+		this.view.addChild(this.defenderPanel);
 	}
 
 	private buildOnePanel(
@@ -285,7 +282,7 @@ export class BattleOverlay implements Overlay {
 		label: string,
 		state: MercenaryState,
 		accent: number,
-		isPlayerSlot: boolean,
+		isAttackerSlot: boolean,
 	): void {
 		const bg = new Graphics();
 		bg.roundRect(0, 0, 190, 100, 8);
@@ -316,8 +313,8 @@ export class BattleOverlay implements Overlay {
 		hpText.x = 10;
 		hpText.y = 54;
 		panel.addChild(hpText);
-		if (isPlayerSlot) this.playerHpText = hpText;
-		else this.enemyHpText = hpText;
+		if (isAttackerSlot) this.attackerHpText = hpText;
+		else this.defenderHpText = hpText;
 
 		hpBar.x = 10;
 		hpBar.y = 76;
@@ -326,15 +323,15 @@ export class BattleOverlay implements Overlay {
 
 	private syncHpDisplay(): void {
 		this.syncOneHpBar(
-			this.playerHpText,
-			this.playerHpBar,
-			this.playerState,
+			this.attackerHpText,
+			this.attackerHpBar,
+			this.attackerState,
 			0x2ecc71,
 		);
 		this.syncOneHpBar(
-			this.enemyHpText,
-			this.enemyHpBar,
-			this.enemyState,
+			this.defenderHpText,
+			this.defenderHpBar,
+			this.defenderState,
 			0x2ecc71,
 		);
 	}
@@ -357,22 +354,39 @@ export class BattleOverlay implements Overlay {
 		bar.fill(ratio > 0.3 ? fillColor : 0xe74c3c);
 	}
 
-	/** "?" placeholder above the enemy until their choice is revealed at resolution. */
-	private buildEnemyIndicator(): void {
-		const pos = this.arenaGridToScreen(ENEMY_TILE.x, ENEMY_TILE.y);
-		this.enemyIndicator = new Text({
+	/** "?" placeholder above the attacker until their choice is revealed at resolution. */
+	private buildAttackerIndicator(): void {
+		const pos = this.mirrorPos(
+			this.arenaGridToScreen(ATTACKER_TILE.x, ATTACKER_TILE.y),
+		);
+		this.attackerIndicator = new Text({
 			text: "?",
 			style: { fill: 0xffffff, fontSize: 24, fontWeight: "bold" },
 		});
-		this.enemyIndicator.anchor.set(0.5);
-		this.enemyIndicator.x = pos.x;
-		this.enemyIndicator.y = pos.y - 70;
-		this.arena.addChild(this.enemyIndicator);
+		this.attackerIndicator.anchor.set(0.5);
+		this.attackerIndicator.x = pos.x;
+		this.attackerIndicator.y = pos.y - 70;
+		this.arena.addChild(this.attackerIndicator);
 	}
 
-	/** "< Action >" cycling selector above the player's token. Click the label to confirm. */
-	private buildActionSelector(): void {
-		const pos = this.arenaGridToScreen(PLAYER_TILE.x, PLAYER_TILE.y);
+	/** "?" placeholder above the defender until their choice is revealed at resolution. */
+	private buildDefenderIndicator(): void {
+		const pos = this.mirrorPos(
+			this.arenaGridToScreen(DEFENDER_TILE.x, DEFENDER_TILE.y),
+		);
+		this.defenderIndicator = new Text({
+			text: "?",
+			style: { fill: 0xffffff, fontSize: 24, fontWeight: "bold" },
+		});
+		this.defenderIndicator.anchor.set(0.5);
+		this.defenderIndicator.x = pos.x;
+		this.defenderIndicator.y = pos.y - 70;
+		this.arena.addChild(this.defenderIndicator);
+	}
+
+	/** "< Action >" cycling selector above whichever role the local human controls. */
+	private buildActionSelector(tile: { x: number; y: number }): void {
+		const pos = this.mirrorPos(this.arenaGridToScreen(tile.x, tile.y));
 		this.selectorContainer.x = pos.x;
 		this.selectorContainer.y = pos.y - 70;
 		this.arena.addChild(this.selectorContainer);
@@ -421,138 +435,167 @@ export class BattleOverlay implements Overlay {
 		const action = ACTIONS[this.selectorIndex];
 		this.selectorContainer.visible = false;
 
+		const localStats =
+			this.localHumanRole === "attacker"
+				? this.attackerState.stats
+				: this.defenderState.stats;
+
 		if (action === "surrender") {
-			this.resolveRound({ action, stats: this.playerState.stats });
+			void this.resolveLocalChoice({ action, stats: localStats });
 			return;
 		}
 
 		this.pendingAction = action;
 		const allowedColors = ALLOWED_COLORS[action];
-		this.playerHand.enterSelectionMode((data) =>
+		this.localHand.enterSelectionMode((data) =>
 			allowedColors.includes(data.color),
 		);
 		this.roundText.text = `Choose a card for ${ACTION_LABELS[action]}`;
 	}
 
 	/**
-	 * Fires when the player confirms a card in playerHand — same callback
-	 * shape MapScene uses for its own hand. Resolves whichever action is
+	 * Fires when the local human confirms a card — same callback shape
+	 * MapScene uses for its own hand. Resolves whichever action is
 	 * currently pending; "No Card" (Hand's built-in skip option) resolves
 	 * with no card, same as choosing not to play one.
 	 */
 	private onHandCardConfirmed(card: CardData): void {
 		if (!this.pendingAction) return;
+		const localStats =
+			this.localHumanRole === "attacker"
+				? this.attackerState.stats
+				: this.defenderState.stats;
 		const chosenCard = card.id === SKIP_CARD_ID ? undefined : card;
-		this.resolveRound({
+		void this.resolveLocalChoice({
 			action: this.pendingAction,
-			stats: this.playerState.stats,
+			stats: localStats,
 			card: chosenCard,
 		});
 		this.pendingAction = null;
 	}
 
-	// ---------- Resolution ----------
+	/** The local human made their choice — auto-decide the other role, then resolve both. */
+	private async resolveLocalChoice(localChoice: CombatChoice): Promise<void> {
+		const otherState =
+			this.localHumanRole === "attacker"
+				? this.defenderState
+				: this.attackerState;
+		const otherArchetype =
+			this.localHumanRole === "attacker"
+				? this.defenderArchetype
+				: this.attackerArchetype;
 
-	/** Enemy's choice — random Attack/Defend, no card. Stand-in until real AI lands. */
-	/** Delegates to the shared archetype-aware combat logic — Attack/Defend bias, best available card. */
-	private chooseEnemyAction(): CombatChoice {
-		return chooseCombatAction(
-			this.enemyState.hand,
-			this.enemyState.stats,
-			this.enemyArchetype,
+		const otherChoice = chooseCombatAction(
+			otherState.hand,
+			otherState.stats,
+			otherArchetype,
 		);
+
+		const attackerChoice =
+			this.localHumanRole === "attacker" ? localChoice : otherChoice;
+		const defenderChoice =
+			this.localHumanRole === "attacker" ? otherChoice : localChoice;
+
+		await this.resolveRound(attackerChoice, defenderChoice);
 	}
 
-	private resolveRound(
-		playerChoice: CombatChoice,
-		precomputedEnemyChoice?: CombatChoice,
-	): void {
+	// ---------- Resolution ----------
+
+	private async resolveRound(
+		attackerChoice: CombatChoice,
+		defenderChoice: CombatChoice,
+	): Promise<void> {
 		if (this.resolved) return;
 		this.resolved = true;
 
-		if (playerChoice.card) {
-			const idx = this.playerState.hand.findIndex(
-				(c) => c.id === playerChoice.card!.id,
+		if (attackerChoice.card) {
+			const idx = this.attackerState.hand.findIndex(
+				(c) => c.id === attackerChoice.card!.id,
 			);
-			if (idx !== -1) this.playerState.hand.splice(idx, 1);
+			if (idx !== -1) this.attackerState.hand.splice(idx, 1);
+		}
+		if (defenderChoice.card) {
+			const idx = this.defenderState.hand.findIndex(
+				(c) => c.id === defenderChoice.card!.id,
+			);
+			if (idx !== -1) this.defenderState.hand.splice(idx, 1);
 		}
 
-		const enemyChoice = precomputedEnemyChoice ?? this.chooseEnemyAction();
+		const result = resolveCombatRound(attackerChoice, defenderChoice);
 
-		if (enemyChoice.card) {
-			const idx = this.enemyState.hand.findIndex(
-				(c) => c.id === enemyChoice.card!.id,
-			);
-			if (idx !== -1) this.enemyState.hand.splice(idx, 1);
+		if (this.attackerIndicator) {
+			this.attackerIndicator.text = ACTION_LABELS[attackerChoice.action];
+		}
+		if (this.defenderIndicator) {
+			this.defenderIndicator.text = ACTION_LABELS[defenderChoice.action];
 		}
 
-		const result = resolveCombatRound(playerChoice, enemyChoice);
-
-		this.playerState.currentHp -= result.a.damageTaken;
-		this.enemyState.currentHp -= result.b.damageTaken;
+		this.attackerState.currentHp -= result.a.damageTaken;
+		this.defenderState.currentHp -= result.b.damageTaken;
 		this.syncHpDisplay();
 
-		this.enemyIndicator.text = ACTION_LABELS[enemyChoice.action];
-
 		this.roundText.text = this.describeOutcome(
-			playerChoice,
+			attackerChoice,
 			result.a,
 			result.b,
 		);
 
-		this.finishBattle(playerChoice);
+		this.finishBattle(attackerChoice);
 	}
 
 	private describeOutcome(
-		playerChoice: CombatChoice,
-		playerOutcome: {
+		attackerChoice: CombatChoice,
+		attackerOutcome: {
 			damageTaken: number;
 			nullified: boolean;
 			escaped?: boolean;
 			itemGiven?: boolean;
 		},
-		enemyOutcome: { damageTaken: number },
+		defenderOutcome: { damageTaken: number },
 	): string {
-		if (playerChoice.action === "surrender") return "You surrendered.";
-		if (playerChoice.action === "run") {
-			return playerOutcome.escaped
-				? "You escaped!"
-				: `Caught! Took ${playerOutcome.damageTaken} damage.`;
+		if (attackerChoice.action === "surrender")
+			return `${this.attackerLabel} surrendered.`;
+		if (attackerChoice.action === "run") {
+			return attackerOutcome.escaped
+				? `${this.attackerLabel} escaped!`
+				: `Caught! ${this.attackerLabel} took ${attackerOutcome.damageTaken} damage.`;
 		}
-		return `You dealt ${enemyOutcome.damageTaken} and took ${playerOutcome.damageTaken}.`;
+		return `${this.attackerLabel} dealt ${defenderOutcome.damageTaken} and took ${attackerOutcome.damageTaken}.`;
 	}
 
 	/** Apply round consequences to shared state, then report what MapScene needs to do. */
-	private finishBattle(playerChoice: CombatChoice): void {
+	private finishBattle(attackerChoice: CombatChoice): void {
 		let attackerNeedsTeleport = false;
 		let defenderNeedsTeleport = false;
 
-		if (playerChoice.action === "surrender") {
-			const consequence = resolveSurrender(this.playerState.items.length);
+		if (attackerChoice.action === "surrender") {
+			const consequence = resolveSurrender(this.attackerState.items.length);
 			if (consequence.itemGiven) {
-				const given = this.playerState.items.shift();
-				if (given) this.enemyState.items.push(given);
+				const given = this.attackerState.items.shift();
+				if (given) this.defenderState.items.push(given);
 			}
 			attackerNeedsTeleport = true;
 		} else {
-			if (this.playerState.currentHp <= 0) {
-				const consequence = resolveDefeat(this.playerState.stats, true);
-				this.playerState.currentHp = consequence.hpCeiling;
-				if (consequence.itemStolen && this.playerState.items.length > 0) {
-					const stolen = this.playerState.items.shift();
-					if (stolen) this.enemyState.items.push(stolen);
+			if (this.attackerState.currentHp <= 0) {
+				const consequence = resolveDefeat(this.attackerState.stats, true);
+				this.attackerState.currentHp = consequence.hpCeiling;
+				this.attackerState.hpCeiling = consequence.hpCeiling;
+				if (consequence.itemStolen && this.attackerState.items.length > 0) {
+					const stolen = this.attackerState.items.shift();
+					if (stolen) this.defenderState.items.push(stolen);
 				}
 				attackerNeedsTeleport = true;
 			}
-			if (this.playerState.currentHp <= 0) {
-				const consequence = resolveDefeat(this.playerState.stats, true);
-				this.playerState.currentHp = consequence.hpCeiling;
-				this.playerState.hpCeiling = consequence.hpCeiling;
-				if (consequence.itemStolen && this.playerState.items.length > 0) {
-					const stolen = this.playerState.items.shift();
-					if (stolen) this.enemyState.items.push(stolen);
+
+			if (this.defenderState.currentHp <= 0) {
+				const consequence = resolveDefeat(this.defenderState.stats, true);
+				this.defenderState.currentHp = consequence.hpCeiling;
+				this.defenderState.hpCeiling = consequence.hpCeiling;
+				if (consequence.itemStolen && this.defenderState.items.length > 0) {
+					const stolen = this.defenderState.items.shift();
+					if (stolen) this.attackerState.items.push(stolen);
 				}
-				attackerNeedsTeleport = true;
+				defenderNeedsTeleport = true;
 			}
 		}
 
@@ -567,17 +610,17 @@ export class BattleOverlay implements Overlay {
 	private layout(width: number, height: number): void {
 		this.backdrop.clear();
 		this.backdrop.rect(0, 0, width, height);
-		this.backdrop.fill({ color: 0x000000, alpha: 1 }); // fully opaque — MapScene hidden, not dimmed
+		this.backdrop.fill({ color: 0x000000, alpha: 1 });
 
 		this.arena.x = width / 2;
 		this.arena.y = height / 2 - 30;
 
-		this.playerPanel.x = 24;
-		this.playerPanel.y = height - 124;
+		this.attackerPanel.x = 24;
+		this.attackerPanel.y = height - 124;
 
-		this.enemyPanel.x = width - 214;
-		this.enemyPanel.y = height - 124;
+		this.defenderPanel.x = width - 214;
+		this.defenderPanel.y = height - 124;
 
-		this.playerHand.resize(width, height);
+		this.localHand.resize(width, height);
 	}
 }
