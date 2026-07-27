@@ -19,7 +19,6 @@ import {
 } from "@relic-hunter/shared";
 import { PlayZone } from "@/ui/PlayZone";
 
-/** Card colors each action allows. */
 const ALLOWED_COLORS: Record<CombatAction, CardColor[]> = {
 	attack: ["red", "yellow", "blue"],
 	defend: ["yellow"],
@@ -40,12 +39,25 @@ const ARENA_COLS = 15;
 const ARENA_ROWS = 7;
 const MID_ROW = Math.floor(ARENA_ROWS / 2);
 
-// Attacker always renders lower on screen, defender always upper — trivial
-// by design, no branching. Whoever attacked gets this tile, full stop.
+/** Long ends of the landscape arena — never top/bottom short ends. */
 const ATTACKER_TILE = { x: ARENA_COLS - 2, y: MID_ROW };
 const DEFENDER_TILE = { x: 1, y: MID_ROW };
 
-/** Which role (if any) the person looking at this screen is controlling. "none" = spectator, both sides auto-decide. */
+/**
+ * Horizontal mirror only. Attacker stays on the local right seat; scale.x = -1
+ * flips the whole field so they appear on the left when the map says so.
+ */
+function shouldMirrorX(
+	attackerCoord: { x: number; y: number },
+	defenderCoord: { x: number; y: number },
+): boolean {
+	let dx = attackerCoord.x - defenderCoord.x;
+	let dy = attackerCoord.y - defenderCoord.y;
+	if (dx === 0 && dy === 0) dx = 1;
+	const toward = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
+	return toward < 0;
+}
+
 export type LocalHumanRole = "attacker" | "defender" | "none";
 
 export interface BattleResult {
@@ -54,24 +66,7 @@ export interface BattleResult {
 }
 
 /**
- * Iso arena combat overlay, layered on MapScene via OverlayManager.
- * Attacker/defender are roles, not fixed identities — the caller supplies
- * each role's actual state, color, label, and archetype directly rather
- * than this class inferring "is this human." That's deliberate: once
- * live multiplayer exists, both roles could be real distinct players, and
- * a single "the player" assumption baked in here wouldn't generalize.
- * @param game - active Game instance
- * @param attackerState - live state of whoever initiated this fight
- * @param defenderState - live state of whoever's being fought
- * @param onComplete - fired once the round resolves and the overlay hides
- * @param attackerColor - display color for the attacker's token/panel
- * @param attackerLabel - display name for the attacker
- * @param defenderColor - display color for the defender's token/panel
- * @param defenderLabel - display name for the defender
- * @param attackerArchetype - biases the attacker's auto-decided actions, if not the local human
- * @param defenderArchetype - biases the defender's auto-decided actions, if not the local human
- * @param localHumanRole - which role (if any) is interactively controlled this session
- * @param mirrored - flips the arena left/right so the attacker's real map-relative side is preserved
+ * Landscape iso arena. Horizontal mirror only (scale.x), never rotation.
  * @author ShaAnder
  */
 export class BattleOverlay implements Overlay {
@@ -91,18 +86,16 @@ export class BattleOverlay implements Overlay {
 	private attackerIndicator?: Text;
 	private defenderIndicator?: Text;
 
-	// Action selector — cycles through ACTIONS, confirms on center-label click
 	private selectorContainer = new Container();
 	private selectorIndex = 0;
 	private selectorLabel!: Text;
 
-	// Real Hand component — same fan/caret/selection logic as the overworld,
-	// synced from whichever role the local human actually controls.
 	private localHand!: Hand;
 	private localPlayZone = new PlayZone();
 	private pendingAction: CombatAction | null = null;
 
 	private resolved = false;
+	private mirrorX = false;
 
 	constructor(
 		private game: Game,
@@ -116,11 +109,13 @@ export class BattleOverlay implements Overlay {
 		private attackerArchetype: AiArchetype = "balanced",
 		private defenderArchetype: AiArchetype = "balanced",
 		private localHumanRole: LocalHumanRole = "attacker",
-		private mirrored: boolean = false,
+		attackerMapCoord: { x: number; y: number },
+		defenderMapCoord: { x: number; y: number },
 	) {
 		this.localHand = new Hand(this.game.app.stage, this.localPlayZone, (card) =>
 			this.onHandCardConfirmed(card),
 		);
+		this.mirrorX = shouldMirrorX(attackerMapCoord, defenderMapCoord);
 	}
 
 	onShow(): void {
@@ -141,13 +136,8 @@ export class BattleOverlay implements Overlay {
 		this.layout(width, height);
 	}
 
-	private mirrorPos(pos: { x: number; y: number }): { x: number; y: number } {
-		return this.mirrored ? { x: -pos.x, y: pos.y } : pos;
-	}
-
 	private async runAutoFight(): Promise<void> {
 		await new Promise((resolve) => setTimeout(resolve, 700));
-
 		const attackerChoice = chooseCombatAction(
 			this.attackerState.hand,
 			this.attackerState.stats,
@@ -158,11 +148,8 @@ export class BattleOverlay implements Overlay {
 			this.defenderState.stats,
 			this.defenderArchetype,
 		);
-
 		void this.resolveRound(attackerChoice, defenderChoice);
 	}
-
-	// ---------- UI construction ----------
 
 	private buildUI(): void {
 		this.backdrop.eventMode = "static";
@@ -207,7 +194,6 @@ export class BattleOverlay implements Overlay {
 		}
 	}
 
-	/** Same projection MapScene uses, just centered so the grid sits around (0,0). */
 	private arenaGridToScreen(gx: number, gy: number): { x: number; y: number } {
 		return gridToScreen({
 			x: gx - (ARENA_COLS - 1) / 2,
@@ -215,7 +201,6 @@ export class BattleOverlay implements Overlay {
 		});
 	}
 
-	/** Draws the full arena floor, every tile in the grid. */
 	private buildArenaGrid(): void {
 		const tileLayer = new Container();
 		for (let gx = 0; gx < ARENA_COLS; gx++) {
@@ -242,10 +227,10 @@ export class BattleOverlay implements Overlay {
 		this.arena.addChild(tileLayer);
 	}
 
-	/** Tokens colored per the caller-supplied identity — no inference, just rendered as given. */
 	private buildCombatantTokens(): void {
-		const attackerPos = this.mirrorPos(
-			this.arenaGridToScreen(ATTACKER_TILE.x, ATTACKER_TILE.y),
+		const attackerPos = this.arenaGridToScreen(
+			ATTACKER_TILE.x,
+			ATTACKER_TILE.y,
 		);
 		const attackerToken = new Graphics();
 		attackerToken.circle(0, 0, 20);
@@ -254,8 +239,9 @@ export class BattleOverlay implements Overlay {
 		attackerToken.y = attackerPos.y - 14;
 		this.arena.addChild(attackerToken);
 
-		const defenderPos = this.mirrorPos(
-			this.arenaGridToScreen(DEFENDER_TILE.x, DEFENDER_TILE.y),
+		const defenderPos = this.arenaGridToScreen(
+			DEFENDER_TILE.x,
+			DEFENDER_TILE.y,
 		);
 		const defenderToken = new Graphics();
 		defenderToken.circle(0, 0, 20);
@@ -265,7 +251,6 @@ export class BattleOverlay implements Overlay {
 		this.arena.addChild(defenderToken);
 	}
 
-	/** Corner panels — attacker left, defender right, always (not mirrored, this is UI chrome not battlefield). */
 	private buildCornerPanels(): void {
 		this.buildOnePanel(
 			this.attackerPanel,
@@ -356,7 +341,6 @@ export class BattleOverlay implements Overlay {
 		const hp = Math.max(0, state.currentHp);
 		const max = state.stats.maxHp;
 		text.text = `${hp} / ${max} HP`;
-
 		const ratio = max > 0 ? hp / max : 0;
 		bar.clear();
 		bar.rect(0, 0, 170, 10);
@@ -365,11 +349,8 @@ export class BattleOverlay implements Overlay {
 		bar.fill(ratio > 0.3 ? fillColor : 0xe74c3c);
 	}
 
-	/** "?" placeholder above the attacker until their choice is revealed at resolution. */
 	private buildAttackerIndicator(): void {
-		const pos = this.mirrorPos(
-			this.arenaGridToScreen(ATTACKER_TILE.x, ATTACKER_TILE.y),
-		);
+		const pos = this.arenaGridToScreen(ATTACKER_TILE.x, ATTACKER_TILE.y);
 		this.attackerIndicator = new Text({
 			text: "?",
 			style: { fill: 0xffffff, fontSize: 24, fontWeight: "bold" },
@@ -380,11 +361,8 @@ export class BattleOverlay implements Overlay {
 		this.arena.addChild(this.attackerIndicator);
 	}
 
-	/** "?" placeholder above the defender until their choice is revealed at resolution. */
 	private buildDefenderIndicator(): void {
-		const pos = this.mirrorPos(
-			this.arenaGridToScreen(DEFENDER_TILE.x, DEFENDER_TILE.y),
-		);
+		const pos = this.arenaGridToScreen(DEFENDER_TILE.x, DEFENDER_TILE.y);
 		this.defenderIndicator = new Text({
 			text: "?",
 			style: { fill: 0xffffff, fontSize: 24, fontWeight: "bold" },
@@ -395,9 +373,8 @@ export class BattleOverlay implements Overlay {
 		this.arena.addChild(this.defenderIndicator);
 	}
 
-	/** "< Action >" cycling selector above whichever role the local human controls. */
 	private buildActionSelector(tile: { x: number; y: number }): void {
-		const pos = this.mirrorPos(this.arenaGridToScreen(tile.x, tile.y));
+		const pos = this.arenaGridToScreen(tile.x, tile.y);
 		this.selectorContainer.x = pos.x;
 		this.selectorContainer.y = pos.y - 70;
 		this.arena.addChild(this.selectorContainer);
@@ -439,9 +416,6 @@ export class BattleOverlay implements Overlay {
 		this.selectorLabel.text = ACTION_LABELS[ACTIONS[this.selectorIndex]];
 	}
 
-	// ---------- Action selection ----------
-
-	/** Surrender skips the card picker entirely — never involves a card. */
 	private confirmSelector(): void {
 		const action = ACTIONS[this.selectorIndex];
 		this.selectorContainer.visible = false;
@@ -464,12 +438,6 @@ export class BattleOverlay implements Overlay {
 		this.roundText.text = `Choose a card for ${ACTION_LABELS[action]}`;
 	}
 
-	/**
-	 * Fires when the local human confirms a card — same callback shape
-	 * MapScene uses for its own hand. Resolves whichever action is
-	 * currently pending; "No Card" (Hand's built-in skip option) resolves
-	 * with no card, same as choosing not to play one.
-	 */
 	private onHandCardConfirmed(card: CardData): void {
 		if (!this.pendingAction) return;
 		const localStats =
@@ -485,7 +453,6 @@ export class BattleOverlay implements Overlay {
 		this.pendingAction = null;
 	}
 
-	/** The local human made their choice — auto-decide the other role, then resolve both. */
 	private async resolveLocalChoice(localChoice: CombatChoice): Promise<void> {
 		const otherState =
 			this.localHumanRole === "attacker"
@@ -509,8 +476,6 @@ export class BattleOverlay implements Overlay {
 
 		await this.resolveRound(attackerChoice, defenderChoice);
 	}
-
-	// ---------- Resolution ----------
 
 	private async resolveRound(
 		attackerChoice: CombatChoice,
@@ -574,7 +539,6 @@ export class BattleOverlay implements Overlay {
 		return `${this.attackerLabel} dealt ${defenderOutcome.damageTaken} and took ${attackerOutcome.damageTaken}.`;
 	}
 
-	/** Apply round consequences to shared state, then report what MapScene needs to do. */
 	private finishBattle(attackerChoice: CombatChoice): void {
 		let attackerNeedsTeleport = false;
 		let defenderNeedsTeleport = false;
@@ -616,8 +580,6 @@ export class BattleOverlay implements Overlay {
 		}, RESULT_LINGER_MS);
 	}
 
-	// ---------- Layout ----------
-
 	private layout(width: number, height: number): void {
 		this.backdrop.clear();
 		this.backdrop.rect(0, 0, width, height);
@@ -625,6 +587,19 @@ export class BattleOverlay implements Overlay {
 
 		this.arena.x = width / 2;
 		this.arena.y = height / 2 - 30;
+
+		// Landscape only. Horizontal mirror only. Never rotate.
+		this.arena.rotation = 0;
+		this.arena.scale.x = this.mirrorX ? -1 : 1;
+		this.arena.scale.y = 1;
+
+		// Counter-scale so labels stay readable under the mirror
+		const fix = this.mirrorX ? -1 : 1;
+		this.localPlayZone.view.scale.x = fix;
+		if (this.roundText) this.roundText.scale.x = fix;
+		this.selectorContainer.scale.x = fix;
+		if (this.attackerIndicator) this.attackerIndicator.scale.x = fix;
+		if (this.defenderIndicator) this.defenderIndicator.scale.x = fix;
 
 		this.attackerPanel.x = 24;
 		this.attackerPanel.y = height - 124;

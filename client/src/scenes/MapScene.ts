@@ -769,8 +769,6 @@ export class MapScene implements Scene {
 
 		this.activeCombatEnemyIndex = enemyIndex;
 
-		const mirrored = enemy.state.coord.y < this.mercState.coord.y;
-
 		await new Promise<void>((resolve) => {
 			void this.game.overlays.show(
 				new BattleOverlay(
@@ -793,7 +791,8 @@ export class MapScene implements Scene {
 					enemy.archetype,
 					"balanced",
 					"defender",
-					mirrored,
+					enemy.state.coord,
+					this.mercState.coord,
 				),
 			);
 		});
@@ -808,8 +807,6 @@ export class MapScene implements Scene {
 		attacker: EnemyEntity,
 		defender: EnemyEntity,
 	): Promise<void> {
-		const mirrored = attacker.state.coord.y < defender.state.coord.y;
-
 		await new Promise<void>((resolve) => {
 			void this.game.overlays.show(
 				new BattleOverlay(
@@ -832,7 +829,8 @@ export class MapScene implements Scene {
 					attacker.archetype,
 					defender.archetype,
 					"none",
-					mirrored,
+					attacker.state.coord,
+					defender.state.coord,
 				),
 			);
 		});
@@ -1083,8 +1081,6 @@ export class MapScene implements Scene {
 		this.exitTargetingMode();
 		this.activeCombatEnemyIndex = enemyIndex;
 
-		const mirrored = this.mercState.coord.y < enemy.state.coord.y;
-
 		void this.game.overlays.show(
 			new BattleOverlay(
 				this.game,
@@ -1098,7 +1094,8 @@ export class MapScene implements Scene {
 				"balanced",
 				enemy.archetype,
 				"attacker",
-				mirrored,
+				this.mercState.coord,
+				enemy.state.coord,
 			),
 		);
 	}

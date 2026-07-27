@@ -81,6 +81,11 @@ export class PlayZone {
 		this.view.visible = false;
 	}
 
+	/** BattleOverlay ticks this every frame. Hold/fade use awaits, so no work here yet. */
+	update(_deltaTime: number): void {
+		// no-op
+	}
+
 	/** Registers the skip-button handler — set once by Hand. */
 	setNoCardHandler(handler: () => void): void {
 		this.onNoCard = handler;
