@@ -388,11 +388,11 @@ export class MapScene implements Scene {
 
 		this.characterPanel.layout(w, h);
 
-		this.buttonBar.layout(this.game.app.screen.width, h);
+		this.buttonBar.layout(w, h);
 		this.bagButton.layout(
 			this.characterPanel.view.x,
-			this.characterPanel.panelWidth,
-			h,
+			this.characterPanel.view.y,
+			this.characterPanel.panelHeight,
 		);
 		this.inventoryPanel.layoutRightOfCharacter(
 			this.characterPanel.view.x,
@@ -400,7 +400,8 @@ export class MapScene implements Scene {
 			this.characterPanel.panelWidth,
 		);
 		this.deckTracker.layout(w);
-		this.hand.resize(this.characterPanel.view.x, this.characterPanel.view.y);
+		this.hand.resize(w, h);
+		this.playZone.layout(w, h);
 	}
 
 	// ---------- Move ----------
@@ -1260,18 +1261,16 @@ export class MapScene implements Scene {
 		}
 	};
 
-	/** Hover threshold for revealing the hand — checked unconditionally, not just while aiming. */
-	private readonly HAND_HOVER_THRESHOLD_PX = 220;
-
 	/** Feed hovered tiles to the path preview while aiming; hand-reveal check always runs. */
 	private handleMouseMove = (event: MouseEvent): void => {
 		if (this.game.overlays.isOpen) return;
 
 		const { screenX, screenY } = this.getScreenPoint(event);
 
-		this.hand.setHovered(
-			screenY > this.game.app.screen.height - this.HAND_HOVER_THRESHOLD_PX,
-		);
+		// Left-bottom zone matching the new hand position
+		const nearHand =
+			screenX < 420 && screenY > this.game.app.screen.height - 160;
+		this.hand.setHovered(nearHand);
 
 		if (!this.moveController.active) return;
 		this.moveController.onHover(this.screenPointToGrid(screenX, screenY));

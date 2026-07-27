@@ -1,4 +1,4 @@
-import { Container, Graphics, Text } from "pixi.js";
+import { Container, Graphics } from "pixi.js";
 import type { FederatedPointerEvent } from "pixi.js";
 import type { CardData } from "@relic-hunter/shared";
 import { Card, CARD_WIDTH, CARD_HEIGHT } from "@/entities/Card";
@@ -6,31 +6,37 @@ import type { PlayZone } from "@/ui/PlayZone";
 
 const CARET_PULSE_SPEED = 0.006;
 const CARET_PULSE_RANGE = 6;
-const OVERLAY_DURATION_MS = 1500;
 
-const HAND_CARD_SCALE = 0.65;
-const CARD_GAP = 14;
+// Cascade — cards overlap, most of each stays visible. No rotation/arc.
+const CARD_STEP = CARD_WIDTH * 0.75; // 25% overlap between adjacent cards
 const HIGHLIGHT_LIFT = 22;
 const CARET_GAP = 14;
 
+// Hide/reveal — tucked off-screen by default; hover OR tap toggles it.
+const REVEALED_Y_OFFSET = 20;
+const HIDDEN_Y_OFFSET = CARD_HEIGHT - 25;
 const HOVER_EASE_MS = 180;
 
 export const SKIP_CARD_ID = "__skip__";
 
 /**
- * Straight-line hand, bottom-left. Confirming a card (click, Enter, or
- * dragging it into the independent PlayZone entity) hands the card's
- * visual off to PlayZone for the grow-slam-vanish sequence — Hand itself
- * no longer owns any of that animation.
+ * Cascaded hand, bottom-right, tucked off-screen until hovered or
+ * tapped. Confirming a card (click, Enter, or dragging it into the
+ * independent PlayZone) hands the card's visual off to PlayZone for the
+ * grow-slam-vanish sequence. "No Card" now lives as a button on PlayZone
+ * itself, not a draggable card in this row.
  * @param stage - screen-spanning interactive container, needed so a drag
  *   keeps tracking the pointer once it moves off the card itself
- * @param playZone - the independent center-screen entity plays get sent to
- * @param onCardConfirmed - fired once PlayZone's sequence finishes
+ * @param playZone - the independent entity plays get sent to; shown/hidden
+ *   directly by this class around selection mode
+ * @param onCardConfirmed - fired once PlayZone's sequence finishes, or
+ *   immediately for "No Card"
  * @author ShaAnder
  */
 export class Hand {
 	readonly view = new Container();
 	private fanContainer = new Container();
+	private hitArea = new Graphics(); // invisible, catches tap-to-toggle outside selection mode
 
 	private cards: Card[] = [];
 	private onCardConfirmed?: (card: CardData) => void;
@@ -41,13 +47,10 @@ export class Hand {
 
 	private isHovered = false;
 	private forceRevealed = false;
+	private manuallyToggled = false;
 
 	private caret = new Container();
 	private caretElapsedMs = 0;
-
-	private overlayBg = new Graphics();
-	private overlayText: Text;
-	private overlayTimerMs = 0;
 
 	// Drag state
 	private draggingCard: Card | null = null;
@@ -63,26 +66,25 @@ export class Hand {
 		this.onCardConfirmed = onCardConfirmed;
 
 		this.view.addChild(this.fanContainer);
+		this.fanContainer.y = HIDDEN_Y_OFFSET;
+
+		this.hitArea.eventMode = "static";
+		this.hitArea.cursor = "pointer";
+		this.hitArea.on("pointerdown", () => this.handleHitAreaTap());
+		this.fanContainer.addChild(this.hitArea);
 
 		this.buildCaret();
 		this.caret.visible = false;
 		this.fanContainer.addChild(this.caret);
 
-		this.overlayText = new Text({
-			text: "",
-			style: { fill: 0xffffff, fontSize: 13, align: "center" },
-		});
-		this.overlayText.anchor.set(0.5, 0);
-		this.fanContainer.addChild(this.overlayBg);
-		this.fanContainer.addChild(this.overlayText);
-		this.overlayBg.visible = false;
-		this.overlayText.visible = false;
+		this.playZone.setNoCardHandler(() => this.resolveNoCard());
 	}
 
 	get isSelecting(): boolean {
 		return this.selecting;
 	}
 
+	/** Called from the scene's own mousemove handler — proximity to the hand's corner. */
 	setHovered(isHovered: boolean): void {
 		this.isHovered = isHovered;
 	}
@@ -90,14 +92,11 @@ export class Hand {
 	syncFromHand(hand: CardData[]): void {
 		this.clear();
 
-		const displayCards = [...hand, this.buildSkipCardData()];
-
-		displayCards.forEach((data) => {
+		hand.forEach((data) => {
 			const card = new Card(data);
 			card.setInteractive(false);
 			card.setGreyedOut(false);
 			card.view.pivot.set(CARD_WIDTH / 2, CARD_HEIGHT);
-			card.view.scale.set(HAND_CARD_SCALE);
 			this.cards.push(card);
 			this.fanContainer.addChild(card.view);
 
@@ -105,6 +104,7 @@ export class Hand {
 			card.view.on("pointerdown", (e) => this.handlePointerDownCard(card, e));
 		});
 
+		this.redrawHitArea();
 		this.layoutCards();
 	}
 
@@ -124,6 +124,8 @@ export class Hand {
 		this.highlightedIndex = firstSelectable;
 		this.caret.visible = firstSelectable !== -1;
 		this.applyHighlight();
+
+		this.playZone.show();
 	}
 
 	exitSelectionMode(): void {
@@ -137,6 +139,8 @@ export class Hand {
 			card.setGreyedOut(false);
 		});
 		this.layoutCards();
+
+		this.playZone.hide();
 	}
 
 	moveCaret(direction: 1 | -1): void {
@@ -165,26 +169,27 @@ export class Hand {
 	update(deltaTime: number): void {
 		const deltaMs = (deltaTime / 60) * 1000;
 
+		const targetY =
+			this.isHovered || this.forceRevealed || this.manuallyToggled
+				? REVEALED_Y_OFFSET
+				: HIDDEN_Y_OFFSET;
+		const easeT = Math.min(1, deltaMs / HOVER_EASE_MS);
+		this.fanContainer.y += (targetY - this.fanContainer.y) * easeT;
+
 		if (this.caret.visible) {
 			this.caretElapsedMs += deltaMs;
 			const bob =
 				Math.sin(this.caretElapsedMs * CARET_PULSE_SPEED) * CARET_PULSE_RANGE;
 			this.positionCaret(bob);
 		}
-
-		if (this.overlayTimerMs > 0) {
-			this.overlayTimerMs -= deltaMs;
-			if (this.overlayTimerMs <= 0) {
-				this.overlayBg.visible = false;
-				this.overlayText.visible = false;
-			}
-		}
 	}
 
-	/** Bottom-left of the screen — no longer anchored to CharacterPanel. */
+	/** Bottom-right of the screen. */
 	resize(screenWidth: number, screenHeight: number): void {
-		this.view.x = 200;
-		this.view.y = screenHeight - 70;
+		// Pivot far enough right that the leftmost card still has a visible gap
+		// from the screen edge (and from the bottom-left UI cluster).
+		this.view.x = 100;
+		this.view.y = screenHeight;
 		void screenWidth;
 		this.layoutCards();
 	}
@@ -195,10 +200,14 @@ export class Hand {
 
 	// ---------- private ----------
 
+	/** Tap-to-toggle — only outside selection mode, so it never fights with an active play decision. */
+	private handleHitAreaTap(): void {
+		if (this.selecting) return;
+		this.manuallyToggled = !this.manuallyToggled;
+	}
+
 	private isSelectable(card: Card): boolean {
-		const data = card.getData();
-		if (data.id === SKIP_CARD_ID) return true;
-		return this.selectableFilter(data);
+		return this.selectableFilter(card.getData());
 	}
 
 	private handlePointerOverCard(card: Card): void {
@@ -258,11 +267,7 @@ export class Hand {
 		}
 	};
 
-	/**
-	 * Hands the card off to PlayZone for the grow-slam-vanish sequence,
-	 * regardless of how confirmation happened — click, Enter, or drag all
-	 * play out the same way in the same place.
-	 */
+	/** Hands the card off to PlayZone for the slam sequence, regardless of trigger method. */
 	private async playCard(card: Card): Promise<void> {
 		if (this.resolved) return;
 		this.resolved = true;
@@ -276,6 +281,14 @@ export class Hand {
 		this.exitSelectionMode();
 	}
 
+	/** "No Card" clicked on PlayZone's own button — resolves instantly, no card, no slam. */
+	private resolveNoCard(): void {
+		if (!this.selecting || this.resolved) return;
+		this.resolved = true;
+		this.onCardConfirmed?.(this.buildSkipCardData());
+		this.exitSelectionMode();
+	}
+
 	private applyHighlight(): void {
 		this.cards.forEach((card, i) =>
 			card.setHighlighted(i === this.highlightedIndex),
@@ -283,25 +296,29 @@ export class Hand {
 		this.layoutCards();
 	}
 
+	/** Cascaded layout — each card offset by CARD_STEP, no rotation. Highlighted card lifts straight up. */
 	private layoutCards(): void {
-		const n = this.cards.length;
-		if (n === 0) return;
-
-		const cardWidth = CARD_WIDTH * HAND_CARD_SCALE;
-		const step = cardWidth + CARD_GAP;
-
 		this.cards.forEach((card, i) => {
 			if (card === this.draggingCard) return;
 
 			const isHighlighted = i === this.highlightedIndex && this.selecting;
 			card.view.rotation = 0;
-			card.view.x = i * step;
+			card.view.x = i * CARD_STEP;
 			card.view.y = isHighlighted ? -HIGHLIGHT_LIFT : 0;
-			if (!this.resolved) card.view.scale.set(HAND_CARD_SCALE);
 			card.view.alpha = 1;
+			card.view.scale.set(1);
 		});
 
 		if (this.selecting) this.positionCaret(0);
+	}
+
+	/** Invisible rect covering the cascaded row's rough footprint, for tap-to-toggle. */
+	private redrawHitArea(): void {
+		this.hitArea.clear();
+		const n = Math.max(1, this.cards.length);
+		const width = CARD_WIDTH + (n - 1) * CARD_STEP;
+		this.hitArea.rect(0, -CARD_HEIGHT, width, CARD_HEIGHT);
+		this.hitArea.fill({ color: 0x000000, alpha: 0.001 }); // invisible but still hit-testable
 	}
 
 	private buildCaret(): void {
@@ -316,12 +333,7 @@ export class Hand {
 			return;
 		const card = this.cards[this.highlightedIndex];
 		this.caret.x = card.view.x;
-		this.caret.y =
-			card.view.y -
-			CARD_HEIGHT * HAND_CARD_SCALE -
-			CARET_GAP -
-			HIGHLIGHT_LIFT +
-			bob;
+		this.caret.y = card.view.y - CARD_HEIGHT - CARET_GAP - HIGHLIGHT_LIFT + bob;
 	}
 
 	private buildSkipCardData(): CardData {

@@ -1,10 +1,12 @@
 import { Container, Graphics, Text } from "pixi.js";
-import { Card, CARD_HEIGHT } from "@/entities/Card";
+import { Card, CARD_WIDTH, CARD_HEIGHT } from "@/entities/Card";
 import type { CardData } from "@relic-hunter/shared";
 
-const ZONE_WIDTH = 160;
-const ZONE_HEIGHT = 120;
-const RESTING_SCALE = 0.65; // matches Hand's own card scale — kept in sync manually for now
+const ZONE_PADDING = 10;
+const ZONE_WIDTH = CARD_WIDTH + ZONE_PADDING * 2;
+const ZONE_HEIGHT = CARD_HEIGHT + ZONE_PADDING * 2;
+const NO_CARD_BTN_HEIGHT = 32;
+const NO_CARD_BTN_GAP = 10;
 
 const SLAM_GROW_MS = 120;
 const SLAM_IMPACT_MS = 90;
@@ -13,11 +15,10 @@ const SLAM_SCALE = 1.35;
 const OVERLAY_DURATION_MS = 1500;
 
 /**
- * Independent center-screen entity that owns the "play a card" moment.
- * Anything holding a Card instance can hand it off here — it re-parents
- * the card (preserving its current screen position, no visual jump),
- * runs grow → slam-to-center → vanish, then releases it. Decoupled from
- * Hand entirely; Hand is just one caller among possibly several later.
+ * The "play a card" moment, sized to match a real card. Only visible
+ * while a play decision is active — Hand calls show()/hide() around its
+ * own enter/exitSelectionMode, not a real Overlay (that would block the
+ * drag itself). Also owns the "No Card" button, directly below the zone.
  * @author ShaAnder
  */
 export class PlayZone {
@@ -25,9 +26,13 @@ export class PlayZone {
 
 	private zoneBg = new Graphics();
 	private zoneLabel: Text;
+	private noCardBtn = new Graphics();
+	private noCardLabel: Text;
 	private overlayBg = new Graphics();
 	private overlayText: Text;
 	private overlayTimerMs = 0;
+
+	private onNoCard: (() => void) | null = null;
 
 	constructor() {
 		this.zoneBg.roundRect(
@@ -49,6 +54,30 @@ export class PlayZone {
 		this.zoneLabel.alpha = 0.5;
 		this.view.addChild(this.zoneLabel);
 
+		this.noCardBtn.roundRect(
+			-ZONE_WIDTH / 2,
+			ZONE_HEIGHT / 2 + NO_CARD_BTN_GAP,
+			ZONE_WIDTH,
+			NO_CARD_BTN_HEIGHT,
+			6,
+		);
+		this.noCardBtn.fill(0x2a2a2a);
+		this.noCardBtn.stroke({ width: 1, color: 0x666666 });
+		this.noCardBtn.eventMode = "static";
+		this.noCardBtn.cursor = "pointer";
+		this.noCardBtn.on("pointerdown", () => this.onNoCard?.());
+		this.view.addChild(this.noCardBtn);
+
+		this.noCardLabel = new Text({
+			text: "No Card",
+			style: { fill: 0xcccccc, fontSize: 12 },
+		});
+		this.noCardLabel.anchor.set(0.5);
+		this.noCardLabel.x = 0;
+		this.noCardLabel.y =
+			ZONE_HEIGHT / 2 + NO_CARD_BTN_GAP + NO_CARD_BTN_HEIGHT / 2;
+		this.view.addChild(this.noCardLabel);
+
 		this.overlayText = new Text({
 			text: "",
 			style: { fill: 0xffffff, fontSize: 13, align: "center" },
@@ -59,15 +88,30 @@ export class PlayZone {
 		this.view.addChild(this.overlayText);
 		this.overlayBg.visible = false;
 		this.overlayText.visible = false;
+
+		this.view.visible = false;
 	}
 
-	/** Centers the zone on screen. */
-	layout(screenWidth: number, screenHeight: number): void {
-		this.view.x = screenWidth / 2;
-		this.view.y = screenHeight / 2;
+	/** Registers what fires when "No Card" is clicked — set once by whoever owns this zone. */
+	setNoCardHandler(handler: () => void): void {
+		this.onNoCard = handler;
 	}
 
-	/** True if the given GLOBAL (screen) point is inside the zone's bounds. */
+	show(): void {
+		this.view.visible = true;
+	}
+
+	hide(): void {
+		this.view.visible = false;
+	}
+
+	/** Centers the zone on screen (or wherever the caller wants it, per context). */
+	layout(x: number, y: number): void {
+		this.view.x = x;
+		this.view.y = y;
+	}
+
+	/** True if the given GLOBAL (screen) point is inside the card-drop area (not the No Card button). */
 	containsGlobalPoint(globalX: number, globalY: number): boolean {
 		const local = this.view.toLocal({ x: globalX, y: globalY });
 		return (
@@ -91,7 +135,7 @@ export class PlayZone {
 	 * Takes ownership of `card`'s view: re-parents it here at its current
 	 * screen position (no visual jump), then runs grow → slam → vanish.
 	 * Resolves once vanished — caller still owns removing the card from
-	 * real hand data, this only handles the visual moment.
+	 * real hand data.
 	 */
 	async playCard(card: Card, data: CardData): Promise<void> {
 		this.showOverlay(data);
@@ -107,8 +151,7 @@ export class PlayZone {
 		const startY = localPos.y;
 
 		await this.tween(SLAM_GROW_MS, (t) => {
-			const s = RESTING_SCALE + (SLAM_SCALE - RESTING_SCALE) * t;
-			card.view.scale.set(s);
+			card.view.scale.set(1 + (SLAM_SCALE - 1) * t);
 		});
 
 		await this.tween(SLAM_IMPACT_MS, (t) => {
