@@ -2,23 +2,21 @@ import { Container, Graphics, Text } from "pixi.js";
 import { Card, CARD_WIDTH, CARD_HEIGHT } from "@/entities/Card";
 import type { CardData } from "@relic-hunter/shared";
 
-const ZONE_PADDING = 10;
-const ZONE_WIDTH = CARD_WIDTH + ZONE_PADDING * 2;
-const ZONE_HEIGHT = CARD_HEIGHT + ZONE_PADDING * 2;
-const NO_CARD_BTN_HEIGHT = 32;
-const NO_CARD_BTN_GAP = 10;
+// Wide drop strip — ~4× a single card, slightly taller
+const ZONE_WIDTH = CARD_WIDTH * 4 + 48;
+const ZONE_HEIGHT = CARD_HEIGHT + 56;
+const SKIP_BTN_W = 120;
+const SKIP_BTN_H = 32;
+const SKIP_GAP = 14;
 
-const SLAM_GROW_MS = 120;
-const SLAM_IMPACT_MS = 90;
-const SLAM_VANISH_MS = 140;
-const SLAM_SCALE = 1.35;
-const OVERLAY_DURATION_MS = 1500;
+const SNAP_MS = 140;
+const HOLD_MS = 1000;
+const FADE_MS = 220;
 
 /**
- * The "play a card" moment, sized to match a real card. Only visible
- * while a play decision is active — Hand calls show()/hide() around its
- * own enter/exitSelectionMode, not a real Overlay (that would block the
- * drag itself). Also owns the "No Card" button, directly below the zone.
+ * Screen-centre drop strip for card plays. Wide grey zone with a
+ * "Play Cards" label; receives a dragged card, snaps it into place,
+ * holds briefly, then fades it out. "Skip Card »" below plays with no card.
  * @author ShaAnder
  */
 export class PlayZone {
@@ -28,9 +26,6 @@ export class PlayZone {
 	private zoneLabel: Text;
 	private noCardBtn = new Graphics();
 	private noCardLabel: Text;
-	private overlayBg = new Graphics();
-	private overlayText: Text;
-	private overlayTimerMs = 0;
 
 	private onNoCard: (() => void) | null = null;
 
@@ -40,78 +35,73 @@ export class PlayZone {
 			-ZONE_HEIGHT / 2,
 			ZONE_WIDTH,
 			ZONE_HEIGHT,
-			12,
+			16,
 		);
-		this.zoneBg.fill({ color: 0xffffff, alpha: 0.06 });
-		this.zoneBg.stroke({ width: 2, color: 0xffd700, alpha: 0.5 });
+		this.zoneBg.fill({ color: 0x2a2a2a, alpha: 0.5 });
+		this.zoneBg.stroke({ width: 2, color: 0x777777, alpha: 0.65 });
 		this.view.addChild(this.zoneBg);
 
 		this.zoneLabel = new Text({
-			text: "Play",
-			style: { fill: 0xffffff, fontSize: 13, fontWeight: "bold" },
+			text: "Play Cards",
+			style: {
+				fill: 0xbbbbbb,
+				fontSize: 20,
+				fontWeight: "bold",
+				letterSpacing: 1.5,
+			},
 		});
 		this.zoneLabel.anchor.set(0.5);
 		this.zoneLabel.alpha = 0.5;
 		this.view.addChild(this.zoneLabel);
 
-		this.noCardBtn.roundRect(
-			-ZONE_WIDTH / 2,
-			ZONE_HEIGHT / 2 + NO_CARD_BTN_GAP,
-			ZONE_WIDTH,
-			NO_CARD_BTN_HEIGHT,
-			6,
-		);
-		this.noCardBtn.fill(0x2a2a2a);
-		this.noCardBtn.stroke({ width: 1, color: 0x666666 });
+		this.noCardLabel = new Text({
+			text: "Skip Card  »",
+			style: {
+				fill: 0xcccccc,
+				fontSize: 13,
+				fontWeight: "bold",
+				letterSpacing: 0.5,
+			},
+		});
+		this.noCardLabel.anchor.set(0.5);
+
+		this.drawSkipButton(false);
+		this.noCardBtn.y = ZONE_HEIGHT / 2 + SKIP_GAP + SKIP_BTN_H / 2;
+		this.noCardLabel.y = this.noCardBtn.y;
+
 		this.noCardBtn.eventMode = "static";
 		this.noCardBtn.cursor = "pointer";
 		this.noCardBtn.on("pointerdown", () => this.onNoCard?.());
+		this.noCardBtn.on("pointerover", () => this.drawSkipButton(true));
+		this.noCardBtn.on("pointerout", () => this.drawSkipButton(false));
+
 		this.view.addChild(this.noCardBtn);
-
-		this.noCardLabel = new Text({
-			text: "No Card",
-			style: { fill: 0xcccccc, fontSize: 12 },
-		});
-		this.noCardLabel.anchor.set(0.5);
-		this.noCardLabel.x = 0;
-		this.noCardLabel.y =
-			ZONE_HEIGHT / 2 + NO_CARD_BTN_GAP + NO_CARD_BTN_HEIGHT / 2;
 		this.view.addChild(this.noCardLabel);
-
-		this.overlayText = new Text({
-			text: "",
-			style: { fill: 0xffffff, fontSize: 13, align: "center" },
-		});
-		this.overlayText.anchor.set(0.5, 1);
-		this.overlayText.y = -ZONE_HEIGHT / 2 - 16;
-		this.view.addChild(this.overlayBg);
-		this.view.addChild(this.overlayText);
-		this.overlayBg.visible = false;
-		this.overlayText.visible = false;
 
 		this.view.visible = false;
 	}
 
-	/** Registers what fires when "No Card" is clicked — set once by whoever owns this zone. */
+	/** Registers the skip-button handler — set once by Hand. */
 	setNoCardHandler(handler: () => void): void {
 		this.onNoCard = handler;
 	}
 
 	show(): void {
 		this.view.visible = true;
+		this.zoneLabel.visible = true;
 	}
 
 	hide(): void {
 		this.view.visible = false;
 	}
 
-	/** Centers the zone on screen (or wherever the caller wants it, per context). */
+	/** Centre of the screen (or any caller-chosen point). */
 	layout(x: number, y: number): void {
 		this.view.x = x;
 		this.view.y = y;
 	}
 
-	/** True if the given GLOBAL (screen) point is inside the card-drop area (not the No Card button). */
+	/** True if the global point is inside the grey strip (not the skip button). */
 	containsGlobalPoint(globalX: number, globalY: number): boolean {
 		const local = this.view.toLocal({ x: globalX, y: globalY });
 		return (
@@ -120,70 +110,77 @@ export class PlayZone {
 		);
 	}
 
-	update(deltaTime: number): void {
-		const deltaMs = (deltaTime / 60) * 1000;
-		if (this.overlayTimerMs > 0) {
-			this.overlayTimerMs -= deltaMs;
-			if (this.overlayTimerMs <= 0) {
-				this.overlayBg.visible = false;
-				this.overlayText.visible = false;
-			}
-		}
-	}
-
 	/**
-	 * Takes ownership of `card`'s view: re-parents it here at its current
-	 * screen position (no visual jump), then runs grow → slam → vanish.
-	 * Resolves once vanished — caller still owns removing the card from
-	 * real hand data.
+	 * Takes ownership of the dragged card, snaps it to zone centre,
+	 * holds for a beat, then fades it out.
+	 * @param card - visual card token still living on the stage
+	 * @param data - card data (reserved for future overlay use)
 	 */
 	async playCard(card: Card, data: CardData): Promise<void> {
-		this.showOverlay(data);
+		void data;
 
 		const globalPos = card.view.getGlobalPosition();
 		card.view.removeFromParent();
 		this.view.addChild(card.view);
+
 		const localPos = this.view.toLocal(globalPos);
 		card.view.x = localPos.x;
 		card.view.y = localPos.y;
+		card.view.scale.set(1);
+		card.view.alpha = 1;
+		card.view.rotation = 0;
 
-		const startX = localPos.x;
-		const startY = localPos.y;
+		this.zoneLabel.visible = false;
 
-		await this.tween(SLAM_GROW_MS, (t) => {
-			card.view.scale.set(1 + (SLAM_SCALE - 1) * t);
+		const startX = card.view.x;
+		const startY = card.view.y;
+		// Pivot is bottom-centre — offset so the card sits visually centred
+		const endX = 0;
+		const endY = CARD_HEIGHT / 2;
+
+		await this.tween(SNAP_MS, (t) => {
+			const e = easeOutCubic(t);
+			card.view.x = startX + (endX - startX) * e;
+			card.view.y = startY + (endY - startY) * e;
+			card.view.scale.set(1 + 0.06 * (1 - e));
 		});
 
-		await this.tween(SLAM_IMPACT_MS, (t) => {
-			card.view.x = startX * (1 - t);
-			card.view.y = startY * (1 - t) - CARD_HEIGHT * 0.1 * (1 - t);
-		});
+		card.view.x = endX;
+		card.view.y = endY;
+		card.view.scale.set(1);
 
-		await this.tween(SLAM_VANISH_MS, (t) => {
+		await this.wait(HOLD_MS);
+
+		await this.tween(FADE_MS, (t) => {
 			card.view.alpha = 1 - t;
-			card.view.scale.set(SLAM_SCALE * (1 - t * 0.3));
+			card.view.scale.set(1 - 0.15 * t);
 		});
 
 		card.view.removeFromParent();
+		this.zoneLabel.visible = true;
 	}
 
-	private showOverlay(data: CardData): void {
-		this.overlayText.text = `${data.name}\n${data.description}`;
-		this.overlayText.visible = true;
-
-		const bounds = this.overlayText.getLocalBounds();
-		this.overlayBg.clear();
-		this.overlayBg.roundRect(
-			this.overlayText.x - bounds.width / 2 - 10,
-			this.overlayText.y - bounds.height - 6,
-			bounds.width + 20,
-			bounds.height + 12,
-			6,
+	/** Pill button. Hover brightens fill, stroke, and label. */
+	private drawSkipButton(hovered: boolean): void {
+		this.noCardBtn.clear();
+		this.noCardBtn.roundRect(
+			-SKIP_BTN_W / 2,
+			-SKIP_BTN_H / 2,
+			SKIP_BTN_W,
+			SKIP_BTN_H,
+			8,
 		);
-		this.overlayBg.fill({ color: 0x000000, alpha: 0.75 });
-		this.overlayBg.visible = true;
+		this.noCardBtn.fill({ color: hovered ? 0x333333 : 0x1a1a1a, alpha: 0.9 });
+		this.noCardBtn.stroke({
+			width: 1.5,
+			color: hovered ? 0xffffff : 0x777777,
+			alpha: hovered ? 0.85 : 0.55,
+		});
+		this.noCardLabel.style.fill = hovered ? 0xffffff : 0xcccccc;
+	}
 
-		this.overlayTimerMs = OVERLAY_DURATION_MS;
+	private wait(ms: number): Promise<void> {
+		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
 
 	private tween(ms: number, onStep: (t: number) => void): Promise<void> {
@@ -198,4 +195,8 @@ export class PlayZone {
 			requestAnimationFrame(frame);
 		});
 	}
+}
+
+function easeOutCubic(t: number): number {
+	return 1 - Math.pow(1 - t, 3);
 }

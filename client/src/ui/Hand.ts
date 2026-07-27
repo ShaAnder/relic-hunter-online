@@ -226,12 +226,22 @@ export class Hand {
 		if (!this.selecting || !this.isSelectable(card)) return;
 
 		this.draggingCard = card;
-		const localPos = this.fanContainer.toLocal(event.global);
-		this.dragOffset = {
-			x: card.view.x - localPos.x,
-			y: card.view.y - localPos.y,
-		};
 		this.lastDragGlobal = { x: event.global.x, y: event.global.y };
+
+		// Lift the card out of the hand so it renders above the map + HUD.
+		const globalPos = card.view.getGlobalPosition();
+		card.view.removeFromParent();
+		this.stage.addChild(card.view);
+		card.view.x = globalPos.x;
+		card.view.y = globalPos.y;
+		card.view.scale.set(1.08);
+		card.view.alpha = 0.95;
+
+		// Offset from the card's current screen position so the grab point stays under the cursor.
+		this.dragOffset = {
+			x: globalPos.x - event.global.x,
+			y: globalPos.y - event.global.y,
+		};
 
 		this.stage.on("pointermove", this.onDragMove);
 		this.stage.on("pointerup", this.onDragEnd);
@@ -240,10 +250,16 @@ export class Hand {
 
 	private onDragMove = (event: FederatedPointerEvent): void => {
 		if (!this.draggingCard) return;
-		const localPos = this.fanContainer.toLocal(event.global);
-		this.draggingCard.view.x = localPos.x + this.dragOffset.x;
-		this.draggingCard.view.y = localPos.y + this.dragOffset.y;
+
+		this.draggingCard.view.x = event.global.x + this.dragOffset.x;
+		this.draggingCard.view.y = event.global.y + this.dragOffset.y;
 		this.lastDragGlobal = { x: event.global.x, y: event.global.y };
+
+		const over = this.playZone.containsGlobalPoint(
+			event.global.x,
+			event.global.y,
+		);
+		this.draggingCard.view.scale.set(over ? 1.18 : 1.08);
 	};
 
 	private onDragEnd = (): void => {
@@ -261,9 +277,16 @@ export class Hand {
 				this.lastDragGlobal.y,
 			)
 		) {
+			// Zone already owns the slam sequence; card is still on the stage —
+			// playCard will reparent it into the PlayZone view.
 			void this.playCard(card);
 		} else {
-			this.layoutCards(); // snaps back to its resting slot
+			// Miss: put the card back into the cascade at its resting slot.
+			card.view.scale.set(1);
+			card.view.alpha = 1;
+			card.view.removeFromParent();
+			this.fanContainer.addChild(card.view);
+			this.layoutCards();
 		}
 	};
 

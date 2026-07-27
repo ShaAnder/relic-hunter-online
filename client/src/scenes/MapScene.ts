@@ -239,6 +239,10 @@ export class MapScene implements Scene {
 		);
 		this.view.addChild(this.hand.view);
 
+		// Required so drag keeps tracking after the pointer leaves the card sprite
+		this.game.app.stage.eventMode = "static";
+		this.game.app.stage.hitArea = this.game.app.screen;
+
 		// TurnManager fires syncUI on every state change. The shared deck
 		// is lazily built here (??=) so a direct MapScene boot without
 		// LoadingOverlay having run still works — and once built, the
@@ -367,6 +371,7 @@ export class MapScene implements Scene {
 	/** Reposition UI on window resize. */
 	onResize(_width: number): void {
 		this.layoutHud();
+		this.game.app.stage.hitArea = this.game.app.screen;
 	}
 
 	// ---------- Camera ----------
@@ -401,7 +406,8 @@ export class MapScene implements Scene {
 		);
 		this.deckTracker.layout(w);
 		this.hand.resize(w, h);
-		this.playZone.layout(w, h);
+		this.game.app.stage.hitArea = this.game.app.screen;
+		this.playZone.layout(w / 2, h / 2);
 	}
 
 	// ---------- Move ----------
@@ -451,6 +457,18 @@ export class MapScene implements Scene {
 		this.checkWinCondition();
 
 		this.syncUI();
+	}
+
+	/** Hide player controls while AI resolves overworld turns. */
+	private setPlayerControlsVisible(visible: boolean): void {
+		this.hand.view.visible = visible;
+		this.buttonBar.view.visible = visible;
+		if (!visible) {
+			this.hand.exitSelectionMode();
+			this.buttonBar.closeMenu();
+			this.buttonBar.setMoveActive(false);
+			this.moveController.exit();
+		}
 	}
 
 	// ---------- Chests & Items ----------
@@ -579,6 +597,7 @@ export class MapScene implements Scene {
 
 	private async processEnemyTurns(): Promise<void> {
 		this.processingEnemyTurns = true;
+		this.setPlayerControlsVisible(false);
 
 		const sharedDeck = (this.game.session.sharedDeck ??= buildSharedDeck());
 
@@ -599,13 +618,13 @@ export class MapScene implements Scene {
 		}
 
 		this.processingEnemyTurns = false;
+		this.setPlayerControlsVisible(true);
 
 		this.camera.centerOn(
 			{ x: this.mercenary.view.x, y: this.mercenary.view.y },
 			this.game.app.screen.width,
 			this.game.app.screen.height,
 		);
-
 		this.syncUI();
 	}
 
@@ -1229,12 +1248,14 @@ export class MapScene implements Scene {
 	/** Delegate all click routing to ButtonBar, then switch on the returned action. */
 	private handleClick = (event: MouseEvent): void => {
 		if (this.game.overlays.isOpen) return;
+		if (this.processingEnemyTurns) return;
 
 		const { screenX, screenY } = this.getScreenPoint(event);
 		const action = this.buttonBar.handleClick(screenX, screenY);
 
 		if (this.bagButton.hitTest(screenX, screenY)) {
 			this.inventoryPanel.toggle();
+
 			return;
 		}
 
