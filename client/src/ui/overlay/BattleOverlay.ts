@@ -35,28 +35,13 @@ const ACTION_LABELS: Record<CombatAction, string> = {
 };
 
 const RESULT_LINGER_MS = 2200;
-const ARENA_COLS = 15;
-const ARENA_ROWS = 7;
-const MID_ROW = Math.floor(ARENA_ROWS / 2);
 
-/** Long ends of the landscape arena — never top/bottom short ends. */
-const ATTACKER_TILE = { x: ARENA_COLS - 2, y: MID_ROW };
-const DEFENDER_TILE = { x: 1, y: MID_ROW };
-
-/**
- * Horizontal mirror only. Attacker stays on the local right seat; scale.x = -1
- * flips the whole field so they appear on the left when the map says so.
- */
-function shouldMirrorX(
-	attackerCoord: { x: number; y: number },
-	defenderCoord: { x: number; y: number },
-): boolean {
-	let dx = attackerCoord.x - defenderCoord.x;
-	let dy = attackerCoord.y - defenderCoord.y;
-	if (dx === 0 && dy === 0) dx = 1;
-	const toward = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
-	return toward < 0;
-}
+// Two base shapes — long axis always matches the fight's dominant real
+// direction. East/west fights get landscape, north/south get portrait.
+const LANDSCAPE_COLS = 15;
+const LANDSCAPE_ROWS = 7;
+const PORTRAIT_COLS = 7;
+const PORTRAIT_ROWS = 15;
 
 export type LocalHumanRole = "attacker" | "defender" | "none";
 
@@ -66,7 +51,11 @@ export interface BattleResult {
 }
 
 /**
- * Landscape iso arena. Horizontal mirror only (scale.x), never rotation.
+ * Iso arena. Orientation and slot assignment both follow the real map
+ * direction the fight is happening along — north/south-dominant fights
+ * render portrait, east/west render landscape; whoever is south/west
+ * gets the near/bottom slot, north/east gets the far/top slot. Grid
+ * convention: y = north(-)/south(+), x = west(-)/east(+).
  * @author ShaAnder
  */
 export class BattleOverlay implements Overlay {
@@ -95,7 +84,13 @@ export class BattleOverlay implements Overlay {
 	private pendingAction: CombatAction | null = null;
 
 	private resolved = false;
-	private mirrorX = false;
+
+	// Computed once in the constructor from the real map positions
+	private arenaCols: number;
+	private arenaRows: number;
+	private nearTile: { x: number; y: number };
+	private farTile: { x: number; y: number };
+	private attackerNear: boolean;
 
 	constructor(
 		private game: Game,
@@ -115,7 +110,39 @@ export class BattleOverlay implements Overlay {
 		this.localHand = new Hand(this.game.app.stage, this.localPlayZone, (card) =>
 			this.onHandCardConfirmed(card),
 		);
-		this.mirrorX = shouldMirrorX(attackerMapCoord, defenderMapCoord);
+
+		// Orientation still comes from the raw grid axis dominance — that's
+		// a gameplay question (is this fight "reading" north-south or
+		// east-west), unaffected by iso screen quirks.
+		const dx = attackerMapCoord.x - defenderMapCoord.x;
+		const dy = attackerMapCoord.y - defenderMapCoord.y;
+		const isNorthSouth = Math.abs(dy) >= Math.abs(dx);
+
+		// But WHICH side each combatant renders on has to match what the
+		// player actually saw on the overworld screen — comparing raw grid
+		// coordinates isn't the same thing under this iso projection, since
+		// screenX depends on x AND y together, not x alone. Run the exact
+		// same projection the overworld map uses and compare THAT.
+		const attackerScreen = gridToScreen(attackerMapCoord);
+		const defenderScreen = gridToScreen(defenderMapCoord);
+
+		if (isNorthSouth) {
+			this.arenaCols = PORTRAIT_COLS;
+			this.arenaRows = PORTRAIT_ROWS;
+			const midCol = Math.floor(this.arenaCols / 2);
+			this.nearTile = { x: midCol, y: this.arenaRows - 2 };
+			this.farTile = { x: midCol, y: 1 };
+			// near = renders lower on screen
+			this.attackerNear = attackerScreen.y >= defenderScreen.y;
+		} else {
+			this.arenaCols = LANDSCAPE_COLS;
+			this.arenaRows = LANDSCAPE_ROWS;
+			const midRow = Math.floor(this.arenaRows / 2);
+			this.nearTile = { x: this.arenaCols - 2, y: midRow };
+			this.farTile = { x: 1, y: midRow };
+			// near = renders right on screen
+			this.attackerNear = attackerScreen.x >= defenderScreen.x;
+		}
 	}
 
 	onShow(): void {
@@ -134,6 +161,14 @@ export class BattleOverlay implements Overlay {
 
 	onResize(width: number, height: number): void {
 		this.layout(width, height);
+	}
+
+	private attackerTile(): { x: number; y: number } {
+		return this.attackerNear ? this.nearTile : this.farTile;
+	}
+
+	private defenderTile(): { x: number; y: number } {
+		return this.attackerNear ? this.farTile : this.nearTile;
 	}
 
 	private async runAutoFight(): Promise<void> {
@@ -169,12 +204,12 @@ export class BattleOverlay implements Overlay {
 			this.buildDefenderIndicator();
 		} else if (this.localHumanRole === "attacker") {
 			this.buildDefenderIndicator();
-			this.buildActionSelector(ATTACKER_TILE);
+			this.buildActionSelector(this.attackerTile());
 			this.view.addChild(this.localHand.view);
 			this.localHand.syncFromHand(this.attackerState.hand);
 		} else {
 			this.buildAttackerIndicator();
-			this.buildActionSelector(DEFENDER_TILE);
+			this.buildActionSelector(this.defenderTile());
 			this.view.addChild(this.localHand.view);
 			this.localHand.syncFromHand(this.defenderState.hand);
 		}
@@ -196,15 +231,15 @@ export class BattleOverlay implements Overlay {
 
 	private arenaGridToScreen(gx: number, gy: number): { x: number; y: number } {
 		return gridToScreen({
-			x: gx - (ARENA_COLS - 1) / 2,
-			y: gy - (ARENA_ROWS - 1) / 2,
+			x: gx - (this.arenaCols - 1) / 2,
+			y: gy - (this.arenaRows - 1) / 2,
 		});
 	}
 
 	private buildArenaGrid(): void {
 		const tileLayer = new Container();
-		for (let gx = 0; gx < ARENA_COLS; gx++) {
-			for (let gy = 0; gy < ARENA_ROWS; gy++) {
+		for (let gx = 0; gx < this.arenaCols; gx++) {
+			for (let gy = 0; gy < this.arenaRows; gy++) {
 				const pos = this.arenaGridToScreen(gx, gy);
 				const tile = new Graphics();
 				tile.poly([
@@ -229,8 +264,8 @@ export class BattleOverlay implements Overlay {
 
 	private buildCombatantTokens(): void {
 		const attackerPos = this.arenaGridToScreen(
-			ATTACKER_TILE.x,
-			ATTACKER_TILE.y,
+			this.attackerTile().x,
+			this.attackerTile().y,
 		);
 		const attackerToken = new Graphics();
 		attackerToken.circle(0, 0, 20);
@@ -240,8 +275,8 @@ export class BattleOverlay implements Overlay {
 		this.arena.addChild(attackerToken);
 
 		const defenderPos = this.arenaGridToScreen(
-			DEFENDER_TILE.x,
-			DEFENDER_TILE.y,
+			this.defenderTile().x,
+			this.defenderTile().y,
 		);
 		const defenderToken = new Graphics();
 		defenderToken.circle(0, 0, 20);
@@ -350,7 +385,10 @@ export class BattleOverlay implements Overlay {
 	}
 
 	private buildAttackerIndicator(): void {
-		const pos = this.arenaGridToScreen(ATTACKER_TILE.x, ATTACKER_TILE.y);
+		const pos = this.arenaGridToScreen(
+			this.attackerTile().x,
+			this.attackerTile().y,
+		);
 		this.attackerIndicator = new Text({
 			text: "?",
 			style: { fill: 0xffffff, fontSize: 24, fontWeight: "bold" },
@@ -362,7 +400,10 @@ export class BattleOverlay implements Overlay {
 	}
 
 	private buildDefenderIndicator(): void {
-		const pos = this.arenaGridToScreen(DEFENDER_TILE.x, DEFENDER_TILE.y);
+		const pos = this.arenaGridToScreen(
+			this.defenderTile().x,
+			this.defenderTile().y,
+		);
 		this.defenderIndicator = new Text({
 			text: "?",
 			style: { fill: 0xffffff, fontSize: 24, fontWeight: "bold" },
@@ -587,19 +628,8 @@ export class BattleOverlay implements Overlay {
 
 		this.arena.x = width / 2;
 		this.arena.y = height / 2 - 30;
-
-		// Landscape only. Horizontal mirror only. Never rotate.
 		this.arena.rotation = 0;
-		this.arena.scale.x = this.mirrorX ? -1 : 1;
-		this.arena.scale.y = 1;
-
-		// Counter-scale so labels stay readable under the mirror
-		const fix = this.mirrorX ? -1 : 1;
-		this.localPlayZone.view.scale.x = fix;
-		if (this.roundText) this.roundText.scale.x = fix;
-		this.selectorContainer.scale.x = fix;
-		if (this.attackerIndicator) this.attackerIndicator.scale.x = fix;
-		if (this.defenderIndicator) this.defenderIndicator.scale.x = fix;
+		this.arena.scale.set(1, 1);
 
 		this.attackerPanel.x = 24;
 		this.attackerPanel.y = height - 124;
