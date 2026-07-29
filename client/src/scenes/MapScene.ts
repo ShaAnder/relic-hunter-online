@@ -331,6 +331,7 @@ export class MapScene implements Scene {
 		}
 		this.hand.update(deltaTime);
 		this.buttonBar.update(deltaTime);
+		this.inventoryPanel.update(deltaTime);
 
 		// Lock camera to the mercenary's VISUAL position while aiming,
 		// animating, selecting a card, targeting, OR mid-Exit-card-sequence.
@@ -540,14 +541,14 @@ export class MapScene implements Scene {
 		);
 		if (!placed) return;
 
-		if (this.mercState.items.length >= MAX_GENERAL_SLOTS) {
+		if (!this.mercState.items.some((i) => i === null)) {
 			this.showFeedback("🎒 Inventory full — chest left unopened");
 			return;
 		}
 
 		placed.entity.open();
-		this.mercState.items.push(placed.plan.item);
-		this.syncUI();
+		const emptyIndex = this.mercState.items.findIndex((i) => i === null);
+		this.mercState.items[emptyIndex] = placed.plan.item;
 
 		if (placed.plan.isTarget) {
 			this.showFeedback(
@@ -581,7 +582,7 @@ export class MapScene implements Scene {
 			coord: state.coord,
 			stats: state.stats,
 			currentHp: state.currentHp,
-			items: state.items,
+			items: state.items.filter((i): i is ItemData => i !== null),
 		};
 	}
 
@@ -764,10 +765,11 @@ export class MapScene implements Scene {
 			(c) => !c.entity.isOpen && c.coord.x === coord.x && c.coord.y === coord.y,
 		);
 		if (!placed) return;
-		if (enemy.state.items.length >= MAX_GENERAL_SLOTS) return;
+		if (!enemy.state.items.some((i) => i === null)) return;
 
 		placed.entity.open();
-		enemy.state.items.push(placed.plan.item);
+		const emptyIndex = enemy.state.items.findIndex((i) => i === null);
+		enemy.state.items[emptyIndex] = placed.plan.item;
 
 		if (placed.plan.isTarget) {
 			this.showFeedback("⚠️ An enemy hunter found the target item!");
@@ -940,7 +942,7 @@ export class MapScene implements Scene {
 	private isCarryingTarget(): boolean {
 		const target = this.game.session.chestPlan?.targetItem;
 		if (!target) return false;
-		return this.mercState.items.some((item) => item.id === target.id);
+		return this.mercState.items.some((item) => item?.id === target.id);
 	}
 
 	/** Record the match result and transition to MatchResultScene. */
@@ -948,7 +950,7 @@ export class MapScene implements Scene {
 		this.game.session.matchResult = {
 			won: true,
 			turnsTaken: this.turnsTaken,
-			itemsExtracted: this.mercState.items.length,
+			itemsExtracted: this.mercState.items.filter((i) => i !== null).length,
 		};
 		void this.game.sceneManager.changeScene(new MatchResultScene(this.game));
 	}

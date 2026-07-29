@@ -22,7 +22,7 @@ export interface MercenaryState {
 	currentHp: number;
 	/** Current effective max HP — normally equals stats.maxHp, but drops to a knockout ceiling after a defeat */
 	hpCeiling: number;
-	items: ItemData[];
+	items: (ItemData | null)[];
 	hand: CardData[];
 }
 
