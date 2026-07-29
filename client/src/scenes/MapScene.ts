@@ -59,6 +59,12 @@ import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
 import { BagButton } from "@/ui/buttons/BagButton";
 import { RadialActionWheel } from "@/ui/buttons/RadialActionWheel";
 import { PlayZone } from "@/ui/PlayZone";
+import {
+	createAiMemory,
+	recordFlee,
+	clearFleeMemory,
+} from "@relic-hunter/shared";
+import type { AiMemory } from "@relic-hunter/shared";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -72,6 +78,7 @@ interface EnemyEntity {
 	state: MercenaryState;
 	mercenary: Mercenary;
 	archetype: AiArchetype;
+	memory: AiMemory;
 }
 
 const MAX_GENERAL_SLOTS = 6;
@@ -718,6 +725,7 @@ export class MapScene implements Scene {
 				const sharedDeck = (this.game.session.sharedDeck ??= buildSharedDeck());
 				drawCardsInto(enemy.state.hand, sharedDeck, 2);
 				applyRestHeal(enemy.state);
+				clearFleeMemory(enemy.memory);
 				this.showFeedback(`💤 ${enemy.archetype} hunter rests`);
 			} else if (fallback === "retreat" && adjacentThreats.length > 0) {
 				const retreatBlocked = new Set(
@@ -729,14 +737,18 @@ export class MapScene implements Scene {
 					enemy.state.stats.movement,
 					retreatBlocked,
 				);
+				const retreatFrom = enemy.state.coord;
 				const retreatTile = pickRetreatTile(
 					retreatRange,
 					adjacentThreats[0].coord,
+					retreatFrom,
+					enemy.memory,
 				);
 				if (retreatTile) {
 					const retreatPath = getPathTo(retreatRange, retreatTile) ?? [];
 					if (retreatPath.length > 0) {
 						enemy.state.coord = retreatTile;
+						recordFlee(enemy.memory, retreatFrom, retreatTile);
 						await enemy.mercenary.moveAlongPath(retreatPath);
 					}
 				}
@@ -877,7 +889,12 @@ export class MapScene implements Scene {
 				MapScene.ENEMY_COLORS[i] ?? 0xe67e22,
 			);
 			this.mercenaryContainer.addChild(mercenary.view);
-			this.enemies.push({ state, mercenary, archetype });
+			this.enemies.push({
+				state,
+				mercenary,
+				archetype,
+				memory: createAiMemory(),
+			});
 		}
 	}
 

@@ -29,6 +29,8 @@ export class PlayZone {
 
 	private onNoCard: (() => void) | null = null;
 
+	private noCardHitZone = new Graphics();
+
 	constructor() {
 		this.zoneBg.roundRect(
 			-ZONE_WIDTH / 2,
@@ -65,17 +67,53 @@ export class PlayZone {
 		});
 		this.noCardLabel.anchor.set(0.5);
 
-		this.drawSkipButton(false);
+		// Static, single draw — no hover state, no redraw, nothing to ever
+		// disturb its hit area again.
+		this.noCardBtn.roundRect(
+			-SKIP_BTN_W / 2,
+			-SKIP_BTN_H / 2,
+			SKIP_BTN_W,
+			SKIP_BTN_H,
+			8,
+		);
+		this.noCardBtn.fill({ color: 0x1a1a1a, alpha: 0.9 });
+		this.noCardBtn.stroke({ width: 1.5, color: 0x777777, alpha: 0.55 });
 		this.noCardBtn.y = ZONE_HEIGHT / 2 + SKIP_GAP + SKIP_BTN_H / 2;
-		this.noCardLabel.y = this.noCardBtn.y;
-
-		this.noCardBtn.eventMode = "static";
-		this.noCardBtn.cursor = "pointer";
-		this.noCardBtn.on("pointerdown", () => this.onNoCard?.());
-		this.noCardBtn.on("pointerover", () => this.drawSkipButton(true));
-		this.noCardBtn.on("pointerout", () => this.drawSkipButton(false));
-
+		this.noCardBtn.eventMode = "none";
 		this.view.addChild(this.noCardBtn);
+
+		this.noCardLabel.y = this.noCardBtn.y;
+		this.noCardLabel.eventMode = "none";
+		this.view.addChild(this.noCardLabel);
+
+		// Added LAST — genuinely on top of everything else at this position,
+		// not relying on any other object's event mode to stay out of its way.
+		this.noCardHitZone.rect(
+			-SKIP_BTN_W / 2,
+			-SKIP_BTN_H / 2,
+			SKIP_BTN_W,
+			SKIP_BTN_H,
+		);
+		this.noCardHitZone.fill({ color: 0xffffff, alpha: 0.001 });
+		this.noCardHitZone.y = ZONE_HEIGHT / 2 + SKIP_GAP + SKIP_BTN_H / 2;
+		this.noCardHitZone.eventMode = "static";
+		this.noCardHitZone.cursor = "pointer";
+		this.noCardHitZone.on("pointerdown", () => this.onNoCard?.());
+		this.view.addChild(this.noCardHitZone);
+
+		this.noCardBtn.roundRect(
+			-SKIP_BTN_W / 2,
+			-SKIP_BTN_H / 2,
+			SKIP_BTN_W,
+			SKIP_BTN_H,
+			8,
+		);
+		this.noCardBtn.fill({ color: 0x1a1a1a, alpha: 0.9 });
+		this.noCardBtn.stroke({ width: 1.5, color: 0x777777, alpha: 0.55 });
+		this.noCardBtn.y = ZONE_HEIGHT / 2 + SKIP_GAP + SKIP_BTN_H / 2;
+		this.view.addChild(this.noCardBtn);
+
+		this.noCardLabel.y = this.noCardBtn.y;
 		this.view.addChild(this.noCardLabel);
 
 		this.view.visible = false;
@@ -163,25 +201,6 @@ export class PlayZone {
 
 		card.view.removeFromParent();
 		this.zoneLabel.visible = true;
-	}
-
-	/** Pill button. Hover brightens fill, stroke, and label. */
-	private drawSkipButton(hovered: boolean): void {
-		this.noCardBtn.clear();
-		this.noCardBtn.roundRect(
-			-SKIP_BTN_W / 2,
-			-SKIP_BTN_H / 2,
-			SKIP_BTN_W,
-			SKIP_BTN_H,
-			8,
-		);
-		this.noCardBtn.fill({ color: hovered ? 0x333333 : 0x1a1a1a, alpha: 0.9 });
-		this.noCardBtn.stroke({
-			width: 1.5,
-			color: hovered ? 0xffffff : 0x777777,
-			alpha: hovered ? 0.85 : 0.55,
-		});
-		this.noCardLabel.style.fill = hovered ? 0xffffff : 0xcccccc;
 	}
 
 	private wait(ms: number): Promise<void> {

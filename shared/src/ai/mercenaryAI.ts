@@ -4,6 +4,7 @@ import type { CardData } from "../game/card";
 import type { ItemData } from "../game/item";
 import type { CombatAction, CombatChoice } from "../game/combat";
 import type { GridCoord } from "../game/grid";
+import type { AiMemory } from "./aiMemory";
 
 /** Hostile hunter behavior profile */
 export type AiArchetype = "aggressive" | "treasure" | "balanced";
@@ -195,19 +196,45 @@ export function decideFallbackAction(
 	return "hold";
 }
 
-/** Reachable tile farthest (by real path distance) from `threat` — used for retreat movement. */
+/**
+ * Reachable tile that best escapes `threat`. Two-tier: first find the
+ * best achievable distance from the threat (the survival floor — never
+ * compromised, even if that means moving back the way it came). Only
+ * among tiles near that best distance does continuity (matching the
+ * last flee direction) break the tie.
+ */
 export function pickRetreatTile(
 	range: Map<string, MovementRangeEntry>,
 	threat: GridCoord,
+	selfCoord: GridCoord,
+	memory: AiMemory,
 ): GridCoord | null {
-	let best: GridCoord | null = null;
 	let bestDist = -Infinity;
+	for (const entry of range.values()) {
+		const dist =
+			Math.abs(entry.coord.x - threat.x) + Math.abs(entry.coord.y - threat.y);
+		if (dist > bestDist) bestDist = dist;
+	}
+
+	const DISTANCE_TOLERANCE = 1;
+	let best: GridCoord | null = null;
+	let bestContinuity = -Infinity;
 
 	for (const entry of range.values()) {
 		const dist =
 			Math.abs(entry.coord.x - threat.x) + Math.abs(entry.coord.y - threat.y);
-		if (dist > bestDist) {
-			bestDist = dist;
+		if (dist < bestDist - DISTANCE_TOLERANCE) continue;
+
+		let continuity = 0;
+		if (memory.lastFleeDirection) {
+			const moveX = entry.coord.x - selfCoord.x;
+			const moveY = entry.coord.y - selfCoord.y;
+			continuity =
+				moveX * memory.lastFleeDirection.x + moveY * memory.lastFleeDirection.y;
+		}
+
+		if (continuity > bestContinuity) {
+			bestContinuity = continuity;
 			best = entry.coord;
 		}
 	}

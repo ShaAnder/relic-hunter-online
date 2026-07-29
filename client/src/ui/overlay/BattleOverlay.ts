@@ -638,5 +638,6 @@ export class BattleOverlay implements Overlay {
 		this.defenderPanel.y = height - 124;
 
 		this.localHand.resize(width, height);
+		this.localHand.view.x = width / 2 - 100;
 	}
 }
