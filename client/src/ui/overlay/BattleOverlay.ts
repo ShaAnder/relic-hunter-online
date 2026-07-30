@@ -175,6 +175,8 @@ export class BattleOverlay implements Overlay {
 	update(deltaTime: number): void {
 		this.localHand.update(deltaTime);
 		this.localPlayZone.update(deltaTime);
+		this.winnerLootPanel.update(deltaTime);
+		this.loserLootPanel.update(deltaTime);
 	}
 
 	onResize(width: number, height: number): void {
@@ -265,7 +267,6 @@ export class BattleOverlay implements Overlay {
 	private buildLootConfirmPopup(): void {
 		this.lootConfirmBg.roundRect(-100, -50, 200, 100, 8);
 		this.lootConfirmBg.fill({ color: 0x111111, alpha: 0.97 });
-		this.lootConfirmBg.stroke({ width: 2, color: 0xffd700 });
 		this.lootConfirmPopup.addChild(this.lootConfirmBg);
 
 		this.lootConfirmText = new Text({
@@ -608,6 +609,8 @@ export class BattleOverlay implements Overlay {
 
 		this.winnerLootPanel.setMode("own");
 		this.loserLootPanel.setMode("lootable");
+		this.winnerLootPanel.setInspectAbovePanel(true);
+		this.loserLootPanel.setInspectAbovePanel(true);
 		this.winnerLootPanel.sync(winnerState.items);
 		this.loserLootPanel.sync(loserState.items);
 
@@ -619,9 +622,9 @@ export class BattleOverlay implements Overlay {
 			? this.defenderPanel
 			: this.attackerPanel;
 		this.winnerLootPanel.view.x = winnerPanel.x;
-		this.winnerLootPanel.view.y = winnerPanel.y - 150;
+		this.winnerLootPanel.view.y = winnerPanel.y - 240;
 		this.loserLootPanel.view.x = loserPanel.x;
-		this.loserLootPanel.view.y = loserPanel.y - 150;
+		this.loserLootPanel.view.y = loserPanel.y - 240;
 
 		this.winnerLootPanel.view.visible = true;
 		this.loserLootPanel.view.visible = true;

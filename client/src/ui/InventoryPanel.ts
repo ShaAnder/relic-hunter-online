@@ -57,6 +57,7 @@ export class InventoryPanel {
 	private inspectIcon = new Graphics();
 	private inspectName!: Text;
 	private inspectDesc!: Text;
+	private inspectAbove = false;
 
 	private mode: PanelMode = "own";
 	private onTake: ((index: number) => void) | null = null;
@@ -239,6 +240,11 @@ export class InventoryPanel {
 		return PANEL_W;
 	}
 
+	/** Overworld default is to the right; battle-overlay loot panels need it above instead, or it can run off-screen near the corners. */
+	setInspectAbovePanel(above: boolean): void {
+		this.inspectAbove = above;
+	}
+
 	// ---------- selection + action buttons ----------
 
 	private handleSlotClick(index: number): void {
@@ -386,6 +392,14 @@ export class InventoryPanel {
 	}
 
 	private showInspectPopup(item: ItemData): void {
+		if (this.inspectAbove) {
+			this.inspectPopup.x = 0;
+			this.inspectPopup.y = -130;
+		} else {
+			this.inspectPopup.x = PANEL_W + GAP;
+			this.inspectPopup.y = 0;
+		}
+
 		this.inspectIcon.clear();
 		this.inspectIcon.circle(24, 24, 14);
 		this.inspectIcon.fill(
