@@ -15,7 +15,7 @@ const ACTION_ROW_Y_GAP = 10;
 const SLIDE_EASE_MS = 90;
 
 type ActionKey = "inspect" | "swap" | "drop";
-type PanelMode = "own" | "lootable";
+type PanelMode = "own" | "lootable" | "surrendering";
 
 interface ActionButton {
 	key: ActionKey;
@@ -64,6 +64,7 @@ export class InventoryPanel {
 
 	private onDrop: ((index: number) => void) | null = null;
 	private onSwapRequested: ((index: number) => void) | null = null;
+	private onGive: ((index: number) => void) | null = null;
 
 	constructor() {
 		this.bg.roundRect(0, 0, PANEL_W, PANEL_H, 8);
@@ -180,6 +181,10 @@ export class InventoryPanel {
 	/** Fired when Take is clicked in lootable mode — caller owns the confirm popup and the actual transfer. */
 	setOnTake(handler: (index: number) => void): void {
 		this.onTake = handler;
+	}
+
+	setOnGive(handler: (index: number) => void): void {
+		this.onGive = handler;
 	}
 
 	/** Fired when Drop is confirmed — caller owns actually nulling the real array at this index. */
@@ -333,6 +338,8 @@ export class InventoryPanel {
 		} else if (key === "drop") {
 			if (this.mode === "lootable") {
 				this.onTake?.(index);
+			} else if (this.mode === "surrendering") {
+				this.onGive?.(index);
 			} else {
 				this.onDrop?.(index);
 				this.deselect();

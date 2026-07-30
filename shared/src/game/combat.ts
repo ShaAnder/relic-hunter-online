@@ -219,7 +219,9 @@ function computeAttackValue(baseAttack: number, card?: CardData): number {
 	if (!card) return baseAttack;
 	if (card.value === "A") return baseAttack * 2;
 	if (card.value === "C") return baseAttack * 1.5;
-	if (typeof card.value === "number") return baseAttack + card.value;
+	if (card.color === "red" && typeof card.value === "number") {
+		return baseAttack + card.value;
+	}
 	return baseAttack;
 }
 

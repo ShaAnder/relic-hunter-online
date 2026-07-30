@@ -341,16 +341,56 @@ function cardStrength(card: CardData): number {
 }
 
 /**
- * In-combat action: Attack/Defend bias by archetype, then strongest legal card.
- * @param hand - fighter's current hand
- * @param stats - fighter combat stats
- * @param archetype - behavior bias
+ * In-combat action: Attack/Defend bias by archetype, then strongest legal
+ * card. Flees when badly hurt or heavily outmatched — Run if movement
+ * gives a real chance to escape, Surrender (guaranteed, costs an item)
+ * if it doesn't.
  */
 export function chooseCombatAction(
 	hand: CardData[],
 	stats: MercenaryStats,
 	archetype: AiArchetype = "balanced",
+	currentHp?: number,
+	opponentStats?: MercenaryStats,
 ): CombatChoice {
+	if (currentHp !== undefined) {
+		const hpRatio = currentHp / Math.max(1, stats.maxHp);
+
+		let fleeThreshold = 0.3;
+		if (archetype === "aggressive") fleeThreshold = 0.15;
+		if (archetype === "treasure") fleeThreshold = 0.45;
+
+		let shouldFlee = hpRatio < fleeThreshold;
+
+		if (opponentStats) {
+			const ownPower = stats.attack + stats.defense + stats.movement;
+			const oppPower =
+				opponentStats.attack + opponentStats.defense + opponentStats.movement;
+			if (oppPower > ownPower * 1.5) shouldFlee = true;
+		}
+
+		if (shouldFlee) {
+			// Run's catch-chance worsens sharply once the runner's movement
+			// falls meaningfully below the opponent's — at that point a
+			// contested escape is more likely to fail than a guaranteed
+			// Surrender is to cost more than one item.
+			const canLikelyEscape =
+				!opponentStats || stats.movement > opponentStats.movement * 0.75;
+
+			if (!canLikelyEscape) {
+				return { action: "surrender", stats };
+			}
+
+			const blueCards = hand.filter((c) => c.color === "blue");
+			const card = blueCards.length
+				? blueCards.reduce((a, b) =>
+						cardStrength(b) > cardStrength(a) ? b : a,
+					)
+				: undefined;
+			return { action: "run", stats, card };
+		}
+	}
+
 	let attackChance = 0.5;
 	if (archetype === "aggressive") attackChance = 0.75;
 	if (archetype === "treasure") attackChance = 0.35;
@@ -386,5 +426,35 @@ export function decideLootChoice(
 		.filter((index) => index !== -1);
 
 	if (filledIndices.length === 0) return null;
+	return filledIndices[Math.floor(Math.random() * filledIndices.length)];
+}
+
+/**
+ * Which item index a surrendering AI gives up. Never the match's
+ * target/relic item while any other item exists to give instead — only
+ * surrenders the target if it's genuinely the only item held.
+ */
+export function decideSurrenderChoice(
+	giverItems: (ItemData | null)[],
+	targetItemId: string | null,
+): number | null {
+	const filledIndices = giverItems
+		.map((item, index) => (item !== null ? index : -1))
+		.filter((index) => index !== -1);
+
+	if (filledIndices.length === 0) return null;
+
+	if (targetItemId) {
+		const nonTargetIndices = filledIndices.filter(
+			(i) => giverItems[i]?.id !== targetItemId,
+		);
+		if (nonTargetIndices.length > 0) {
+			return nonTargetIndices[
+				Math.floor(Math.random() * nonTargetIndices.length)
+			];
+		}
+		// Only the target item remains — forced to give it up.
+	}
+
 	return filledIndices[Math.floor(Math.random() * filledIndices.length)];
 }

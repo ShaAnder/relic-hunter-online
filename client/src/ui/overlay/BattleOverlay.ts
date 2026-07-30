@@ -19,7 +19,7 @@ import {
 } from "@relic-hunter/shared";
 import { PlayZone } from "@/ui/PlayZone";
 import { InventoryPanel } from "@/ui/InventoryPanel";
-import { decideLootChoice } from "@relic-hunter/shared";
+import { decideLootChoice, decideSurrenderChoice } from "@relic-hunter/shared";
 
 const ALLOWED_COLORS: Record<CombatAction, CardColor[]> = {
 	attack: ["red", "yellow", "blue"],
@@ -96,6 +96,7 @@ export class BattleOverlay implements Overlay {
 
 	private winnerLootPanel = new InventoryPanel();
 	private loserLootPanel = new InventoryPanel();
+	private surrenderLootPanel = new InventoryPanel();
 	private lootConfirmPopup = new Container();
 	private lootConfirmBg = new Graphics();
 	private lootConfirmText!: Text;
@@ -260,8 +261,10 @@ export class BattleOverlay implements Overlay {
 		});
 		this.winnerLootPanel.view.visible = false;
 		this.loserLootPanel.view.visible = false;
+		this.surrenderLootPanel.view.visible = false;
 		this.view.addChild(this.winnerLootPanel.view);
 		this.view.addChild(this.loserLootPanel.view);
+		this.view.addChild(this.surrenderLootPanel.view);
 	}
 
 	private buildLootConfirmPopup(): void {
@@ -651,6 +654,67 @@ export class BattleOverlay implements Overlay {
 		this.loserLootPanel.view.visible = false;
 	}
 
+	/**
+	 * Loser browses their OWN inventory and gives up one item — the mirror
+	 * of runLootSequence (winner takes), used for surrender specifically.
+	 * AI gets the same "pause, then highlight the pick" beat as AI loot on
+	 * defeat, so it visibly reads as a real choice, not an instant snap.
+	 * No skip option — surrender always costs an item if one exists.
+	 */
+	private async runSurrenderGiveSequence(
+		giverState: MercenaryState,
+		receiverState: MercenaryState,
+		giverIsLocal: boolean,
+	): Promise<void> {
+		if (!giverState.items.some((i) => i !== null)) return;
+
+		this.currentWinnerState = receiverState;
+		this.currentLoserState = giverState;
+
+		this.surrenderLootPanel.setMode("surrendering");
+		this.surrenderLootPanel.setInspectAbovePanel(true);
+		this.surrenderLootPanel.sync(giverState.items);
+
+		const giverIsAttacker = giverState === this.attackerState;
+		const giverPanel = giverIsAttacker
+			? this.attackerPanel
+			: this.defenderPanel;
+		this.surrenderLootPanel.view.x = giverPanel.x;
+		this.surrenderLootPanel.view.y = giverPanel.y - 240;
+		this.surrenderLootPanel.view.visible = true;
+
+		if (!giverIsLocal) {
+			await this.delay(1200);
+			const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
+			const index = decideSurrenderChoice(giverState.items, targetItemId);
+			if (index !== null) {
+				this.surrenderLootPanel.sync(giverState.items);
+				await this.delay(400);
+				this.applyLoot(index);
+			}
+			this.surrenderLootPanel.view.visible = false;
+			return;
+		}
+
+		this.lootSkipLabel.visible = false;
+		await new Promise<void>((resolve) => {
+			this.lootResolve = resolve;
+			this.surrenderLootPanel.setOnGive((index) => {
+				this.pendingLootIndex = index;
+				this.lootConfirmPopup.x =
+					this.surrenderLootPanel.view.x -
+					this.arena.x +
+					this.surrenderLootPanel.panelWidth / 2;
+				this.lootConfirmPopup.y =
+					this.surrenderLootPanel.view.y - this.arena.y - 40;
+				this.lootConfirmText.text = "Give up this item?";
+				this.lootConfirmPopup.visible = true;
+			});
+		});
+
+		this.surrenderLootPanel.view.visible = false;
+	}
+
 	private resolveLootConfirm(accept: boolean): void {
 		if (this.pendingLootIndex === null) return;
 		const index = this.pendingLootIndex;
@@ -702,12 +766,24 @@ export class BattleOverlay implements Overlay {
 			otherState.hand,
 			otherState.stats,
 			otherArchetype,
+			otherState.currentHp,
+			localChoice.stats,
 		);
 
-		const attackerChoice =
-			this.localHumanRole === "attacker" ? localChoice : otherChoice;
-		const defenderChoice =
-			this.localHumanRole === "attacker" ? otherChoice : localChoice;
+		const attackerChoice = chooseCombatAction(
+			this.attackerState.hand,
+			this.attackerState.stats,
+			this.attackerArchetype,
+			this.attackerState.currentHp,
+			this.defenderState.stats,
+		);
+		const defenderChoice = chooseCombatAction(
+			this.defenderState.hand,
+			this.defenderState.stats,
+			this.defenderArchetype,
+			this.defenderState.currentHp,
+			this.attackerState.stats,
+		);
 
 		await this.resolveRound(attackerChoice, defenderChoice);
 	}
@@ -751,7 +827,7 @@ export class BattleOverlay implements Overlay {
 			result.b,
 		);
 
-		this.finishBattle(attackerChoice);
+		this.finishBattle(attackerChoice, defenderChoice);
 	}
 
 	private describeOutcome(
@@ -774,23 +850,38 @@ export class BattleOverlay implements Overlay {
 		return `${this.attackerLabel} dealt ${defenderOutcome.damageTaken} and took ${attackerOutcome.damageTaken}.`;
 	}
 
-	private async finishBattle(attackerChoice: CombatChoice): Promise<void> {
+	private async finishBattle(
+		attackerChoice: CombatChoice,
+		defenderChoice: CombatChoice,
+	): Promise<void> {
 		let attackerNeedsTeleport = false;
 		let defenderNeedsTeleport = false;
 
-		if (attackerChoice.action === "surrender") {
+		if (
+			attackerChoice.action === "surrender" ||
+			defenderChoice.action === "surrender"
+		) {
+			const surrenderer =
+				attackerChoice.action === "surrender" ? "attacker" : "defender";
+			const giverState =
+				surrenderer === "attacker" ? this.attackerState : this.defenderState;
+			const receiverState =
+				surrenderer === "attacker" ? this.defenderState : this.attackerState;
+
 			const consequence = resolveSurrender(
-				this.attackerState.items.filter((i) => i !== null).length,
+				giverState.items.filter((i) => i !== null).length,
 			);
 			if (consequence.itemGiven) {
-				await this.runLootSequence(
-					this.defenderState,
-					this.attackerState,
-					this.localHumanRole === "defender",
-					false,
+				await this.runSurrenderGiveSequence(
+					giverState,
+					receiverState,
+					(surrenderer === "attacker" && this.localHumanRole === "attacker") ||
+						(surrenderer === "defender" && this.localHumanRole === "defender"),
 				);
 			}
-			attackerNeedsTeleport = true;
+
+			if (surrenderer === "attacker") attackerNeedsTeleport = true;
+			else defenderNeedsTeleport = true;
 		} else {
 			if (this.attackerState.currentHp <= 0) {
 				const consequence = resolveDefeat(this.attackerState.stats, true);

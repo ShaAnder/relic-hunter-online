@@ -65,7 +65,7 @@ import {
 	clearFleeMemory,
 } from "@relic-hunter/shared";
 import type { EnemyEntity } from "@/types/entities";
-import { spawnTestHunter } from "@/debug/testHunter";
+import { spawnTestHunter, spawnSurrenderTestHunter } from "@/debug/testHunter";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -110,6 +110,7 @@ export class MapScene implements Scene {
 	private exitCardInProgress = false;
 	private turnsTaken = 0;
 	private testHunter: EnemyEntity | null = null;
+	private surrenderTestHunter: EnemyEntity | null = null;
 
 	// Targeting mode — active while choosing which enemy to attack
 	private targetingActive = false;
@@ -214,9 +215,13 @@ export class MapScene implements Scene {
 		this.targetReticle.visible = false;
 		this.mercenaryContainer.addChild(this.targetReticle);
 
-		this.testHunter = spawnTestHunter(this.mercState.coord);
-		this.mercenaryContainer.addChild(this.testHunter.mercenary.view);
-		this.enemies.push(this.testHunter);
+		this.testHunter = spawnTestHunter(this.grid, this.mercState.coord);
+		this.surrenderTestHunter = spawnSurrenderTestHunter(
+			this.grid,
+			this.mercState.coord,
+		);
+		this.mercenaryContainer.addChild(this.surrenderTestHunter.mercenary.view);
+		this.enemies.push(this.surrenderTestHunter);
 
 		this.spawnChests();
 
