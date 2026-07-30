@@ -38,7 +38,7 @@ export function createMercenary(
 		stats,
 		currentHp: stats.maxHp,
 		hpCeiling: stats.maxHp,
-		items: [],
+		items: new Array(6).fill(null),
 		hand: [],
 	};
 }

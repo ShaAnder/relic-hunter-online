@@ -15,6 +15,7 @@ const ACTION_ROW_Y_GAP = 10;
 const SLIDE_EASE_MS = 90;
 
 type ActionKey = "inspect" | "swap" | "drop";
+type PanelMode = "own" | "lootable";
 
 interface ActionButton {
 	key: ActionKey;
@@ -56,6 +57,9 @@ export class InventoryPanel {
 	private inspectIcon = new Graphics();
 	private inspectName!: Text;
 	private inspectDesc!: Text;
+
+	private mode: PanelMode = "own";
+	private onTake: ((index: number) => void) | null = null;
 
 	private onDrop: ((index: number) => void) | null = null;
 	private onSwapRequested: ((index: number) => void) | null = null;
@@ -156,6 +160,25 @@ export class InventoryPanel {
 			}
 			this.generalLabels[i].text = item ? item.name.slice(0, 4) : "";
 		}
+	}
+
+	/** "own" = normal inventory (Inspect/Drop, Swap stays disabled per existing placeholder). "lootable" = viewing someone else's items — Swap hidden entirely, the third slot becomes Take instead of Drop. */
+	setMode(mode: PanelMode): void {
+		this.mode = mode;
+		const swapBtn = this.actionButtons.find((b) => b.key === "swap");
+		if (swapBtn) swapBtn.container.visible = mode === "own";
+
+		const thirdBtn = this.actionButtons.find((b) => b.key === "drop");
+		if (thirdBtn) {
+			thirdBtn.icon.clear();
+			if (mode === "lootable") this.drawTakeIcon(thirdBtn.icon);
+			else this.drawDropIcon(thirdBtn.icon);
+		}
+	}
+
+	/** Fired when Take is clicked in lootable mode — caller owns the confirm popup and the actual transfer. */
+	setOnTake(handler: (index: number) => void): void {
+		this.onTake = handler;
 	}
 
 	/** Fired when Drop is confirmed — caller owns actually nulling the real array at this index. */
@@ -302,8 +325,12 @@ export class InventoryPanel {
 				this.showInspectPopup(item);
 			}
 		} else if (key === "drop") {
-			this.onDrop?.(index);
-			this.deselect(); // also closes the inspect popup if it was open on this item
+			if (this.mode === "lootable") {
+				this.onTake?.(index);
+			} else {
+				this.onDrop?.(index);
+				this.deselect();
+			}
 		} else if (key === "swap") {
 			this.onSwapRequested?.(index);
 		}
@@ -424,6 +451,18 @@ export class InventoryPanel {
 		g.moveTo(14, 20);
 		g.lineTo(20, 26);
 		g.lineTo(26, 20);
+		g.stroke({ width: 2, color: 0xcccccc });
+		g.moveTo(12, 30);
+		g.lineTo(28, 30);
+		g.stroke({ width: 2, color: 0xcccccc });
+	}
+
+	private drawTakeIcon(g: Graphics): void {
+		g.moveTo(20, 26);
+		g.lineTo(20, 10);
+		g.moveTo(14, 16);
+		g.lineTo(20, 10);
+		g.lineTo(26, 16);
 		g.stroke({ width: 2, color: 0xcccccc });
 		g.moveTo(12, 30);
 		g.lineTo(28, 30);

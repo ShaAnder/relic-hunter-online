@@ -64,7 +64,8 @@ import {
 	recordFlee,
 	clearFleeMemory,
 } from "@relic-hunter/shared";
-import type { AiMemory } from "@relic-hunter/shared";
+import type { EnemyEntity } from "@/types/entities";
+import { spawnTestHunter } from "@/debug/testHunter";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -72,16 +73,6 @@ interface PlacedChest {
 	plan: ChestPlan;
 	entity: Chest;
 }
-
-/** One enemy on the map — live state paired with its visual token. */
-interface EnemyEntity {
-	state: MercenaryState;
-	mercenary: Mercenary;
-	archetype: AiArchetype;
-	memory: AiMemory;
-}
-
-const MAX_GENERAL_SLOTS = 6;
 
 /**
  * Tactical map scene — grid, mercenary, AP turns, cards, chests, win condition.
@@ -118,6 +109,7 @@ export class MapScene implements Scene {
 	// mercenary.isAnimating plays for normal moves.
 	private exitCardInProgress = false;
 	private turnsTaken = 0;
+	private testHunter: EnemyEntity | null = null;
 
 	// Targeting mode — active while choosing which enemy to attack
 	private targetingActive = false;
@@ -222,12 +214,20 @@ export class MapScene implements Scene {
 		this.targetReticle.visible = false;
 		this.mercenaryContainer.addChild(this.targetReticle);
 
+		this.testHunter = spawnTestHunter(this.mercState.coord);
+		this.mercenaryContainer.addChild(this.testHunter.mercenary.view);
+		this.enemies.push(this.testHunter);
+
 		this.spawnChests();
 
 		this.characterPanel = new CharacterPanel();
 		this.view.addChild(this.characterPanel.view);
 
 		this.inventoryPanel = new InventoryPanel();
+		this.inventoryPanel.setOnDrop((index) => {
+			this.mercState.items[index] = null;
+			this.syncUI();
+		});
 		this.view.addChild(this.inventoryPanel.view);
 
 		this.deckTracker = new DeckTracker();

@@ -366,3 +366,25 @@ export function chooseCombatAction(
 
 	return { action, stats, card: best };
 }
+
+/**
+ * Which item index a winning AI takes from the loser. Always prioritizes
+ * the match's target/relic item if present; otherwise picks randomly
+ * among whatever's actually filled, not just the first slot.
+ */
+export function decideLootChoice(
+	loserItems: (ItemData | null)[],
+	targetItemId: string | null,
+): number | null {
+	if (targetItemId) {
+		const targetIndex = loserItems.findIndex((i) => i?.id === targetItemId);
+		if (targetIndex !== -1) return targetIndex;
+	}
+
+	const filledIndices = loserItems
+		.map((item, index) => (item !== null ? index : -1))
+		.filter((index) => index !== -1);
+
+	if (filledIndices.length === 0) return null;
+	return filledIndices[Math.floor(Math.random() * filledIndices.length)];
+}

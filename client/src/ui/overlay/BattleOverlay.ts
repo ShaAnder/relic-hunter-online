@@ -18,6 +18,8 @@ import {
 	resolveSurrender,
 } from "@relic-hunter/shared";
 import { PlayZone } from "@/ui/PlayZone";
+import { InventoryPanel } from "@/ui/InventoryPanel";
+import { decideLootChoice } from "@relic-hunter/shared";
 
 const ALLOWED_COLORS: Record<CombatAction, CardColor[]> = {
 	attack: ["red", "yellow", "blue"],
@@ -91,6 +93,22 @@ export class BattleOverlay implements Overlay {
 	private nearTile: { x: number; y: number };
 	private farTile: { x: number; y: number };
 	private attackerNear: boolean;
+
+	private winnerLootPanel = new InventoryPanel();
+	private loserLootPanel = new InventoryPanel();
+	private lootConfirmPopup = new Container();
+	private lootConfirmBg = new Graphics();
+	private lootConfirmText!: Text;
+	private lootSkipLabel!: Text;
+	private pendingLootIndex: number | null = null;
+	private lootResolve: (() => void) | null = null;
+	private allowLootSkip = false;
+	private currentWinnerState: MercenaryState | null = null;
+	private currentLoserState: MercenaryState | null = null;
+
+	private delay(ms: number): Promise<void> {
+		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
 
 	constructor(
 		private game: Game,
@@ -195,6 +213,9 @@ export class BattleOverlay implements Overlay {
 		this.buildCombatantTokens();
 		this.buildCornerPanels();
 
+		this.buildLootPanels();
+		this.buildLootConfirmPopup();
+
 		this.arena.addChild(this.localPlayZone.view);
 		this.localPlayZone.view.x = 0;
 		this.localPlayZone.view.y = 0;
@@ -227,6 +248,78 @@ export class BattleOverlay implements Overlay {
 		if (this.localHumanRole === "none") {
 			void this.runAutoFight();
 		}
+	}
+
+	private buildLootPanels(): void {
+		this.winnerLootPanel.setOnDrop((index) => {
+			if (!this.currentWinnerState) return;
+			this.currentWinnerState.items[index] = null;
+			this.winnerLootPanel.sync(this.currentWinnerState.items);
+		});
+		this.winnerLootPanel.view.visible = false;
+		this.loserLootPanel.view.visible = false;
+		this.view.addChild(this.winnerLootPanel.view);
+		this.view.addChild(this.loserLootPanel.view);
+	}
+
+	private buildLootConfirmPopup(): void {
+		this.lootConfirmBg.roundRect(-100, -50, 200, 100, 8);
+		this.lootConfirmBg.fill({ color: 0x111111, alpha: 0.97 });
+		this.lootConfirmBg.stroke({ width: 2, color: 0xffd700 });
+		this.lootConfirmPopup.addChild(this.lootConfirmBg);
+
+		this.lootConfirmText = new Text({
+			text: "Take this item?",
+			style: { fill: 0xffffff, fontSize: 14, fontWeight: "bold" },
+		});
+		this.lootConfirmText.anchor.set(0.5);
+		this.lootConfirmText.y = -25;
+		this.lootConfirmPopup.addChild(this.lootConfirmText);
+
+		this.lootConfirmPopup.addChild(
+			this.buildTextButton("Yes", 0x2ecc71, -50, 5, () =>
+				this.resolveLootConfirm(true),
+			),
+		);
+		this.lootConfirmPopup.addChild(
+			this.buildTextButton("No", 0xe74c3c, 50, 5, () =>
+				this.resolveLootConfirm(false),
+			),
+		);
+
+		this.lootSkipLabel = new Text({
+			text: "Skip taking an item »",
+			style: { fill: 0x999999, fontSize: 11 },
+		});
+		this.lootSkipLabel.anchor.set(0.5);
+		this.lootSkipLabel.y = 35;
+		this.lootSkipLabel.eventMode = "static";
+		this.lootSkipLabel.cursor = "pointer";
+		this.lootSkipLabel.on("pointerdown", () => this.resolveLootSkip());
+		this.lootConfirmPopup.addChild(this.lootSkipLabel);
+
+		this.lootConfirmPopup.visible = false;
+		this.arena.addChild(this.lootConfirmPopup);
+	}
+
+	private buildTextButton(
+		label: string,
+		color: number,
+		x: number,
+		y: number,
+		onClick: () => void,
+	): Text {
+		const t = new Text({
+			text: label,
+			style: { fill: color, fontSize: 16, fontWeight: "bold" },
+		});
+		t.anchor.set(0.5);
+		t.x = x;
+		t.y = y;
+		t.eventMode = "static";
+		t.cursor = "pointer";
+		t.on("pointerdown", onClick);
+		return t;
 	}
 
 	private arenaGridToScreen(gx: number, gy: number): { x: number; y: number } {
@@ -494,6 +587,104 @@ export class BattleOverlay implements Overlay {
 		this.pendingAction = null;
 	}
 
+	/**
+	 * Opens winner+loser panels above their respective corner panels. Human
+	 * winner picks via click+confirm; AI winner pauses (reads as thinking),
+	 * highlights its choice via decideLootChoice, then auto-applies — same
+	 * visible-decision pattern as everything else AI does in this file.
+	 */
+	private async runLootSequence(
+		winnerState: MercenaryState,
+		loserState: MercenaryState,
+		winnerIsLocal: boolean,
+		allowSkip: boolean,
+	): Promise<void> {
+		if (!loserState.items.some((i) => i !== null)) return;
+
+		this.currentWinnerState = winnerState;
+		this.currentLoserState = loserState;
+		this.allowLootSkip = allowSkip;
+		this.lootSkipLabel.visible = allowSkip;
+
+		this.winnerLootPanel.setMode("own");
+		this.loserLootPanel.setMode("lootable");
+		this.winnerLootPanel.sync(winnerState.items);
+		this.loserLootPanel.sync(loserState.items);
+
+		const winnerIsAttacker = winnerState === this.attackerState;
+		const winnerPanel = winnerIsAttacker
+			? this.attackerPanel
+			: this.defenderPanel;
+		const loserPanel = winnerIsAttacker
+			? this.defenderPanel
+			: this.attackerPanel;
+		this.winnerLootPanel.view.x = winnerPanel.x;
+		this.winnerLootPanel.view.y = winnerPanel.y - 150;
+		this.loserLootPanel.view.x = loserPanel.x;
+		this.loserLootPanel.view.y = loserPanel.y - 150;
+
+		this.winnerLootPanel.view.visible = true;
+		this.loserLootPanel.view.visible = true;
+
+		if (!winnerIsLocal) {
+			await this.delay(1200);
+			const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
+			const index = decideLootChoice(loserState.items, targetItemId);
+			if (index !== null) this.applyLoot(index);
+			this.winnerLootPanel.view.visible = false;
+			this.loserLootPanel.view.visible = false;
+			return;
+		}
+
+		await new Promise<void>((resolve) => {
+			this.lootResolve = resolve;
+			this.loserLootPanel.setOnTake((index) => {
+				this.pendingLootIndex = index;
+				this.lootConfirmPopup.visible = true;
+			});
+		});
+
+		this.winnerLootPanel.view.visible = false;
+		this.loserLootPanel.view.visible = false;
+	}
+
+	private resolveLootConfirm(accept: boolean): void {
+		if (this.pendingLootIndex === null) return;
+		const index = this.pendingLootIndex;
+		this.pendingLootIndex = null;
+		this.lootConfirmPopup.visible = false;
+
+		if (!accept) return; // panels stay open, pick again
+
+		this.applyLoot(index);
+		this.lootResolve?.();
+		this.lootResolve = null;
+	}
+
+	private resolveLootSkip(): void {
+		if (!this.allowLootSkip) return;
+		this.lootConfirmPopup.visible = false;
+		this.lootResolve?.();
+		this.lootResolve = null;
+	}
+
+	/** If the winner's inventory is full, nothing transfers — they use their own panel's Drop, then Take again. */
+	private applyLoot(index: number): void {
+		if (!this.currentWinnerState || !this.currentLoserState) return;
+		const item = this.currentLoserState.items[index];
+		if (!item) return;
+
+		const emptySlot = this.currentWinnerState.items.findIndex(
+			(i) => i === null,
+		);
+		if (emptySlot === -1) return;
+
+		this.currentLoserState.items[index] = null;
+		this.currentWinnerState.items[emptySlot] = item;
+		this.winnerLootPanel.sync(this.currentWinnerState.items);
+		this.loserLootPanel.sync(this.currentLoserState.items);
+	}
+
 	private async resolveLocalChoice(localChoice: CombatChoice): Promise<void> {
 		const otherState =
 			this.localHumanRole === "attacker"
@@ -580,15 +771,21 @@ export class BattleOverlay implements Overlay {
 		return `${this.attackerLabel} dealt ${defenderOutcome.damageTaken} and took ${attackerOutcome.damageTaken}.`;
 	}
 
-	private finishBattle(attackerChoice: CombatChoice): void {
+	private async finishBattle(attackerChoice: CombatChoice): Promise<void> {
 		let attackerNeedsTeleport = false;
 		let defenderNeedsTeleport = false;
 
 		if (attackerChoice.action === "surrender") {
-			const consequence = resolveSurrender(this.attackerState.items.length);
+			const consequence = resolveSurrender(
+				this.attackerState.items.filter((i) => i !== null).length,
+			);
 			if (consequence.itemGiven) {
-				const given = this.attackerState.items.shift();
-				if (given) this.defenderState.items.push(given);
+				await this.runLootSequence(
+					this.defenderState,
+					this.attackerState,
+					this.localHumanRole === "defender",
+					false,
+				);
 			}
 			attackerNeedsTeleport = true;
 		} else {
@@ -596,9 +793,13 @@ export class BattleOverlay implements Overlay {
 				const consequence = resolveDefeat(this.attackerState.stats, true);
 				this.attackerState.currentHp = consequence.hpCeiling;
 				this.attackerState.hpCeiling = consequence.hpCeiling;
-				if (consequence.itemStolen && this.attackerState.items.length > 0) {
-					const stolen = this.attackerState.items.shift();
-					if (stolen) this.defenderState.items.push(stolen);
+				if (consequence.itemStolen) {
+					await this.runLootSequence(
+						this.defenderState,
+						this.attackerState,
+						this.localHumanRole === "defender",
+						true,
+					);
 				}
 				attackerNeedsTeleport = true;
 			}
@@ -607,9 +808,13 @@ export class BattleOverlay implements Overlay {
 				const consequence = resolveDefeat(this.defenderState.stats, true);
 				this.defenderState.currentHp = consequence.hpCeiling;
 				this.defenderState.hpCeiling = consequence.hpCeiling;
-				if (consequence.itemStolen && this.defenderState.items.length > 0) {
-					const stolen = this.defenderState.items.shift();
-					if (stolen) this.attackerState.items.push(stolen);
+				if (consequence.itemStolen) {
+					await this.runLootSequence(
+						this.attackerState,
+						this.defenderState,
+						this.localHumanRole === "attacker",
+						true,
+					);
 				}
 				defenderNeedsTeleport = true;
 			}
