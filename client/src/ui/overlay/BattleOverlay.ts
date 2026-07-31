@@ -125,6 +125,8 @@ export class BattleOverlay implements Overlay {
 		private localHumanRole: LocalHumanRole = "attacker",
 		attackerMapCoord: { x: number; y: number },
 		defenderMapCoord: { x: number; y: number },
+		private isRangedInitiated: boolean = false,
+		private availableActions: CombatAction[] = ACTIONS,
 	) {
 		this.localHand = new Hand(this.game.app.stage, this.localPlayZone, (card) =>
 			this.onHandCardConfirmed(card),
@@ -192,17 +194,31 @@ export class BattleOverlay implements Overlay {
 		return this.attackerNear ? this.farTile : this.nearTile;
 	}
 
+	/** Whichever action list a given role can actually choose from — defender loses Attack when the fight was initiated from outside melee range. */
+	private allowedActionsFor(role: "attacker" | "defender"): CombatAction[] {
+		if (role === "defender" && this.isRangedInitiated) {
+			return ACTIONS.filter((a) => a !== "attack");
+		}
+		return ACTIONS;
+	}
+
 	private async runAutoFight(): Promise<void> {
-		await new Promise((resolve) => setTimeout(resolve, 700));
+		await this.delay(700);
 		const attackerChoice = chooseCombatAction(
 			this.attackerState.hand,
 			this.attackerState.stats,
 			this.attackerArchetype,
+			this.attackerState.currentHp,
+			this.defenderState.stats,
+			true,
 		);
 		const defenderChoice = chooseCombatAction(
 			this.defenderState.hand,
 			this.defenderState.stats,
 			this.defenderArchetype,
+			this.defenderState.currentHp,
+			this.attackerState.stats,
+			!this.isRangedInitiated,
 		);
 		void this.resolveRound(attackerChoice, defenderChoice);
 	}
@@ -228,12 +244,12 @@ export class BattleOverlay implements Overlay {
 			this.buildDefenderIndicator();
 		} else if (this.localHumanRole === "attacker") {
 			this.buildDefenderIndicator();
-			this.buildActionSelector(this.attackerTile());
+			this.buildActionSelector(this.attackerTile(), "attacker");
 			this.view.addChild(this.localHand.view);
 			this.localHand.syncFromHand(this.attackerState.hand);
 		} else {
 			this.buildAttackerIndicator();
-			this.buildActionSelector(this.defenderTile());
+			this.buildActionSelector(this.defenderTile(), "defender");
 			this.view.addChild(this.localHand.view);
 			this.localHand.syncFromHand(this.defenderState.hand);
 		}
@@ -511,7 +527,11 @@ export class BattleOverlay implements Overlay {
 		this.arena.addChild(this.defenderIndicator);
 	}
 
-	private buildActionSelector(tile: { x: number; y: number }): void {
+	private buildActionSelector(
+		tile: { x: number; y: number },
+		role: "attacker" | "defender",
+	): void {
+		this.availableActions = this.allowedActionsFor(role);
 		const pos = this.arenaGridToScreen(tile.x, tile.y);
 		this.selectorContainer.x = pos.x;
 		this.selectorContainer.y = pos.y - 70;
@@ -526,7 +546,7 @@ export class BattleOverlay implements Overlay {
 		this.selectorContainer.addChild(rightArrow);
 
 		this.selectorLabel = new Text({
-			text: ACTION_LABELS[ACTIONS[this.selectorIndex]],
+			text: ACTION_LABELS[this.availableActions[this.selectorIndex]],
 			style: { fill: 0xffd700, fontSize: 16, fontWeight: "bold" },
 		});
 		this.selectorLabel.anchor.set(0.5);
@@ -550,12 +570,14 @@ export class BattleOverlay implements Overlay {
 
 	private cycleSelector(direction: 1 | -1): void {
 		this.selectorIndex =
-			(this.selectorIndex + direction + ACTIONS.length) % ACTIONS.length;
-		this.selectorLabel.text = ACTION_LABELS[ACTIONS[this.selectorIndex]];
+			(this.selectorIndex + direction + this.availableActions.length) %
+			this.availableActions.length;
+		this.selectorLabel.text =
+			ACTION_LABELS[this.availableActions[this.selectorIndex]];
 	}
 
 	private confirmSelector(): void {
-		const action = ACTIONS[this.selectorIndex];
+		const action = this.availableActions[this.selectorIndex];
 		this.selectorContainer.visible = false;
 
 		const localStats =
@@ -768,22 +790,13 @@ export class BattleOverlay implements Overlay {
 			otherArchetype,
 			otherState.currentHp,
 			localChoice.stats,
+			this.localHumanRole === "defender" ? true : !this.isRangedInitiated,
 		);
 
-		const attackerChoice = chooseCombatAction(
-			this.attackerState.hand,
-			this.attackerState.stats,
-			this.attackerArchetype,
-			this.attackerState.currentHp,
-			this.defenderState.stats,
-		);
-		const defenderChoice = chooseCombatAction(
-			this.defenderState.hand,
-			this.defenderState.stats,
-			this.defenderArchetype,
-			this.defenderState.currentHp,
-			this.attackerState.stats,
-		);
+		const attackerChoice =
+			this.localHumanRole === "attacker" ? localChoice : otherChoice;
+		const defenderChoice =
+			this.localHumanRole === "attacker" ? otherChoice : localChoice;
 
 		await this.resolveRound(attackerChoice, defenderChoice);
 	}

@@ -9,6 +9,17 @@ export type CharacterClass =
 	| "mage"
 	| "summoner";
 
+export const RANGED_CLASSES: ReadonlySet<CharacterClass> = new Set([
+	"hunter",
+	"mage",
+	"summoner",
+]);
+
+/** Ranged classes don't project a Zone of Control, but can initiate combat from outside melee range. */
+export function isRangedClass(characterClass: CharacterClass): boolean {
+	return RANGED_CLASSES.has(characterClass);
+}
+
 /* Raw point allowcation chosen at creation - units of the stat not pts spent */
 export interface StatAllocation {
 	movement: number;

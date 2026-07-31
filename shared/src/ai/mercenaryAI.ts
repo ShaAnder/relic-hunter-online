@@ -352,6 +352,7 @@ export function chooseCombatAction(
 	archetype: AiArchetype = "balanced",
 	currentHp?: number,
 	opponentStats?: MercenaryStats,
+	canAttack: boolean = true,
 ): CombatChoice {
 	if (currentHp !== undefined) {
 		const hpRatio = currentHp / Math.max(1, stats.maxHp);
@@ -396,7 +397,7 @@ export function chooseCombatAction(
 	if (archetype === "treasure") attackChance = 0.35;
 
 	const action: CombatAction =
-		Math.random() < attackChance ? "attack" : "defend";
+		canAttack && Math.random() < attackChance ? "attack" : "defend";
 	const wantedColor = action === "attack" ? "red" : "yellow";
 
 	const candidates = hand.filter((c) => c.color === wantedColor);
