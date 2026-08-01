@@ -11,3 +11,4 @@ export * from "./src/game/deck";
 export * from "./SRC/game/combat";
 export * from "./src/ai/mercenaryAI";
 export * from "./src/ai/aiMemory";
+export * from "./src/game/zoneOfControl";

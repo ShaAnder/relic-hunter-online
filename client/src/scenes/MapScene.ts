@@ -50,6 +50,10 @@ import {
 	computeMovementRange,
 	getPathTo,
 	findNearestReachableTile,
+	findZonesCrossed,
+	isMeleeClass,
+	resolveReactionStrike,
+	ZoneOwner,
 } from "@relic-hunter/shared";
 import { Hand } from "@/ui/Hand";
 import { CharacterPanel } from "@/ui/CharacterPanel";
@@ -65,7 +69,6 @@ import {
 	clearFleeMemory,
 } from "@relic-hunter/shared";
 import type { EnemyEntity } from "@/types/entities";
-import { spawnTestHunter, spawnSurrenderTestHunter } from "@/debug/testHunter";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -109,8 +112,6 @@ export class MapScene implements Scene {
 	// mercenary.isAnimating plays for normal moves.
 	private exitCardInProgress = false;
 	private turnsTaken = 0;
-	private testHunter: EnemyEntity | null = null;
-	private surrenderTestHunter: EnemyEntity | null = null;
 
 	// Targeting mode — active while choosing which enemy to attack
 	private targetingActive = false;
@@ -214,14 +215,6 @@ export class MapScene implements Scene {
 
 		this.targetReticle.visible = false;
 		this.mercenaryContainer.addChild(this.targetReticle);
-
-		this.testHunter = spawnTestHunter(this.grid, this.mercState.coord);
-		this.surrenderTestHunter = spawnSurrenderTestHunter(
-			this.grid,
-			this.mercState.coord,
-		);
-		this.mercenaryContainer.addChild(this.surrenderTestHunter.mercenary.view);
-		this.enemies.push(this.surrenderTestHunter);
 
 		this.spawnChests();
 
@@ -458,11 +451,31 @@ export class MapScene implements Scene {
 	private async onMoveCommitted(
 		target: GridCoord,
 		path: GridCoord[],
+		ignoresZoc: boolean,
 	): Promise<void> {
 		this.mercState.coord = target;
 		this.turnManager.commitMove(path.length);
 		this.buttonBar.setMoveActive(false);
 		this.moveController.exit();
+
+		if (!ignoresZoc) {
+			const owners: ZoneOwner[] = this.enemies
+				.filter(
+					(e) => e.state.currentHp > 0 && isMeleeClass(e.state.characterClass),
+				)
+				.map((e) => ({ id: e.state.id, coord: e.state.coord, zocRadius: 2 }));
+
+			const crossed = findZonesCrossed(path, owners);
+			for (const owner of crossed) {
+				const enemy = this.enemies.find((e) => e.state.id === owner.id);
+				if (!enemy) continue;
+				const strike = resolveReactionStrike(
+					enemy.state.stats,
+					this.mercState.stats,
+				);
+				this.mercState.currentHp -= strike.damage;
+			}
+		}
 
 		await this.mercenary.moveAlongPath(path);
 
@@ -1181,12 +1194,17 @@ export class MapScene implements Scene {
 	}
 
 	/** Spend 1 AP on Disengage. ZoC-restricted movement not yet implemented. */
-	private handleDisengage(): void {
-		if (!this.turnManager.spendDisengage()) return;
-		this.moveController.exit();
-		this.buttonBar.setMoveActive(false);
+	private handleDisengagePressed(): void {
+		if (this.moveController.active) {
+			this.moveController.exit();
+			this.buttonBar.setMoveActive(false);
+			return;
+		}
+		if (!this.turnManager.beginDisengage()) return;
+
+		this.moveController.enter(this.mercState.stats.movement, true);
+		this.buttonBar.setMoveActive(true);
 		this.buttonBar.closeMenu();
-		this.showFeedback("↩ Disengaged (ZoC escape coming soon)");
 	}
 
 	// ---------- End Turn ----------
@@ -1291,7 +1309,7 @@ export class MapScene implements Scene {
 				this.handleRest();
 				break;
 			case "disengage":
-				this.handleDisengage();
+				this.handleDisengagePressed();
 				break;
 			case "endTurn":
 				this.handleEndTurn();
@@ -1478,8 +1496,11 @@ export class MapScene implements Scene {
 				this.enemies
 					.filter((e) => e.state.currentHp > 0)
 					.map((e) => e.state.coord),
-			onMoveCommitted: (target: GridCoord, path: GridCoord[]) =>
-				this.onMoveCommitted(target, path),
+			onMoveCommitted: (
+				target: GridCoord,
+				path: GridCoord[],
+				ignoresZoc: boolean,
+			) => this.onMoveCommitted(target, path, ignoresZoc),
 		});
 	}
 

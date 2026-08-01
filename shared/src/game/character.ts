@@ -1,16 +1,18 @@
 import type { MercenaryState, MercenaryStats } from "../types/mercenary";
 import { createMercenary } from "../types/mercenary";
+import { CharacterClass } from "../types/mercenary";
 
-export type CharacterClass =
-	| "tank"
-	| "brawler"
-	| "hunter"
-	| "scout"
-	| "mage"
-	| "summoner";
+export const MELEE_CLASSES: ReadonlySet<CharacterClass> = new Set([
+	"tank",
+	"brawler",
+]);
 
 export const RANGED_CLASSES: ReadonlySet<CharacterClass> = new Set([
 	"hunter",
+	"scout",
+]);
+
+export const CASTER_CLASSES: ReadonlySet<CharacterClass> = new Set([
 	"mage",
 	"summoner",
 ]);
@@ -18,6 +20,14 @@ export const RANGED_CLASSES: ReadonlySet<CharacterClass> = new Set([
 /** Ranged classes don't project a Zone of Control, but can initiate combat from outside melee range. */
 export function isRangedClass(characterClass: CharacterClass): boolean {
 	return RANGED_CLASSES.has(characterClass);
+}
+
+export function isMeleeClass(characterClass: CharacterClass): boolean {
+	return MELEE_CLASSES.has(characterClass);
+}
+
+export function isCasterClass(characterClass: CharacterClass): boolean {
+	return CASTER_CLASSES.has(characterClass);
 }
 
 /* Raw point allowcation chosen at creation - units of the stat not pts spent */

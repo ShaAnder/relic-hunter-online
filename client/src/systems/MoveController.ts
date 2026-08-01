@@ -17,7 +17,11 @@ interface MoveControllerOptions {
 	getMercenaryCoord: () => GridCoord;
 	getMovementRemaining: () => number;
 	getBlockedCoords: () => GridCoord[];
-	onMoveCommitted: (target: GridCoord, path: GridCoord[]) => void;
+	onMoveCommitted: (
+		target: GridCoord,
+		path: GridCoord[],
+		ignoresZoc: boolean,
+	) => void;
 }
 
 /**
@@ -47,7 +51,9 @@ export class MoveController {
 
 	// UX safety: slight delay after card play so range tiles don't overlap clicks
 	private pendingEnterTimeout: number | null = null;
-	private readonly ENTER_DELAY_MS = 180; // tunable; 150-250ms sweet spot for card fanning
+	private readonly ENTER_DELAY_MS = 180;
+
+	private currentIgnoresZoc = false;
 
 	constructor(private options: MoveControllerOptions) {
 		this.view.addChild(this.rangeContainer);
@@ -80,18 +86,20 @@ export class MoveController {
 	 * (AP, press count, lockout) is the scene's job via beginMovement —
 	 * this controller only owns the aiming state machine.
 	 */
-	enter(): void {
+	enter(budgetOverride?: number, ignoresZoc: boolean = false): void {
 		if (this.pendingEnterTimeout !== null) {
 			window.clearTimeout(this.pendingEnterTimeout);
 			this.pendingEnterTimeout = null;
 		}
 		if (this.isActive) return;
 		if (this.options.mercenary.isAnimating) return;
-		if (this.options.getMovementRemaining() <= 0) return;
+
+		const budget = budgetOverride ?? this.options.getMovementRemaining();
+		if (budget <= 0) return;
 
 		this.isActive = true;
+		this.currentIgnoresZoc = ignoresZoc;
 
-		// Initial lock so aiming starts centered on the hunter
 		this.options.camera.lockTo(gridToScreen(this.options.getMercenaryCoord()));
 
 		const blocked = new Set(this.options.getBlockedCoords().map(coordKey));
@@ -99,7 +107,7 @@ export class MoveController {
 		this.movementRange = computeMovementRange(
 			this.options.grid,
 			this.options.getMercenaryCoord(),
-			this.options.getMovementRemaining(),
+			budget,
 			blocked,
 		);
 
@@ -163,7 +171,11 @@ export class MoveController {
 		if (this.options.mercenary.isAnimating) return false;
 		if (!this.previewTarget || this.previewPath.length === 0) return false;
 
-		this.options.onMoveCommitted(this.previewTarget, this.previewPath);
+		this.options.onMoveCommitted(
+			this.previewTarget,
+			this.previewPath,
+			this.currentIgnoresZoc,
+		);
 		return true;
 	}
 

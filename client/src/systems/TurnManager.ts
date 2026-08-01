@@ -103,7 +103,7 @@ export class TurnManager {
 
 	/* Is disengage available Y/N */
 	get canDisengage(): boolean {
-		return this._apRemaining >= 1;
+		return this._apRemaining >= 2;
 	}
 
 	/* Whether move button is perma locked */
@@ -239,10 +239,9 @@ export class TurnManager {
 	/**
 	 * Spend 1 ap to disengage, does not lock movement for rest of the tern
 	 */
-	spendDisengage(): boolean {
+	beginDisengage(): boolean {
 		if (!this.canDisengage) return false;
-
-		this._apRemaining -= 1;
+		this._apRemaining -= 2;
 		this.onChanged();
 		return true;
 	}
