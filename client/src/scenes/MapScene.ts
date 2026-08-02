@@ -19,11 +19,11 @@ import { MoveController } from "@/systems/MoveController";
 import { TurnManager } from "@/systems/TurnManager";
 import {
 	decideMovementTarget,
+	decideMovementCard,
 	pickEngagementTarget,
 	decideEngagement,
 	decideFallbackAction,
 	pickRetreatTile,
-	applyRestHeal,
 	isAdjacent,
 	ARCHETYPE_COLORS,
 	archetypeLabel,
@@ -46,7 +46,6 @@ import {
 	createMercenary,
 	spawnFromCharacter,
 	buildSharedDeck,
-	drawCardsInto,
 	computeMovementRange,
 	getPathTo,
 	findNearestReachableTile,
@@ -54,6 +53,8 @@ import {
 	isMeleeClass,
 	resolveReactionStrike,
 	ZoneOwner,
+	computeAttackRange,
+	getRangeForClass,
 } from "@relic-hunter/shared";
 import { Hand } from "@/ui/Hand";
 import { CharacterPanel } from "@/ui/CharacterPanel";
@@ -68,7 +69,10 @@ import {
 	recordFlee,
 	clearFleeMemory,
 } from "@relic-hunter/shared";
-import type { EnemyEntity } from "@/types/entities";
+import type { PilotedMercenary } from "@/types/entities";
+import { LogsButton } from "@/ui/buttons/LogButton";
+import { LogPanel } from "@/ui/LogPanel";
+import { logMatchEvent } from "@/core/game/GameSession";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -79,9 +83,9 @@ interface PlacedChest {
 
 /**
  * Tactical map scene — grid, mercenary, AP turns, cards, chests, win condition.
- * Coordinates systems (TurnManager, MoveController, Hand, ButtonBar) rather
- * than doing the work itself. Map/chest content comes from GameSession
- * (set by LoadingScene), not decided here.
+ * Every unit on the map (local or AI-piloted) is a PilotedMercenary in one
+ * shared array — `pilot` is the only thing distinguishing them. Map/chest
+ * content comes from GameSession (set by LoadingScene), not decided here.
  * @author ShaAnder
  */
 export class MapScene implements Scene {
@@ -96,16 +100,10 @@ export class MapScene implements Scene {
 
 	// Systems
 	private camera: Camera;
-	private turnManager: TurnManager;
 	private moveController: MoveController;
 
-	// Entities
-	private mercState: MercenaryState;
-	private mercenary: Mercenary;
-	// Enemy list — 1 static entry for now, array from the start so targeting
-	// (below) doesn't need a rewrite once real AI hunters/monsters exist.
-	// See 09-enemy-ai-design-v3.md build order.
-	private enemies: EnemyEntity[] = [];
+	// Entities — one array, pilot type is the only thing distinguishing them
+	private units: PilotedMercenary[] = [];
 	private placedChests: PlacedChest[] = [];
 	// True during the Exit card's two-flight teleport sequence — blocks
 	// End Turn / regenerate from interrupting mid-sequence, same role
@@ -115,13 +113,15 @@ export class MapScene implements Scene {
 
 	// Targeting mode — active while choosing which enemy to attack
 	private targetingActive = false;
-	private targetIndex = -1;
+
 	private targetReticle = new Graphics();
-	// Which enemy is mid-fight, so onBattleComplete knows who to update
-	private activeCombatEnemyIndex: number | null = null;
+	private attackRangeContainer = new Container();
+
+	// Which AI unit is mid-fight, so onBattleComplete knows who to update
+	private activeCombatUnit: PilotedMercenary | null = null;
 	// Guards End Turn from re-firing while enemies are mid-move/mid-fight
 	private processingEnemyTurns = false;
-	private activeAi: EnemyEntity | null = null;
+	private activeAi: PilotedMercenary | null = null;
 
 	// Character panel (top-right)
 	private characterPanel: CharacterPanel;
@@ -131,6 +131,8 @@ export class MapScene implements Scene {
 	// UI
 	private bagButton: BagButton;
 	private buttonBar: RadialActionWheel;
+	private logsButton: LogsButton;
+	private logPanel: LogPanel;
 	private statsText: Text;
 	private feedbackText: Text;
 	private feedbackTimer = 0;
@@ -166,9 +168,23 @@ export class MapScene implements Scene {
 		[TileType.Exit]: 0xd4af37,
 	};
 
-	// Stats overlay timing
-
 	private fpsAccumulator = 0;
+
+	/** The one human-piloted unit. Assumes exactly one exists — the flagged multiplayer-identity debt this whole migration is paying down. */
+	private get localUnit(): PilotedMercenary {
+		const unit = this.units.find((u) => u.pilot === "local");
+		if (!unit) throw new Error("MapScene: no local unit found");
+		return unit;
+	}
+
+	private getUnitLabel(unit: PilotedMercenary): string {
+		return unit.pilot === "local" ? "You" : archetypeLabel(unit.archetype!);
+	}
+
+	/** Every AI-piloted unit — replaces the old `enemies` array. */
+	private get aiUnits(): PilotedMercenary[] {
+		return this.units.filter((u) => u.pilot === "ai");
+	}
 
 	constructor(private game: Game) {
 		// Dimensions + seed come from the mission/LoadingScene setup. Falls
@@ -197,10 +213,7 @@ export class MapScene implements Scene {
 			panSpeed: 700,
 		});
 
-		this.mercState = this.spawnMercenary();
-		this.mercenary = new Mercenary(this.mercState.coord);
-		this.mercenaryContainer.addChild(this.mercenary.view);
-
+		this.spawnLocalUnit();
 		this.spawnEnemyHunters();
 
 		// Item popup rides along as a child of the mercenary's own view,
@@ -223,7 +236,7 @@ export class MapScene implements Scene {
 
 		this.inventoryPanel = new InventoryPanel();
 		this.inventoryPanel.setOnDrop((index) => {
-			this.mercState.items[index] = null;
+			this.localUnit.state.items[index] = null;
 			this.syncUI();
 		});
 		this.view.addChild(this.inventoryPanel.view);
@@ -234,11 +247,15 @@ export class MapScene implements Scene {
 		this.bagButton = new BagButton();
 		this.view.addChild(this.bagButton.view);
 
-		// setup playzone;
+		this.logsButton = new LogsButton();
+		this.view.addChild(this.logsButton.view);
+
+		this.logPanel = new LogPanel();
+		this.view.addChild(this.logPanel.view);
+
 		this.playZone = new PlayZone();
 		this.view.addChild(this.playZone.view);
 
-		// add hand
 		this.hand = new Hand(this.game.app.stage, this.playZone, (card: CardData) =>
 			this.handleCardConfirmed(card),
 		);
@@ -248,24 +265,14 @@ export class MapScene implements Scene {
 		this.game.app.stage.eventMode = "static";
 		this.game.app.stage.hitArea = this.game.app.screen;
 
-		// TurnManager fires syncUI on every state change. The shared deck
-		// is lazily built here (??=) so a direct MapScene boot without
-		// LoadingOverlay having run still works — and once built, the
-		// SAME array reference is reused on every subsequent call, which
-		// matters because TurnManager mutates it in place every draw.
-		this.turnManager = new TurnManager(
-			() => this.mercState,
-			() => (this.game.session.sharedDeck ??= buildSharedDeck()),
-			() => this.syncUI(),
-		);
-		// Top up to the full 5-card starting hand — the constructor above
-		// already drew 1 via its own reset()→endTurn() cascade; this draws
-		// the remaining 4 (drawCards is self-limiting on current hand size,
-		// so this is safe regardless of how many were already drawn).
-		this.turnManager.dealStartingHand();
+		// Top up to the full 5-card starting hand — the local unit's own
+		// TurnManager already drew 1 via its own reset()→endTurn() cascade;
+		// this draws the remaining 4.
+		this.localUnit.turnManager.dealStartingHand();
 
 		this.moveController = this.createMoveController();
 		this.boardContainer.addChild(this.moveController.view);
+		this.boardContainer.addChild(this.attackRangeContainer);
 
 		this.buttonBar = new RadialActionWheel();
 		this.view.addChild(this.buttonBar.view);
@@ -291,7 +298,7 @@ export class MapScene implements Scene {
 		this.renderMap();
 		this.centerCameraOnActiveHunter();
 		this.camera.attach(this.game.app.canvas);
-		this.hand.syncFromHand(this.mercState.hand);
+		this.hand.syncFromHand(this.localUnit.state.hand);
 		this.layoutHud();
 		this.syncUI();
 
@@ -313,9 +320,6 @@ export class MapScene implements Scene {
 
 	/** Per-frame tick: camera, animation, camera follow, stats. */
 	update(deltaTime: number): void {
-		// Nothing in the scene should advance while paused — the overlay's
-		// own update() still runs (via OverlayManager), this only freezes
-		// MapScene's own logic so it resumes exactly where it left off.
 		if (this.game.overlays.isOpen) return;
 
 		this.camera.update(
@@ -323,16 +327,15 @@ export class MapScene implements Scene {
 			this.game.app.screen.width,
 			this.game.app.screen.height,
 		);
-		this.mercenary.update(deltaTime);
-		for (const enemy of this.enemies) {
-			enemy.mercenary.update(deltaTime);
+		for (const unit of this.units) {
+			unit.mercenary.update(deltaTime);
 		}
 		this.hand.update(deltaTime);
 		this.buttonBar.update(deltaTime);
 		this.inventoryPanel.update(deltaTime);
 
-		// Lock camera to the mercenary's VISUAL position while aiming,
-		// animating, selecting a card, targeting, OR mid-Exit-card-sequence.
+		// PASS 4 TODO: still assumes exactly one local unit ever needs the
+		// camera to follow it — real judgment call, deferred deliberately.
 		if (this.processingEnemyTurns && this.activeAi) {
 			this.camera.lockTo({
 				x: this.activeAi.mercenary.view.x,
@@ -340,14 +343,14 @@ export class MapScene implements Scene {
 			});
 		} else if (
 			this.moveController.active ||
-			this.mercenary.isAnimating ||
+			this.localUnit.mercenary.isAnimating ||
 			this.hand.isSelecting ||
 			this.exitCardInProgress ||
 			this.targetingActive
 		) {
 			this.camera.lockTo({
-				x: this.mercenary.view.x,
-				y: this.mercenary.view.y,
+				x: this.localUnit.mercenary.view.x,
+				y: this.localUnit.mercenary.view.y,
 			});
 		} else if (this.camera.isLocked) {
 			this.camera.unlock();
@@ -370,7 +373,6 @@ export class MapScene implements Scene {
 		this.fpsAccumulator += deltaTime;
 		if (this.fpsAccumulator >= 30) {
 			this.fpsAccumulator = 0;
-			// this.refreshStatsText();
 		}
 	}
 
@@ -405,6 +407,9 @@ export class MapScene implements Scene {
 			this.characterPanel.view.y,
 			this.characterPanel.panelHeight,
 		);
+		this.logsButton.layout(this.bagButton.view.x, this.bagButton.view.y);
+		this.logPanel.layout(this.bagButton.view.x, this.bagButton.view.y + 56);
+
 		this.inventoryPanel.layoutRightOfCharacter(
 			this.characterPanel.view.x,
 			this.characterPanel.view.y,
@@ -435,14 +440,10 @@ export class MapScene implements Scene {
 			return;
 		}
 
-		if (!this.turnManager.canMove) return;
+		const tm = this.localUnit.turnManager;
+		if (!tm.canMove) return;
 
-		const blueAlreadyUsed = this.turnManager.blueCardUsedThisTurn;
-		this.hand.enterSelectionMode(
-			(data) =>
-				data.actionType !== "attack" &&
-				!(data.color === "blue" && blueAlreadyUsed),
-		);
+		this.hand.enterSelectionMode((data) => data.actionType !== "attack");
 		this.buttonBar.setMoveActive(true);
 		this.buttonBar.closeMenu();
 	}
@@ -453,33 +454,21 @@ export class MapScene implements Scene {
 		path: GridCoord[],
 		ignoresZoc: boolean,
 	): Promise<void> {
-		this.mercState.coord = target;
-		this.turnManager.commitMove(path.length);
+		const local = this.localUnit;
+		local.state.coord = target;
+		local.turnManager.commitMove(path.length);
 		this.buttonBar.setMoveActive(false);
 		this.moveController.exit();
 
-		if (!ignoresZoc) {
-			const owners: ZoneOwner[] = this.enemies
-				.filter(
-					(e) => e.state.currentHp > 0 && isMeleeClass(e.state.characterClass),
-				)
-				.map((e) => ({ id: e.state.id, coord: e.state.coord, zocRadius: 2 }));
-
-			const crossed = findZonesCrossed(path, owners);
-			for (const owner of crossed) {
-				const enemy = this.enemies.find((e) => e.state.id === owner.id);
-				if (!enemy) continue;
-				const strike = resolveReactionStrike(
-					enemy.state.stats,
-					this.mercState.stats,
-				);
-				this.mercState.currentHp -= strike.damage;
-			}
+		if (ignoresZoc) {
+			await local.mercenary.moveAlongPath(path);
+		} else {
+			await this.moveWithZoneStrikes(local, path, local.state.id);
 		}
 
-		await this.mercenary.moveAlongPath(path);
+		await local.mercenary.moveAlongPath(path);
 
-		this.tryOpenChestAt(target);
+		this.tryOpenChestAt(local.state, target);
 		this.checkWinCondition();
 
 		this.syncUI();
@@ -494,6 +483,61 @@ export class MapScene implements Scene {
 			this.buttonBar.closeMenu();
 			this.buttonBar.setMoveActive(false);
 			this.moveController.exit();
+		}
+	}
+
+	// ---------- Zone of Control ----------
+
+	private buildZoneOwners(excludeId: string): ZoneOwner[] {
+		return this.units
+			.filter(
+				(u) =>
+					u.state.id !== excludeId &&
+					u.state.currentHp > 0 &&
+					isMeleeClass(u.state.characterClass),
+			)
+			.map((u) => ({ id: u.state.id, coord: u.state.coord, zocRadius: 2 }));
+	}
+
+	/**
+	 * Animates a path in segments, pausing exactly at each zone crossing to
+	 * apply the reaction strike and log it
+	 */
+	private async moveWithZoneStrikes(
+		unit: PilotedMercenary,
+		path: GridCoord[],
+		excludeId: string,
+	): Promise<void> {
+		const owners = this.buildZoneOwners(excludeId);
+		const crossings = findZonesCrossed(this.grid, path, owners);
+
+		let segmentStart = 0;
+		for (const crossing of crossings) {
+			const segment = path.slice(segmentStart, crossing.pathIndex + 1);
+			if (segment.length > 0) {
+				await unit.mercenary.moveAlongPath(segment);
+			}
+			segmentStart = crossing.pathIndex + 1;
+
+			const ownerUnit = this.units.find(
+				(u) => u.state.id === crossing.owner.id,
+			);
+			if (ownerUnit) {
+				const strike = resolveReactionStrike(
+					ownerUnit.state.stats,
+					unit.state.stats,
+				);
+				unit.state.currentHp -= strike.damage;
+				this.showFeedback(
+					`⚔ ${this.getUnitLabel(unit)} entered ${this.getUnitLabel(ownerUnit)}'s zone of control — took ${strike.damage} damage`,
+				);
+				await this.delay(400);
+			}
+		}
+
+		const remaining = path.slice(segmentStart);
+		if (remaining.length > 0) {
+			await unit.mercenary.moveAlongPath(remaining);
 		}
 	}
 
@@ -518,14 +562,13 @@ export class MapScene implements Scene {
 			return;
 		}
 
-		// Fallback — same random logic as before (dev / regen)
 		const plan = this.game.session.chestPlan;
 		if (!plan) return;
 
 		const exitTile = findExitTile(this.grid);
 		const used = new Set<string>();
 		if (exitTile) used.add(coordKey(exitTile));
-		used.add(coordKey(this.mercState.coord));
+		used.add(coordKey(this.localUnit.state.coord));
 
 		for (const chestPlan of plan.chests) {
 			const coord = this.pickUnusedWalkableTile(used);
@@ -552,31 +595,36 @@ export class MapScene implements Scene {
 		return candidates[Math.floor(Math.random() * candidates.length)];
 	}
 
-	/** Open the chest at coord if unopened. Stays closed if inventory (6 slots) is full. */
-	private tryOpenChestAt(coord: GridCoord): void {
+	/** Open the chest at coord if unopened, for whichever unit reached it. Stays closed if inventory full. */
+	private tryOpenChestAt(state: MercenaryState, coord: GridCoord): void {
 		const placed = this.placedChests.find(
 			(c) => !c.entity.isOpen && c.coord.x === coord.x && c.coord.y === coord.y,
 		);
 		if (!placed) return;
 
-		if (!this.mercState.items.some((i) => i === null)) {
-			this.showFeedback("🎒 Inventory full — chest left unopened");
+		if (!state.items.some((i) => i === null)) {
+			if (state.id === this.localUnit.state.id) {
+				this.showFeedback("🎒 Inventory full — chest left unopened");
+			}
 			return;
 		}
 
 		placed.entity.open();
-		const emptyIndex = this.mercState.items.findIndex((i) => i === null);
-		this.mercState.items[emptyIndex] = placed.plan.item;
+		const emptyIndex = state.items.findIndex((i) => i === null);
+		state.items[emptyIndex] = placed.plan.item;
 
+		const isLocal = state.id === this.localUnit.state.id;
 		if (placed.plan.isTarget) {
 			this.showFeedback(
-				`🎯 Found the target: ${placed.plan.item.name}! Head to the Exit.`,
+				isLocal
+					? `🎯 Found the target: ${placed.plan.item.name}! Head to the Exit.`
+					: "⚠️ An enemy hunter found the target item!",
 			);
-		} else {
+		} else if (isLocal) {
 			this.showFeedback(`📦 Found: ${placed.plan.item.name}`);
 		}
 
-		this.showItemPopup(placed.plan.item, placed.plan.isTarget);
+		if (isLocal) this.showItemPopup(placed.plan.item, placed.plan.isTarget);
 	}
 
 	/** Float an icon + item name above the mercenary's head briefly. */
@@ -590,8 +638,9 @@ export class MapScene implements Scene {
 		this.itemPopupText.y = -58;
 
 		this.itemPopup.visible = true;
-		this.itemPopupTimer = 90; // ~1.5s at 60fps, matching feedbackTimer's frame-unit convention
+		this.itemPopupTimer = 90;
 	}
+
 	// ---------- Enemy AI ----------
 
 	private toCombatant(state: MercenaryState): AiCombatant {
@@ -604,67 +653,58 @@ export class MapScene implements Scene {
 		};
 	}
 
-	/** Every living combatant except excludeId (player + other AI hunters). */
+	/** Every living combatant except excludeId. */
 	private buildOtherCombatants(excludeId: string): AiCombatant[] {
-		const list: AiCombatant[] = [];
-
-		if (this.mercState.id !== excludeId && this.mercState.currentHp > 0) {
-			list.push(this.toCombatant(this.mercState));
-		}
-
-		for (const e of this.enemies) {
-			if (e.state.id === excludeId) continue;
-			if (e.state.currentHp <= 0) continue;
-			list.push(this.toCombatant(e.state));
-		}
-
-		return list;
+		return this.units
+			.filter((u) => u.state.id !== excludeId && u.state.currentHp > 0)
+			.map((u) => this.toCombatant(u.state));
 	}
 
 	private async processEnemyTurns(): Promise<void> {
 		this.processingEnemyTurns = true;
 		this.setPlayerControlsVisible(false);
 
-		const sharedDeck = (this.game.session.sharedDeck ??= buildSharedDeck());
-
-		/** Beat between AI turns so each one reads as its own turn. */
 		const BETWEEN_AI_MS = 600;
 
 		let isFirst = true;
-		for (const enemy of this.enemies) {
-			if (enemy.state.currentHp <= 0) continue;
+		for (const unit of this.aiUnits) {
+			if (unit.state.currentHp <= 0) continue;
 
 			if (!isFirst) {
 				await this.delay(BETWEEN_AI_MS);
 			}
 			isFirst = false;
-
-			drawCardsInto(enemy.state.hand, sharedDeck, 1);
-			await this.processOneEnemyTurn(enemy);
+			unit.turnManager.endTurn();
+			await this.processOneEnemyTurn(unit);
 		}
 
 		this.processingEnemyTurns = false;
 		this.setPlayerControlsVisible(true);
 
 		this.camera.centerOn(
-			{ x: this.mercenary.view.x, y: this.mercenary.view.y },
+			{
+				x: this.localUnit.mercenary.view.x,
+				y: this.localUnit.mercenary.view.y,
+			},
 			this.game.app.screen.width,
 			this.game.app.screen.height,
 		);
 		this.syncUI();
 	}
 
-	private async processOneEnemyTurn(enemy: EnemyEntity): Promise<void> {
-		this.activeAi = enemy;
+	private async processOneEnemyTurn(unit: PilotedMercenary): Promise<void> {
+		if (!unit.archetype || !unit.memory) return; // AI units always have both — guard for the type
+
+		this.activeAi = unit;
 		this.camera.centerOn(
-			{ x: enemy.mercenary.view.x, y: enemy.mercenary.view.y },
+			{ x: unit.mercenary.view.x, y: unit.mercenary.view.y },
 			this.game.app.screen.width,
 			this.game.app.screen.height,
 		);
 		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
 
-		const self = this.toCombatant(enemy.state);
-		const others = this.buildOtherCombatants(enemy.state.id);
+		const self = this.toCombatant(unit.state);
+		const others = this.buildOtherCombatants(unit.state.id);
 
 		const chestInfos: ChestInfo[] = this.placedChests.map((c) => ({
 			coord: c.coord,
@@ -672,103 +712,135 @@ export class MapScene implements Scene {
 		}));
 
 		const target = decideMovementTarget(
-			enemy.archetype,
+			unit.archetype,
 			self,
 			others,
 			chestInfos,
 			targetItemId,
 		);
 
-		// If the movement target is a living combatant we'd decline to fight
-		// anyway, don't approach at all — walking toward someone just to retreat
-		// again next turn is the oscillation bug. Skip straight to the fallback.
 		const targetCombatant = others.find(
 			(o) => o.coord.x === target.x && o.coord.y === target.y,
 		);
 		const wouldDeclineOnArrival =
 			targetCombatant !== undefined &&
-			!decideEngagement(enemy.archetype, self, targetCombatant);
+			!decideEngagement(unit.archetype, self, targetCombatant);
 
 		if (!wouldDeclineOnArrival) {
 			const blocked = new Set(others.map((o) => coordKey(o.coord)));
 
+			// Uncapped range purely to read the real, wall-aware path distance to
+			// the target — not a straight-line guess, which could send AI toward
+			// a card it doesn't actually need if the direct route is blocked.
+			const uncappedRange = computeMovementRange(
+				this.grid,
+				unit.state.coord,
+				this.grid.width * this.grid.height,
+				blocked,
+			);
+			const distanceNeeded =
+				uncappedRange.get(coordKey(target))?.distance ??
+				Math.abs(target.x - unit.state.coord.x) +
+					Math.abs(target.y - unit.state.coord.y);
+
+			const moveCard = decideMovementCard(
+				unit.state.hand,
+				unit.state.stats.movement,
+				distanceNeeded,
+			);
+			const cardBonus =
+				typeof moveCard?.value === "number" ? moveCard.value : 0;
+			const moveBudget = unit.state.stats.movement + cardBonus;
+
 			const range = computeMovementRange(
 				this.grid,
-				enemy.state.coord,
-				enemy.state.stats.movement,
+				unit.state.coord,
+				moveBudget,
 				blocked,
 			);
 			const reachable =
 				findNearestReachableTile(this.grid, range, target, blocked) ??
-				enemy.state.coord;
+				unit.state.coord;
 			const path = getPathTo(range, reachable) ?? [];
 
 			if (path.length > 0) {
-				enemy.state.coord = reachable;
-				await enemy.mercenary.moveAlongPath(path);
+				const cardType = moveCard?.color ?? "none";
+				if (unit.turnManager.beginMovement(cardType, cardBonus)) {
+					if (moveCard) {
+						const idx = unit.state.hand.findIndex((c) => c.id === moveCard.id);
+						if (idx !== -1) unit.state.hand.splice(idx, 1);
+					}
+					unit.state.coord = reachable;
+					unit.turnManager.commitMove(path.length);
+					await this.moveWithZoneStrikes(unit, path, unit.state.id);
+				}
 			}
 		}
 
-		this.tryEnemyOpenChest(enemy, enemy.state.coord);
+		this.tryOpenChestAt(unit.state, unit.state.coord);
 
-		const selfAfter = this.toCombatant(enemy.state);
-		const othersAfter = this.buildOtherCombatants(enemy.state.id);
-		const victim = pickEngagementTarget(
-			enemy.archetype,
-			selfAfter,
-			othersAfter,
-		);
+		const selfAfter = this.toCombatant(unit.state);
+		const othersAfter = this.buildOtherCombatants(unit.state.id);
+		const victim = pickEngagementTarget(unit.archetype, selfAfter, othersAfter);
 
 		if (victim) {
-			if (victim.id === this.mercState.id) {
-				this.showTargetMarker(this.mercenary);
-				await this.delay(500);
-				this.hideTargetMarker();
-				await this.aiInitiateCombat(enemy);
-			} else {
-				const defender = this.enemies.find((e) => e.state.id === victim.id);
-				if (defender && defender.state.currentHp > 0) {
-					this.showTargetMarker(defender.mercenary);
+			const victimUnit = this.units.find((u) => u.state.id === victim.id);
+			if (
+				victimUnit &&
+				victimUnit.state.currentHp > 0 &&
+				unit.turnManager.spendAttack()
+			) {
+				if (victimUnit.pilot === "local") {
+					this.showTargetMarker(victimUnit.mercenary);
 					await this.delay(500);
 					this.hideTargetMarker();
-					await this.resolveAiVsAi(enemy, defender);
+					await this.aiInitiateCombat(unit, victimUnit);
+				} else {
+					this.showTargetMarker(victimUnit.mercenary);
+					await this.delay(500);
+					this.hideTargetMarker();
+					await this.resolveAiVsAi(unit, victimUnit);
 				}
 			}
 		} else {
 			const adjacentThreats = othersAfter.filter((o) =>
-				isAdjacent(enemy.state.coord, o.coord),
+				isAdjacent(unit.state.coord, o.coord),
 			);
-			const fallback = decideFallbackAction(selfAfter, adjacentThreats);
+			const fallback = decideFallbackAction(
+				selfAfter,
+				adjacentThreats,
+				unit.archetype,
+				unit.turnManager.canDisengage,
+				unit.turnManager.canRest,
+			);
 
-			if (fallback === "rest") {
-				const sharedDeck = (this.game.session.sharedDeck ??= buildSharedDeck());
-				drawCardsInto(enemy.state.hand, sharedDeck, 2);
-				applyRestHeal(enemy.state);
-				clearFleeMemory(enemy.memory);
-				this.showFeedback(`💤 ${enemy.archetype} hunter rests`);
-			} else if (fallback === "retreat" && adjacentThreats.length > 0) {
+			if (fallback === "rest" && unit.turnManager.spendRest()) {
+				clearFleeMemory(unit.memory);
+				this.showFeedback(`💤 ${unit.archetype} hunter rests`);
+			} else if (fallback === "retreat" && unit.turnManager.beginDisengage()) {
 				const retreatBlocked = new Set(
 					othersAfter.map((o) => coordKey(o.coord)),
 				);
 				const retreatRange = computeMovementRange(
 					this.grid,
-					enemy.state.coord,
-					enemy.state.stats.movement,
+					unit.state.coord,
+					unit.state.stats.movement,
 					retreatBlocked,
 				);
-				const retreatFrom = enemy.state.coord;
+				const retreatFrom = unit.state.coord;
 				const retreatTile = pickRetreatTile(
 					retreatRange,
 					adjacentThreats[0].coord,
 					retreatFrom,
-					enemy.memory,
+					unit.memory,
 				);
 				if (retreatTile) {
 					const retreatPath = getPathTo(retreatRange, retreatTile) ?? [];
 					if (retreatPath.length > 0) {
-						enemy.state.coord = retreatTile;
-						recordFlee(enemy.memory, retreatFrom, retreatTile);
-						await enemy.mercenary.moveAlongPath(retreatPath);
+						unit.state.coord = retreatTile;
+						recordFlee(unit.memory, retreatFrom, retreatTile);
+						// No applyZoneStrikes — Disengage is ZoC-immune, that's its whole point.
+						await unit.mercenary.moveAlongPath(retreatPath);
 					}
 				}
 			}
@@ -778,53 +850,37 @@ export class MapScene implements Scene {
 		this.camera.unlock();
 	}
 
-	private tryEnemyOpenChest(enemy: EnemyEntity, coord: GridCoord): void {
-		const placed = this.placedChests.find(
-			(c) => !c.entity.isOpen && c.coord.x === coord.x && c.coord.y === coord.y,
-		);
-		if (!placed) return;
-		if (!enemy.state.items.some((i) => i === null)) return;
-
-		placed.entity.open();
-		const emptyIndex = enemy.state.items.findIndex((i) => i === null);
-		enemy.state.items[emptyIndex] = placed.plan.item;
-
-		if (placed.plan.isTarget) {
-			this.showFeedback("⚠️ An enemy hunter found the target item!");
-		}
-	}
-
 	/** Player is defender — existing interactive BattleOverlay. */
-	private async aiInitiateCombat(enemy: EnemyEntity): Promise<void> {
-		const enemyIndex = this.enemies.indexOf(enemy);
-		if (enemyIndex === -1) return;
-
-		this.activeCombatEnemyIndex = enemyIndex;
+	private async aiInitiateCombat(
+		attacker: PilotedMercenary,
+		defender: PilotedMercenary,
+	): Promise<void> {
+		this.activeCombatUnit = defender;
 
 		await new Promise<void>((resolve) => {
 			void this.game.overlays.show(
 				new BattleOverlay(
 					this.game,
-					enemy.state,
-					this.mercState,
+					attacker.state,
+					defender.state,
 					(result) => {
 						if (result.attackerNeedsTeleport) {
-							this.teleportEntity(enemy.state, enemy.mercenary);
+							this.teleportEntity(attacker.state, attacker.mercenary);
 						}
 						if (result.defenderNeedsTeleport) {
-							this.teleportEntity(this.mercState, this.mercenary);
+							this.teleportEntity(defender.state, defender.mercenary);
 						}
 						resolve();
 					},
-					ARCHETYPE_COLORS[enemy.archetype],
-					archetypeLabel(enemy.archetype),
+					ARCHETYPE_COLORS[attacker.archetype!],
+					archetypeLabel(attacker.archetype!),
 					0x4a9eff,
 					"You",
-					enemy.archetype,
+					attacker.archetype!,
 					"balanced",
 					"defender",
-					enemy.state.coord,
-					this.mercState.coord,
+					attacker.state.coord,
+					defender.state.coord,
 				),
 			);
 		});
@@ -832,12 +888,11 @@ export class MapScene implements Scene {
 
 	/**
 	 * AI vs AI: both sides auto-pick via chooseCombatAction, resolve through
-	 * shared combat, apply HP/loot. Still one combat pipeline — spectator
-	 * BattleOverlay can wrap this same resolve later.
+	 * shared combat, apply HP/loot. Same BattleOverlay pipeline, spectator mode.
 	 */
 	private async resolveAiVsAi(
-		attacker: EnemyEntity,
-		defender: EnemyEntity,
+		attacker: PilotedMercenary,
+		defender: PilotedMercenary,
 	): Promise<void> {
 		await new Promise<void>((resolve) => {
 			void this.game.overlays.show(
@@ -854,12 +909,12 @@ export class MapScene implements Scene {
 						}
 						resolve();
 					},
-					ARCHETYPE_COLORS[attacker.archetype],
-					archetypeLabel(attacker.archetype),
-					ARCHETYPE_COLORS[defender.archetype],
-					archetypeLabel(defender.archetype),
-					attacker.archetype,
-					defender.archetype,
+					ARCHETYPE_COLORS[attacker.archetype!],
+					archetypeLabel(attacker.archetype!),
+					ARCHETYPE_COLORS[defender.archetype!],
+					archetypeLabel(defender.archetype!),
+					attacker.archetype!,
+					defender.archetype!,
 					"none",
 					attacker.state.coord,
 					defender.state.coord,
@@ -880,19 +935,33 @@ export class MapScene implements Scene {
 		"balanced",
 	];
 
+	private spawnLocalUnit(): void {
+		const state = this.spawnMercenary();
+		const mercenary = new Mercenary(state.coord);
+		this.mercenaryContainer.addChild(mercenary.view);
+
+		const turnManager = new TurnManager(
+			() => state,
+			() => (this.game.session.sharedDeck ??= buildSharedDeck()),
+			() => this.syncUI(),
+		);
+
+		this.units.push({ pilot: "local", state, mercenary, turnManager });
+	}
+
 	private spawnEnemyHunters(): void {
-		this.enemies = [];
+		this.units = this.units.filter((u) => u.pilot === "local");
 
 		const used = new Set<string>();
-		used.add(coordKey(this.mercState.coord));
+		used.add(coordKey(this.localUnit.state.coord));
 		const exitTile = findExitTile(this.grid);
 		if (exitTile) used.add(coordKey(exitTile));
 
 		for (let i = 0; i < MapScene.ENEMY_ARCHETYPES.length; i++) {
 			const archetype = MapScene.ENEMY_ARCHETYPES[i];
 			const coord = this.pickEnemySpawnTile(used) ?? {
-				x: this.mercState.coord.x + 2 + i,
-				y: this.mercState.coord.y,
+				x: this.localUnit.state.coord.x + 2 + i,
+				y: this.localUnit.state.coord.y,
 			};
 			used.add(coordKey(coord));
 
@@ -909,9 +978,18 @@ export class MapScene implements Scene {
 				MapScene.ENEMY_COLORS[i] ?? 0xe67e22,
 			);
 			this.mercenaryContainer.addChild(mercenary.view);
-			this.enemies.push({
+
+			const turnManager = new TurnManager(
+				() => state,
+				() => (this.game.session.sharedDeck ??= buildSharedDeck()),
+				() => {},
+			);
+
+			this.units.push({
+				pilot: "ai",
 				state,
 				mercenary,
+				turnManager,
 				archetype,
 				memory: createAiMemory(),
 			});
@@ -921,8 +999,8 @@ export class MapScene implements Scene {
 	private pickEnemySpawnTile(used: Set<string>): GridCoord | null {
 		const preferred: GridCoord[] = [];
 		const fallback: GridCoord[] = [];
-		const px = this.mercState.coord.x;
-		const py = this.mercState.coord.y;
+		const px = this.localUnit.state.coord.x;
+		const py = this.localUnit.state.coord.y;
 
 		for (let x = 0; x < this.grid.width; x++) {
 			for (let y = 0; y < this.grid.height; y++) {
@@ -940,27 +1018,22 @@ export class MapScene implements Scene {
 		return pool[Math.floor(Math.random() * pool.length)];
 	}
 
-	/** Win check: standing on Exit with target held, via normal move only. */
+	/** Win check: standing on Exit with target held, via normal move only. PASS 4 TODO: local-only, revisit for multiplayer. */
 	private checkWinCondition(): void {
 		const exitTile = findExitTile(this.grid);
 		if (!exitTile) return;
-		if (
-			this.mercState.coord.x !== exitTile.x ||
-			this.mercState.coord.y !== exitTile.y
-		) {
-			return;
-		}
-
+		const local = this.localUnit.state;
+		if (local.coord.x !== exitTile.x || local.coord.y !== exitTile.y) return;
 		if (!this.isCarryingTarget()) return;
 
 		this.triggerWin();
 	}
 
-	/** Whether the mercenary currently holds this match's target item. */
+	/** Whether the local unit currently holds this match's target item. */
 	private isCarryingTarget(): boolean {
 		const target = this.game.session.chestPlan?.targetItem;
 		if (!target) return false;
-		return this.mercState.items.some((item) => item?.id === target.id);
+		return this.localUnit.state.items.some((item) => item?.id === target.id);
 	}
 
 	/** Record the match result and transition to MatchResultScene. */
@@ -968,7 +1041,8 @@ export class MapScene implements Scene {
 		this.game.session.matchResult = {
 			won: true,
 			turnsTaken: this.turnsTaken,
-			itemsExtracted: this.mercState.items.filter((i) => i !== null).length,
+			itemsExtracted: this.localUnit.state.items.filter((i) => i !== null)
+				.length,
 		};
 		void this.game.sceneManager.changeScene(new MatchResultScene(this.game));
 	}
@@ -981,7 +1055,7 @@ export class MapScene implements Scene {
 			this.exitTargetingMode();
 			return;
 		}
-		if (!this.turnManager.canAttack) {
+		if (!this.localUnit.turnManager.canAttack) {
 			this.showFeedback("⚔ Not enough AP to attack");
 			return;
 		}
@@ -996,39 +1070,58 @@ export class MapScene implements Scene {
 		this.enterTargetingMode();
 	}
 
-	/** All enemies still standing — the only valid targeting candidates. */
-	private livingEnemies(): EnemyEntity[] {
-		return this.enemies.filter((e) => e.state.currentHp > 0);
+	/** All AI units still standing — the only valid targeting candidates. */
+	private livingEnemies(): PilotedMercenary[] {
+		return this.aiUnits.filter((u) => u.state.currentHp > 0);
 	}
 
-	/** Show the reticle, sword cursor, default-select the nearest living enemy. */
 	private enterTargetingMode(): void {
 		const candidates = this.livingEnemies();
 		if (candidates.length === 0) return;
 
 		this.targetingActive = true;
-		this.game.app.canvas.style.cursor = "crosshair"; // placeholder for a real sword cursor asset
-
-		const nearestIndex = this.enemies.indexOf(
-			candidates.reduce((closest, e) =>
-				this.distanceToPlayer(e) < this.distanceToPlayer(closest) ? e : closest,
-			),
-		);
-		this.setTarget(nearestIndex);
+		this.game.app.canvas.style.cursor = "crosshair";
+		this.renderAttackRange();
 	}
 
-	/** Hide the reticle, restore the cursor, drop the current selection. */
 	private exitTargetingMode(): void {
 		this.targetingActive = false;
-		this.targetIndex = -1;
-		this.hideTargetMarker();
+		this.attackRangeContainer.removeChildren();
 		this.game.app.canvas.style.cursor = "default";
 	}
 
-	private distanceToPlayer(enemy: EnemyEntity): number {
-		const dx = enemy.state.coord.x - this.mercState.coord.x;
-		const dy = enemy.state.coord.y - this.mercState.coord.y;
-		return Math.sqrt(dx * dx + dy * dy);
+	private renderAttackRange(): void {
+		this.attackRangeContainer.removeChildren();
+		const local = this.localUnit.state;
+		const range = getRangeForClass(local.characterClass);
+		const tiles = computeAttackRange(
+			this.grid,
+			local.coord,
+			local.characterClass,
+			range,
+		);
+
+		for (const tile of tiles) {
+			const pos = gridToScreen(tile.coord);
+			const g = new Graphics();
+			g.poly([
+				0,
+				-TILE_HEIGHT / 2,
+				TILE_WIDTH / 2,
+				0,
+				0,
+				TILE_HEIGHT / 2,
+				-TILE_WIDTH / 2,
+				0,
+			]);
+			g.fill({
+				color: tile.quality === "clear" ? 0xffd700 : 0xe74c3c,
+				alpha: 0.35,
+			});
+			g.x = pos.x;
+			g.y = pos.y;
+			this.attackRangeContainer.addChild(g);
+		}
 	}
 
 	/** Points the shared marker at any entity's token — used by the player's manual targeting, and by any AI/monster/boss engagement preview. */
@@ -1045,102 +1138,55 @@ export class MapScene implements Scene {
 		this.targetReticle.visible = false;
 	}
 
-	/** Point the reticle at a specific enemy index — player's manual targeting entry point. */
-	private setTarget(index: number): void {
-		this.targetIndex = index;
-		const enemy = this.enemies[index];
-		if (!enemy || enemy.state.currentHp <= 0) {
-			this.hideTargetMarker();
-			return;
-		}
-		this.showTargetMarker(enemy.mercenary);
-	}
-
-	/**
-	 * Directional target cycling — picks the living enemy most aligned with
-	 * the given direction (dot product) among those actually in front of
-	 * the player that way, breaking ties toward the closer one. Logically
-	 * sound but only genuinely testable once multiple enemies exist —
-	 * with one enemy on the map, every direction just resolves to it or
-	 * nothing.
-	 */
-	private cycleTarget(direction: "up" | "down" | "left" | "right"): void {
-		if (!this.targetingActive) return;
-
-		const vectors = {
-			up: { dx: 0, dy: -1 },
-			down: { dx: 0, dy: 1 },
-			left: { dx: -1, dy: 0 },
-			right: { dx: 1, dy: 0 },
-		};
-		const vec = vectors[direction];
-
-		let bestIndex = -1;
-		let bestScore = -Infinity;
-
-		this.enemies.forEach((enemy, i) => {
-			if (enemy.state.currentHp <= 0) return;
-			const dx = enemy.state.coord.x - this.mercState.coord.x;
-			const dy = enemy.state.coord.y - this.mercState.coord.y;
-			const dist = Math.sqrt(dx * dx + dy * dy);
-			if (dist === 0) return;
-
-			const dot = (dx * vec.dx + dy * vec.dy) / dist;
-			if (dot <= 0.3) return; // not meaningfully in that direction
-
-			const score = dot - dist * 0.01;
-			if (score > bestScore) {
-				bestScore = score;
-				bestIndex = i;
-			}
-		});
-
-		if (bestIndex !== -1) this.setTarget(bestIndex);
-	}
-
-	/** Confirm the current target via keyboard (Enter/Space while targeting). */
-	private confirmTarget(): void {
-		if (this.targetIndex === -1) return;
-		this.tryStartCombat(this.targetIndex);
-	}
-
 	/** Range-checks the target, spends AP, opens BattleOverlay if valid. */
-	private tryStartCombat(enemyIndex: number): void {
-		const enemy = this.enemies[enemyIndex];
-		if (!enemy || enemy.state.currentHp <= 0) return;
+	private tryStartCombat(unit: PilotedMercenary): void {
+		if (!unit || unit.state.currentHp <= 0) return;
 
-		if (!isAdjacent(this.mercState.coord, enemy.state.coord)) {
+		const local = this.localUnit.state;
+		const range = getRangeForClass(local.characterClass);
+		const inRangeTiles = computeAttackRange(
+			this.grid,
+			local.coord,
+			local.characterClass,
+			range,
+		);
+		const inRange = inRangeTiles.some(
+			(t) =>
+				t.coord.x === unit.state.coord.x && t.coord.y === unit.state.coord.y,
+		);
+
+		if (!inRange) {
 			this.showFeedback("⚔ Target out of range");
 			return;
 		}
-		if (!this.turnManager.spendAttack()) return;
+		if (!this.localUnit.turnManager.spendAttack()) return;
 
 		this.exitTargetingMode();
-		this.activeCombatEnemyIndex = enemyIndex;
+		this.activeCombatUnit = unit;
 
 		void this.game.overlays.show(
 			new BattleOverlay(
 				this.game,
-				this.mercState,
-				enemy.state,
+				local,
+				unit.state,
 				(result) => this.onBattleComplete(result),
 				0x4a9eff,
 				"You",
-				ARCHETYPE_COLORS[enemy.archetype],
-				archetypeLabel(enemy.archetype),
+				ARCHETYPE_COLORS[unit.archetype!],
+				archetypeLabel(unit.archetype!),
 				"balanced",
-				enemy.archetype,
+				unit.archetype!,
 				"attacker",
-				this.mercState.coord,
-				enemy.state.coord,
+				local.coord,
+				unit.state.coord,
 			),
 		);
 	}
 
 	/**
-	 * Click-to-target: hit-tests the click against every living enemy
-	 * token in board-local space. Only active while targeting; clicking
-	 * anywhere that isn't an enemy cancels targeting instead.
+	 * Click-to-target: hit-tests the click against every living AI token
+	 * in board-local space. Only active while targeting; a miss is a
+	 * no-op, doesn't cancel targeting.
 	 */
 	private handleTargetClick(screenX: number, screenY: number): boolean {
 		if (!this.targetingActive) return false;
@@ -1150,59 +1196,65 @@ export class MapScene implements Scene {
 		const localY =
 			(screenY - this.boardContainer.y) / this.boardContainer.scale.y;
 
-		const hitIndex = this.enemies.findIndex((e) => {
-			if (e.state.currentHp <= 0) return false;
-			const dx = e.mercenary.view.x - localX;
-			const dy = e.mercenary.view.y - localY;
-			return Math.sqrt(dx * dx + dy * dy) <= 20;
+		const local = this.localUnit.state;
+		const range = getRangeForClass(local.characterClass);
+		const inRangeTiles = computeAttackRange(
+			this.grid,
+			local.coord,
+			local.characterClass,
+			range,
+		);
+
+		const hit = this.aiUnits.find((u) => {
+			if (u.state.currentHp <= 0) return false;
+			const dx = u.mercenary.view.x - localX;
+			const dy = u.mercenary.view.y - localY;
+			if (Math.sqrt(dx * dx + dy * dy) > 20) return false;
+			return inRangeTiles.some(
+				(t) => t.coord.x === u.state.coord.x && t.coord.y === u.state.coord.y,
+			);
 		});
 
-		if (hitIndex !== -1) {
-			this.tryStartCombat(hitIndex);
-		} else {
-			this.exitTargetingMode();
-		}
+		if (hit) this.tryStartCombat(hit);
 		return true;
 	}
 
 	/** Enemy defeat/teleport are BattleOverlay's job via shared state; this handles the rest. */
 	private onBattleComplete(result: BattleResult): void {
-		const enemy =
-			this.activeCombatEnemyIndex !== null
-				? this.enemies[this.activeCombatEnemyIndex]
-				: null;
-		this.activeCombatEnemyIndex = null;
+		const unit = this.activeCombatUnit;
+		this.activeCombatUnit = null;
 
-		if (result.defenderNeedsTeleport && enemy) {
-			this.teleportEntity(enemy.state, enemy.mercenary);
+		if (result.defenderNeedsTeleport && unit) {
+			this.teleportEntity(unit.state, unit.mercenary);
 			this.showFeedback("💨 Enemy hunter fled the fight!");
 		}
 
 		if (result.attackerNeedsTeleport) {
-			this.teleportEntity(this.mercState, this.mercenary);
+			this.teleportEntity(this.localUnit.state, this.localUnit.mercenary);
 		}
 
 		this.syncUI();
 	}
+
 	/** Spend 1 AP on Rest, lock Move, draw up to 2 cards. */
 	private handleRest(): void {
-		if (!this.turnManager.spendRest()) return;
+		if (!this.localUnit.turnManager.spendRest()) return;
 		this.moveController.exit();
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
 		this.showFeedback("💤 Rested — drew cards");
 	}
 
-	/** Spend 1 AP on Disengage. ZoC-restricted movement not yet implemented. */
+	/** Spend 2 AP on Disengage — alternative movement, immune to ZoC. */
 	private handleDisengagePressed(): void {
 		if (this.moveController.active) {
 			this.moveController.exit();
 			this.buttonBar.setMoveActive(false);
 			return;
 		}
-		if (!this.turnManager.beginDisengage()) return;
+		if (!this.localUnit.turnManager.beginDisengage()) return;
 
-		this.moveController.enter(this.mercState.stats.movement, true);
+		this.moveController.enter(this.localUnit.state.stats.movement, true);
 		this.buttonBar.setMoveActive(true);
 		this.buttonBar.closeMenu();
 	}
@@ -1212,7 +1264,7 @@ export class MapScene implements Scene {
 	/** End turn — shared by [E] key and End Turn button. No-ops mid-animation. */
 	private handleEndTurn(): void {
 		if (
-			this.mercenary.isAnimating ||
+			this.localUnit.mercenary.isAnimating ||
 			this.exitCardInProgress ||
 			this.processingEnemyTurns
 		) {
@@ -1220,9 +1272,10 @@ export class MapScene implements Scene {
 		}
 		this.moveController.exit();
 		this.hand.exitSelectionMode();
+		this.exitTargetingMode();
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
-		this.turnManager.endTurn();
+		this.localUnit.turnManager.endTurn();
 		this.turnsTaken++;
 		void this.processEnemyTurns();
 	}
@@ -1257,24 +1310,15 @@ export class MapScene implements Scene {
 			case "R":
 				this.regenerateMap();
 				break;
-			case "ArrowUp":
-				if (this.targetingActive) this.cycleTarget("up");
-				break;
-			case "ArrowDown":
-				if (this.targetingActive) this.cycleTarget("down");
-				break;
 			case "ArrowLeft":
-				if (this.targetingActive) this.cycleTarget("left");
-				else if (this.hand.isSelecting) this.hand.moveCaret(-1);
+				if (this.hand.isSelecting) this.hand.moveCaret(-1);
 				break;
 			case "ArrowRight":
-				if (this.targetingActive) this.cycleTarget("right");
-				else if (this.hand.isSelecting) this.hand.moveCaret(1);
+				if (this.hand.isSelecting) this.hand.moveCaret(1);
 				break;
 			case "Enter":
 			case " ":
-				if (this.targetingActive) this.confirmTarget();
-				else if (this.hand.isSelecting) this.hand.confirmHighlighted();
+				if (this.hand.isSelecting) this.hand.confirmHighlighted();
 				break;
 		}
 	};
@@ -1294,7 +1338,10 @@ export class MapScene implements Scene {
 
 		if (this.bagButton.hitTest(screenX, screenY)) {
 			this.inventoryPanel.toggle();
-
+			return;
+		}
+		if (this.logsButton.hitTest(screenX, screenY)) {
+			this.logPanel.toggle();
 			return;
 		}
 
@@ -1327,7 +1374,6 @@ export class MapScene implements Scene {
 
 		const { screenX, screenY } = this.getScreenPoint(event);
 
-		// Left-bottom zone matching the new hand position
 		const nearHand =
 			screenX < 420 && screenY > this.game.app.screen.height - 160;
 		this.hand.setHovered(nearHand);
@@ -1346,20 +1392,23 @@ export class MapScene implements Scene {
 			(this.game.app.screen.width - this.feedbackText.width) / 2;
 		this.feedbackText.y = 60;
 		this.feedbackTimer = 150;
-	}
 
-	/** Sync all UI to TurnManager state. Guarded — fires before buttonBar exists during construction. */
+		logMatchEvent(this.game.session, message);
+		this.logPanel.sync(this.game.session.matchLog ?? []);
+	}
+	/** Sync all UI to the local unit's TurnManager state. Guarded — fires before buttonBar exists during construction. */
 	private syncUI(): void {
-		if (!this.buttonBar || !this.turnManager) return;
-		this.buttonBar.sync(this.turnManager);
-		this.hand.syncFromHand(this.mercState.hand);
-		this.deckTracker.sync(this.turnManager);
-		this.inventoryPanel.sync(this.mercState.items);
+		if (!this.buttonBar || this.units.length === 0) return;
+		const local = this.localUnit;
+		this.buttonBar.sync(local.turnManager);
+		this.hand.syncFromHand(local.state.hand);
+		this.deckTracker.sync(local.turnManager);
+		this.inventoryPanel.sync(local.state.items);
 		this.characterPanel.setFromState(
 			this.game.session.character,
-			this.mercState,
-			this.turnManager.apRemaining,
-			this.turnManager.baseAP,
+			local.state,
+			local.turnManager.apRemaining,
+			local.turnManager.baseAP,
 		);
 	}
 
@@ -1367,11 +1416,9 @@ export class MapScene implements Scene {
 
 	/** Removes card from real hand, spends AP. Blue E routes to handleExitCard; Attack doesn't reach here. */
 	private handleCardConfirmed(card: CardData): void {
-		// Remove the played card from the real hand (source of truth) —
-		// this no-ops harmlessly for the synthetic "No Card" skip option,
-		// which is never actually part of mercState.hand to begin with.
-		const handIndex = this.mercState.hand.findIndex((c) => c.id === card.id);
-		if (handIndex !== -1) this.mercState.hand.splice(handIndex, 1);
+		const local = this.localUnit;
+		const handIndex = local.state.hand.findIndex((c) => c.id === card.id);
+		if (handIndex !== -1) local.state.hand.splice(handIndex, 1);
 
 		if (card.color === "blue" && card.value === "E") {
 			this.handleExitCard();
@@ -1381,7 +1428,7 @@ export class MapScene implements Scene {
 		const cardType = card.id === "__skip__" ? "none" : card.color;
 		const numericValue = typeof card.value === "number" ? card.value : 0;
 
-		if (!this.turnManager.beginMovement(cardType, numericValue)) {
+		if (!local.turnManager.beginMovement(cardType, numericValue)) {
 			return;
 		}
 
@@ -1399,7 +1446,8 @@ export class MapScene implements Scene {
 
 	/** Exit card: fly to exit, win immediately if carrying target, else linger + random flight. */
 	private async handleExitCard(): Promise<void> {
-		if (!this.turnManager.beginMovement("blue", 0)) return;
+		const local = this.localUnit;
+		if (!local.turnManager.beginMovement("blue", 0)) return;
 
 		this.exitCardInProgress = true;
 
@@ -1417,7 +1465,7 @@ export class MapScene implements Scene {
 
 		await this.delay(this.EXIT_CARD_LINGER_MS);
 
-		const destination = this.randomWalkableTile(this.mercState.coord);
+		const destination = this.randomWalkableTile(local.state.coord);
 		if (destination) {
 			await this.flyMercenaryTo(destination);
 		}
@@ -1428,10 +1476,11 @@ export class MapScene implements Scene {
 
 	/** Fade out, fly in a straight line, fade in on arrival. Alpha 0 while moving, not visible=false, so the camera still tracks it. */
 	private async flyMercenaryTo(coord: GridCoord): Promise<void> {
-		this.mercenary.view.alpha = 0;
-		this.mercState.coord = coord;
-		await this.mercenary.moveAlongPath([coord], this.EXIT_FLIGHT_MS);
-		this.mercenary.view.alpha = 1;
+		const local = this.localUnit;
+		local.mercenary.view.alpha = 0;
+		local.state.coord = coord;
+		await local.mercenary.moveAlongPath([coord], this.EXIT_FLIGHT_MS);
+		local.mercenary.view.alpha = 1;
 	}
 
 	/** Promise-based delay — used for the Exit card's linger between flights. */
@@ -1463,16 +1512,11 @@ export class MapScene implements Scene {
 		return candidates[Math.floor(Math.random() * candidates.length)];
 	}
 
+	/** PASS 4 TODO: occupancy check iterates `units` directly rather than through a pilot-aware helper — fine mechanically, worth a second look once real multiplayer identity exists. */
 	private teleportEntity(state: MercenaryState, mercenary: Mercenary): void {
-		const occupied: GridCoord[] = [];
-		if (state.id !== this.mercState.id && this.mercState.currentHp > 0) {
-			occupied.push(this.mercState.coord);
-		}
-		for (const e of this.enemies) {
-			if (e.state.id === state.id) continue;
-			if (e.state.currentHp <= 0) continue;
-			occupied.push(e.state.coord);
-		}
+		const occupied: GridCoord[] = this.units
+			.filter((u) => u.state.id !== state.id && u.state.currentHp > 0)
+			.map((u) => u.state.coord);
 
 		const destination = this.randomWalkableTile(state.coord, occupied);
 		if (!destination) return;
@@ -1489,13 +1533,13 @@ export class MapScene implements Scene {
 		return new MoveController({
 			grid: this.grid,
 			camera: this.camera,
-			mercenary: this.mercenary,
-			getMercenaryCoord: () => this.mercState.coord,
-			getMovementRemaining: () => this.turnManager.movementRemaining,
+			mercenary: this.localUnit.mercenary,
+			getMercenaryCoord: () => this.localUnit.state.coord,
+			getMovementRemaining: () => this.localUnit.turnManager.movementRemaining,
 			getBlockedCoords: () =>
-				this.enemies
-					.filter((e) => e.state.currentHp > 0)
-					.map((e) => e.state.coord),
+				this.aiUnits
+					.filter((u) => u.state.currentHp > 0)
+					.map((u) => u.state.coord),
 			onMoveCommitted: (
 				target: GridCoord,
 				path: GridCoord[],
@@ -1506,7 +1550,7 @@ export class MapScene implements Scene {
 
 	/** [R] dev shortcut: fresh seed/map/chests locally, no LoadingScene round-trip. */
 	private regenerateMap(): void {
-		if (this.mercenary.isAnimating || this.exitCardInProgress) return;
+		if (this.localUnit.mercenary.isAnimating || this.exitCardInProgress) return;
 
 		this.moveController.exit();
 		this.hand.exitSelectionMode();
@@ -1516,13 +1560,12 @@ export class MapScene implements Scene {
 
 		this.mapSeed = Math.floor(Math.random() * 1_000_000);
 		this.grid = this.buildMap();
-		this.mercState = this.spawnMercenary();
 
 		this.mercenaryContainer.removeChildren();
-		this.mercenary = new Mercenary(this.mercState.coord);
-		this.mercenary.view.addChild(this.itemPopup);
+		this.units = [];
+		this.spawnLocalUnit();
+		this.localUnit.mercenary.view.addChild(this.itemPopup);
 		this.itemPopup.visible = false;
-		this.mercenaryContainer.addChild(this.mercenary.view);
 
 		this.spawnEnemyHunters();
 
@@ -1534,9 +1577,9 @@ export class MapScene implements Scene {
 		this.game.session.playerSpawn = null;
 		this.spawnChests();
 
-		this.hand.syncFromHand(this.mercState.hand);
-		this.turnManager.reset();
-		this.turnManager.dealStartingHand();
+		this.hand.syncFromHand(this.localUnit.state.hand);
+		this.localUnit.turnManager.reset();
+		this.localUnit.turnManager.dealStartingHand();
 		this.turnsTaken = 0;
 
 		this.boardContainer.removeChild(this.moveController.view);
@@ -1566,17 +1609,15 @@ export class MapScene implements Scene {
 		return screenToGrid(localX, localY);
 	}
 
-	/** Generate the map grid, timing it for the stats overlay. */
+	/** Generate the map grid. */
 	private buildMap(): Grid {
-		const grid = generateDungeon(this.mapWidth, this.mapHeight, {
+		return generateDungeon(this.mapWidth, this.mapHeight, {
 			seed: this.mapSeed,
 			roomCount: this.roomCount,
 		});
-
-		return grid;
 	}
 
-	/** Place the player mercenary on the first walkable tile. */
+	/** Build the local player's MercenaryState. */
 	private spawnMercenary(): MercenaryState {
 		const spawnCoord = this.game.session.playerSpawn ??
 			findFirstWalkableTile(this.grid) ?? { x: 0, y: 0 };
@@ -1595,16 +1636,14 @@ export class MapScene implements Scene {
 		});
 	}
 
-	/** Draw every tile diamond, timing the build for the stats overlay. */
+	/** Draw every tile diamond. */
 	private renderMap(): void {
 		this.tilesContainer.removeChildren();
 
-		let count = 0;
 		for (let x = 0; x < this.grid.width; x++) {
 			for (let y = 0; y < this.grid.height; y++) {
 				const tile = this.grid.getTile({ x, y });
 				if (!tile) continue;
-				count++;
 				const screenPos = gridToScreen(tile.coord);
 				const diamond = this.drawTileDiamond(this.TILE_COLORS[tile.type]);
 				diamond.x = screenPos.x;

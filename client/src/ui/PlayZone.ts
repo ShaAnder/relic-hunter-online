@@ -10,7 +10,7 @@ const SKIP_BTN_H = 32;
 const SKIP_GAP = 14;
 
 const SNAP_MS = 140;
-const HOLD_MS = 1000;
+const HOLD_MS = 500;
 const FADE_MS = 220;
 
 /**

@@ -35,6 +35,11 @@ export interface MatchResult {
 	itemsExtracted: number;
 }
 
+export interface MatchLogEntry {
+	message: string;
+	timestamp: number;
+}
+
 /** One chest's plan + the tile LoadingOverlay chose for it. */
 export interface PlacedChestRecord {
 	plan: ChestPlan;
@@ -51,7 +56,7 @@ export interface MatchParticipant {
 export class GameSession {
 	character: CharacterData | null = null;
 	missionParams: MissionParams | null = null;
-
+	matchLog: MatchLogEntry[] | null = null;
 	mapSeed: number | null = null;
 
 	/** Item plan only — still useful for target lookup. */
@@ -80,4 +85,11 @@ export class GameSession {
 	 * across that transition).
 	 */
 	sharedDeck: CardData[] | null = null;
+}
+
+/** The one place any feedback message gets recorded, regardless of which UI
+ * triggered it — MapScene's floating text and BattleOverlay's round outcomes both call this alongside their own transient popup. */
+export function logMatchEvent(session: GameSession, message: string): void {
+	session.matchLog ??= [];
+	session.matchLog.push({ message, timestamp: Date.now() });
 }

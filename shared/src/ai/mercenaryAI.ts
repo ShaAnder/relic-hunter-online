@@ -178,21 +178,62 @@ export function decideMovementTarget(
 }
 
 /**
- * What to do on a turn where this hunter didn't fight — either nothing
- * adjacent was worth engaging, or decideEngagement declined. Retreat takes
- * priority over resting: standing next to a threat you just chose not to
- * fight, resting, is worse than moving off first. Rest only applies when
- * genuinely clear of adjacent threats and HP is low.
+ * Smallest Blue movement card that closes the gap to the target — not
+ * just the strongest one held, so bigger cards stay saved for when a
+ * smaller one genuinely wouldn't reach. If nothing covers the full gap,
+ * falls back to the strongest available, to get as close as possible.
+ * Returns undefined if base movement already reaches on its own.
+ */
+export function decideMovementCard(
+	hand: CardData[],
+	baseMovement: number,
+	distanceNeeded: number,
+): CardData | undefined {
+	const gap = distanceNeeded - baseMovement;
+	if (gap <= 0) return undefined;
+
+	const blueCards = hand.filter(
+		(c): c is CardData & { value: number } =>
+			c.color === "blue" && typeof c.value === "number",
+	);
+	if (blueCards.length === 0) return undefined;
+
+	const sufficientCards = blueCards.filter((c) => c.value >= gap);
+	if (sufficientCards.length > 0) {
+		return sufficientCards.reduce((a, b) => (b.value < a.value ? b : a));
+	}
+
+	return blueCards.reduce((a, b) => (b.value > a.value ? b : a));
+}
+
+/**
+ * Fallback when nothing's worth fighting this turn. Adjacent-threat
+ * behavior is archetype-specific, not just "flee if possible": Aggressive
+ * stands ground and heals (accepting the enemy might engage next turn)
+ * rather than running; Balanced/Treasure genuinely flee via Disengage
+ * (ZoC-immune) when they can afford it, falling back to Rest if they
+ * can't, and only holding position if neither is affordable.
  */
 export function decideFallbackAction(
 	self: AiCombatant,
 	adjacentThreats: AiCombatant[],
+	archetype: AiArchetype,
+	canAffordDisengage: boolean,
+	canAffordRest: boolean,
 ): AiFallbackAction {
-	if (adjacentThreats.length > 0) return "retreat";
+	if (adjacentThreats.length === 0) {
+		const hpRatio = self.currentHp / Math.max(1, self.stats.maxHp);
+		return canAffordRest && hpRatio < 0.5 ? "rest" : "hold";
+	}
 
-	const hpRatio = self.currentHp / Math.max(1, self.stats.maxHp);
-	if (hpRatio < 0.5) return "rest";
+	if (archetype === "aggressive") {
+		// Stands its ground and heals rather than fleeing — accepts the
+		// adjacent threat might engage next turn, doesn't retreat from it.
+		return canAffordRest ? "rest" : "hold";
+	}
 
+	if (canAffordDisengage) return "retreat";
+	if (canAffordRest) return "rest";
 	return "hold";
 }
 
