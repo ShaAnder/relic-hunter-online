@@ -1,9 +1,9 @@
-import type { MovementRangeEntry } from "../game/movement";
+import type { MovementRangeEntry } from "../world/movement";
 import type { MercenaryStats } from "../types/mercenary";
-import type { CardData } from "../game/card";
-import type { ItemData } from "../game/item";
-import type { CombatAction, CombatChoice } from "../game/combat";
-import type { GridCoord } from "../game/grid";
+import type { CardData } from "../cards/card";
+import type { ItemData } from "../items/item";
+import type { CombatAction, CombatChoice } from "../combat/combat";
+import type { GridCoord } from "../world/grid";
 import type { AiMemory } from "./aiMemory";
 
 /** Hostile hunter behavior profile */

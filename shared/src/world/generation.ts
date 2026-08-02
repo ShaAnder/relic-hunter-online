@@ -1,6 +1,6 @@
 // shared/src/game/generation.ts
-import { Grid, TileType, type GridCoord } from "./grid";
-import { createSeededRandom } from "./random";
+import { Grid, TileType, type GridCoord } from "../world/grid";
+import { createSeededRandom } from "../math/random";
 
 /**
  * Configuration options for dungeon generation.

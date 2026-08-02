@@ -1,6 +1,6 @@
-import type { GridCoord } from "../game/grid";
-import type { ItemData } from "../game/item";
-import type { CardData } from "../game/card";
+import type { GridCoord } from "../world/grid";
+import type { ItemData } from "../items/item";
+import type { CardData } from "../cards/card";
 
 export type CharacterClass =
 	| "tank"

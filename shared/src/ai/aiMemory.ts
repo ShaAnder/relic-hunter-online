@@ -1,4 +1,4 @@
-import type { GridCoord } from "../game/grid";
+import type { GridCoord } from "../world/grid";
 
 /**
  * Persistent per-entity AI memory — survives across turns, unlike the

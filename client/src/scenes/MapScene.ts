@@ -18,6 +18,9 @@ import { BattleOverlay, type BattleResult } from "@/ui/overlay/BattleOverlay";
 import { MoveController } from "@/systems/MoveController";
 import { TurnManager } from "@/systems/TurnManager";
 import {
+	type ChestInfo,
+	type AiArchetype,
+	type AiCombatant,
 	decideMovementTarget,
 	decideMovementCard,
 	pickEngagementTarget,
@@ -27,18 +30,17 @@ import {
 	isAdjacent,
 	ARCHETYPE_COLORS,
 	archetypeLabel,
-	type ChestInfo,
-	type AiArchetype,
-	type AiCombatant,
 } from "@relic-hunter/shared";
 import {
-	Grid,
-	TileType,
 	type GridCoord,
 	type ItemData,
 	type ChestPlan,
 	type CardData,
 	type MercenaryState,
+	type MonsterTier,
+	type MonsterTargetCandidate,
+	Grid,
+	TileType,
 	generateDungeon,
 	findFirstWalkableTile,
 	findExitTile,
@@ -55,6 +57,10 @@ import {
 	ZoneOwner,
 	computeAttackRange,
 	getRangeForClass,
+	createMonster,
+	monsterAsMercenaryState,
+	shouldSpawnMonster,
+	decideMonsterTarget,
 } from "@relic-hunter/shared";
 import { Hand } from "@/ui/Hand";
 import { CharacterPanel } from "@/ui/CharacterPanel";
@@ -73,6 +79,8 @@ import type { PilotedMercenary } from "@/types/entities";
 import { LogsButton } from "@/ui/buttons/LogButton";
 import { LogPanel } from "@/ui/LogPanel";
 import { logMatchEvent } from "@/core/game/GameSession";
+import { MonsterToken } from "@/entities/Monster";
+import type { MonsterEntity } from "@/types/entities";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -105,6 +113,16 @@ export class MapScene implements Scene {
 	// Entities — one array, pilot type is the only thing distinguishing them
 	private units: PilotedMercenary[] = [];
 	private placedChests: PlacedChest[] = [];
+
+	// Monster Entities
+	private monsters: MonsterEntity[] = [];
+	private static readonly MONSTER_TIERS: MonsterTier[] = [
+		"light",
+		"medium",
+		"heavy",
+	];
+	private monsterSpawnIndex = 0;
+
 	// True during the Exit card's two-flight teleport sequence — blocks
 	// End Turn / regenerate from interrupting mid-sequence, same role
 	// mercenary.isAnimating plays for normal moves.
@@ -330,6 +348,10 @@ export class MapScene implements Scene {
 		for (const unit of this.units) {
 			unit.mercenary.update(deltaTime);
 		}
+		for (const monster of this.monsters) {
+			monster.token.update(deltaTime);
+		}
+
 		this.hand.update(deltaTime);
 		this.buttonBar.update(deltaTime);
 		this.inventoryPanel.update(deltaTime);
@@ -674,7 +696,10 @@ export class MapScene implements Scene {
 			isFirst = false;
 			unit.turnManager.endTurn();
 			await this.processOneEnemyTurn(unit);
+			this.trySpawnMonster();
 		}
+
+		await this.processMonsterTurns();
 
 		this.processingEnemyTurns = false;
 		this.setPlayerControlsVisible(true);
@@ -848,6 +873,148 @@ export class MapScene implements Scene {
 		this.camera.unlock();
 	}
 
+	private async processMonsterTurns(): Promise<void> {
+		const MONSTER_DELAY_MS = 400;
+		let isFirst = true;
+
+		for (const monster of this.livingMonsters()) {
+			if (!isFirst) await this.delay(MONSTER_DELAY_MS);
+			isFirst = false;
+			await this.processOneMonsterTurn(monster);
+		}
+	}
+
+	private async moveMonsterWithZoneStrikes(
+		monster: MonsterEntity,
+		path: GridCoord[],
+	): Promise<void> {
+		const owners = this.buildZoneOwners(monster.state.id);
+		const crossings = findZonesCrossed(this.grid, path, owners);
+
+		let segmentStart = 0;
+		for (const crossing of crossings) {
+			const segment = path.slice(segmentStart, crossing.pathIndex + 1);
+			if (segment.length > 0) {
+				await monster.token.moveAlongPath(segment);
+			}
+			segmentStart = crossing.pathIndex + 1;
+
+			const ownerUnit = this.units.find(
+				(u) => u.state.id === crossing.owner.id,
+			);
+			if (ownerUnit) {
+				const strike = resolveReactionStrike(
+					ownerUnit.state.stats,
+					monster.state.stats,
+				);
+				monster.state.currentHp -= strike.damage;
+				this.showFeedback(
+					`⚔ A ${monster.state.tier} monster entered ${this.getUnitLabel(ownerUnit)}'s zone of control — took ${strike.damage} damage`,
+				);
+				await this.delay(400);
+			}
+		}
+
+		const remaining = path.slice(segmentStart);
+		if (remaining.length > 0) {
+			await monster.token.moveAlongPath(remaining);
+		}
+	}
+
+	private async processOneMonsterTurn(monster: MonsterEntity): Promise<void> {
+		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
+
+		const hunters: MonsterTargetCandidate[] = this.units
+			.filter((u) => u.state.currentHp > 0)
+			.map((u) => ({
+				id: u.state.id,
+				coord: u.state.coord,
+				isCarryingTarget: targetItemId
+					? u.state.items.some((i) => i?.id === targetItemId)
+					: false,
+			}));
+
+		const targetCandidate = decideMonsterTarget(monster.state, hunters);
+		if (!targetCandidate) return;
+
+		const targetUnit = this.units.find(
+			(u) => u.state.id === targetCandidate.id,
+		);
+		if (!targetUnit) return;
+
+		const isAdjacentNow = isAdjacent(
+			monster.state.coord,
+			targetUnit.state.coord,
+		);
+
+		if (!isAdjacentNow) {
+			const blocked = new Set(
+				this.units
+					.filter((u) => u.state.currentHp > 0)
+					.map((u) => coordKey(u.state.coord)),
+			);
+			const range = computeMovementRange(
+				this.grid,
+				monster.state.coord,
+				monster.state.stats.movement,
+				blocked,
+			);
+			const reachable =
+				findNearestReachableTile(
+					this.grid,
+					range,
+					targetUnit.state.coord,
+					blocked,
+				) ?? monster.state.coord;
+			const path = getPathTo(range, reachable) ?? [];
+
+			if (path.length > 0) {
+				monster.state.coord = reachable;
+				await this.moveMonsterWithZoneStrikes(monster, path);
+			}
+		}
+
+		if (isAdjacent(monster.state.coord, targetUnit.state.coord)) {
+			await this.monsterAttack(monster, targetUnit);
+		}
+	}
+
+	private async monsterAttack(
+		monster: MonsterEntity,
+		target: PilotedMercenary,
+	): Promise<void> {
+		const monsterAsState = monsterAsMercenaryState(monster.state);
+		const tierLabel = `${monster.state.tier[0].toUpperCase()}${monster.state.tier.slice(1)} Monster`;
+
+		await new Promise<void>((resolve) => {
+			void this.game.overlays.show(
+				new BattleOverlay(
+					this.game,
+					monsterAsState,
+					target.state,
+					(result) => {
+						monster.state.currentHp = monsterAsState.currentHp;
+						if (result.defenderNeedsTeleport) {
+							this.teleportEntity(target.state, target.mercenary);
+						}
+						resolve();
+					},
+					0x8b0000,
+					tierLabel,
+					target.pilot === "local"
+						? 0x4a9eff
+						: ARCHETYPE_COLORS[target.archetype!],
+					target.pilot === "local" ? "You" : archetypeLabel(target.archetype!),
+					"balanced",
+					target.archetype ?? "balanced",
+					target.pilot === "local" ? "defender" : "none",
+					monster.state.coord,
+					target.state.coord,
+				),
+			);
+		});
+	}
+
 	/** Player is defender — existing interactive BattleOverlay. */
 	private async aiInitiateCombat(
 		attacker: PilotedMercenary,
@@ -992,6 +1159,39 @@ export class MapScene implements Scene {
 				memory: createAiMemory(),
 			});
 		}
+	}
+
+	private trySpawnMonster(): void {
+		if (!shouldSpawnMonster(this.monsters.length)) return;
+
+		const used = new Set<string>(
+			this.units.map((u) => coordKey(u.state.coord)),
+		);
+		for (const m of this.monsters) used.add(coordKey(m.state.coord));
+
+		const coord = this.pickEnemySpawnTile(used);
+		if (!coord) return;
+
+		const tier =
+			MapScene.MONSTER_TIERS[
+				this.monsterSpawnIndex % MapScene.MONSTER_TIERS.length
+			];
+		this.monsterSpawnIndex++;
+
+		const state = createMonster(
+			`monster_${Date.now()}_${this.monsterSpawnIndex}`,
+			tier,
+			coord,
+		);
+		const token = new MonsterToken(coord, tier);
+		this.mercenaryContainer.addChild(token.view);
+
+		this.monsters.push({ state, token });
+		this.showFeedback(`👹 A ${tier} monster appears!`);
+	}
+
+	private livingMonsters(): MonsterEntity[] {
+		return this.monsters.filter((m) => m.state.currentHp > 0);
 	}
 
 	private pickEnemySpawnTile(used: Set<string>): GridCoord | null {
@@ -1275,6 +1475,7 @@ export class MapScene implements Scene {
 		this.buttonBar.closeMenu();
 		this.localUnit.turnManager.endTurn();
 		this.turnsTaken++;
+		this.trySpawnMonster();
 		void this.processEnemyTurns();
 	}
 

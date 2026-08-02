@@ -1,5 +1,5 @@
-import type { ItemData } from "./item";
-import { pickTargetItem, itemsByCategory } from "./item";
+import type { ItemData } from "../items/item";
+import { pickTargetItem, itemsByCategory } from "../items/item";
 
 const MIN_CHESTS = 10;
 const MAX_CHESTS = 15;

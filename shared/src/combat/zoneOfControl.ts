@@ -1,4 +1,4 @@
-import type { Grid, GridCoord } from "./grid";
+import type { Grid, GridCoord } from "../world/grid";
 import { tilesBetween } from "./targeting";
 
 export interface ZoneOwner {

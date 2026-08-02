@@ -1,4 +1,4 @@
-import type { CardData } from "./card";
+import type { CardData } from "../cards/card";
 import type { MercenaryStats, MercenaryState } from "../types/mercenary";
 
 /**

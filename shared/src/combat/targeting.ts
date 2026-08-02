@@ -1,6 +1,6 @@
-import type { Grid, GridCoord } from "./grid";
+import type { Grid, GridCoord } from "../world/grid";
 import type { CharacterClass } from "../types/mercenary";
-import { isMeleeClass, isRangedClass } from "./character";
+import { isMeleeClass, isRangedClass } from "../entities/character";
 
 export type ShotQuality = "clear" | "obstructed";
 
