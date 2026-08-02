@@ -4,6 +4,7 @@ import type { Game } from "@/core/game/Game";
 import { Button } from "@/ui/generics/Button";
 import { CharacterCreationScene } from "./CharacterCreationScene";
 import { LoadGameScene } from "./LoadGameScene";
+import { HelpScene } from "./HelpScene";
 
 /**
  * Top-level menu after the eventual Landing "Press Start".
@@ -50,6 +51,12 @@ export class MainMenuScene implements Scene {
 				label: "Load Character",
 				action: () => {
 					void this.game.sceneManager.changeScene(new LoadGameScene(this.game));
+				},
+			},
+			{
+				label: "Help / Tutorial",
+				action: () => {
+					void this.game.sceneManager.changeScene(new HelpScene(this.game));
 				},
 			},
 			{
