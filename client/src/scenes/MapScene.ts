@@ -466,8 +466,6 @@ export class MapScene implements Scene {
 			await this.moveWithZoneStrikes(local, path, local.state.id);
 		}
 
-		await local.mercenary.moveAlongPath(path);
-
 		this.tryOpenChestAt(local.state, target);
 		this.checkWinCondition();
 

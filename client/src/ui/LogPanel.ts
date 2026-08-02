@@ -84,7 +84,10 @@ export class LogPanel {
 			this.scrollOffset + VISIBLE_ROWS,
 		);
 
-		slice.forEach((entry, i) => {
+		let cursorY = 0;
+		const ROW_GAP = 6;
+
+		for (const entry of slice) {
 			const time = new Date(entry.timestamp).toLocaleTimeString([], {
 				hour: "2-digit",
 				minute: "2-digit",
@@ -99,8 +102,9 @@ export class LogPanel {
 					wordWrapWidth: PANEL_W - PAD * 2,
 				},
 			});
-			row.y = i * ROW_H;
+			row.y = cursorY;
 			this.rowsContainer.addChild(row);
-		});
+			cursorY += row.height + ROW_GAP;
+		}
 	}
 }
