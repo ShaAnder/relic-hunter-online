@@ -1,8 +1,9 @@
-import type { EnemyEntity } from "@/types/entities";
+import type { PilotedMercenary } from "@/types/entities";
 import { createMercenary, createAiMemory } from "@relic-hunter/shared";
 import type { GridCoord, ItemData } from "@relic-hunter/shared";
 import { Mercenary } from "@/entities/Mercenary";
 import type { Grid } from "@relic-hunter/shared";
+import { TurnManager } from "@/systems/TurnManager";
 
 /**
  * Debug-only defenseless hunter, 2 tiles from a given origin, carrying
@@ -10,7 +11,10 @@ import type { Grid } from "@relic-hunter/shared";
  * real AI behavior. Never import this outside dev/debug code paths.
  * @param origin - anchor coord, typically the player's spawn position
  */
-export function spawnTestHunter(grid: Grid, origin: GridCoord): EnemyEntity {
+export function spawnTestHunter(
+	grid: Grid,
+	origin: GridCoord,
+): PilotedMercenary {
 	const coord = findNearbyWalkableTile(grid, origin, { x: 2, y: 0 });
 
 	const state = createMercenary("test_hunter", coord, {
@@ -28,22 +32,33 @@ export function spawnTestHunter(grid: Grid, origin: GridCoord): EnemyEntity {
 
 	const mercenary = new Mercenary(coord, 0xff00ff);
 
+	// Minimal TurnManager — debug hunters never take real turns
+	const turnManager = new TurnManager(
+		() => state,
+		() => [],
+		() => {},
+	);
+
 	return {
+		pilot: "ai",
 		state,
 		mercenary,
+		turnManager,
 		archetype: "aggressive",
 		memory: createAiMemory(),
 	};
 }
 
-/** Debug-only hunter tuned to always Surrender via chooseCombatAction's
+/**
+ * Debug-only hunter tuned to always Surrender via chooseCombatAction's
  * real decision path — power ratio guarantees shouldFlee regardless of
  * current HP, low movement guarantees canLikelyEscape fails, forcing
- * Surrender over Run. Nothing about this bypasses real combat logic. */
+ * Surrender over Run. Nothing about this bypasses real combat logic.
+ */
 export function spawnSurrenderTestHunter(
 	grid: Grid,
 	origin: GridCoord,
-): EnemyEntity {
+): PilotedMercenary {
 	const coord = findNearbyWalkableTile(grid, origin, { x: -2, y: 0 });
 
 	const state = createMercenary("test_surrenderer", coord, {
@@ -61,10 +76,25 @@ export function spawnSurrenderTestHunter(
 
 	const mercenary = new Mercenary(coord, 0x00ffff);
 
-	return { state, mercenary, archetype: "balanced", memory: createAiMemory() };
+	const turnManager = new TurnManager(
+		() => state,
+		() => [],
+		() => {},
+	);
+
+	return {
+		pilot: "ai",
+		state,
+		mercenary,
+		turnManager,
+		archetype: "balanced",
+		memory: createAiMemory(),
+	};
 }
 
-/** Walkable tile near a preferred offset from origin — falls back to a widening search ring if that exact spot isn't valid (off-map, a wall, etc). */
+/** Walkable tile near a preferred offset from origin —
+ * falls back to a widening search ring if that exact
+ * spot isn't valid (off-map, a wall, etc). */
 function findNearbyWalkableTile(
 	grid: Grid,
 	origin: GridCoord,
@@ -84,5 +114,5 @@ function findNearbyWalkableTile(
 			}
 		}
 	}
-	return origin; // last resort, shouldn't be hit on any real generated map
+	return origin;
 }

@@ -20,7 +20,7 @@ import {
 } from "@relic-hunter/shared";
 import { Chest } from "@/entities/Chest";
 import { MapScene } from "@/scenes/MapScene";
-import { Mercenary } from "@/entities/Mercenary";
+
 import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
 
 const FADE_IN_MS = 900;
@@ -483,7 +483,7 @@ export class LoadingOverlay implements Overlay {
 		this.view.setChildIndex(this.cover, this.view.children.length - 1);
 	}
 
-	private layoutPanel(width: number, height: number): void {
+	private layoutPanel(_width: number, height: number): void {
 		if (!this.sizeText) return;
 		this.sizeText.x = 20;
 		this.sizeText.y = 20;
