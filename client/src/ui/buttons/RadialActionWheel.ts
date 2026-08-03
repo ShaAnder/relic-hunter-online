@@ -1,6 +1,6 @@
 import { Container, Graphics, Sprite } from "pixi.js";
 import type { TurnManager } from "@/systems/TurnManager";
-import { loadIconSprite } from "@/rendering/Svgicon";
+import { loadIconSprite } from "@/rendering/SvgIcon";
 import moveSvgUrl from "@/assets/icons/move.svg";
 import actionsSvgUrl from "@/assets/icons/actions.svg";
 import endTurnSvgUrl from "@/assets/icons/endTurn.svg";
