@@ -14,7 +14,7 @@ const VISIBLE_ROWS = Math.floor((PANEL_H - PAD * 2 - 30) / ROW_H);
  */
 export class LogPanel {
 	readonly view = new Container();
-
+	private clipMask = new Graphics();
 	private bg = new Graphics();
 	private titleText: Text;
 	private rowsContainer = new Container();
@@ -40,6 +40,12 @@ export class LogPanel {
 		this.rowsContainer.x = PAD;
 		this.rowsContainer.y = 32;
 		this.view.addChild(this.rowsContainer);
+		this.clipMask.rect(0, 0, PANEL_W, PANEL_H - 32 - PAD);
+		this.clipMask.fill(0xffffff);
+		this.clipMask.x = PAD;
+		this.clipMask.y = 32;
+		this.view.addChild(this.clipMask);
+		this.rowsContainer.mask = this.clipMask;
 
 		this.bg.on("wheel", (e: WheelEvent) => {
 			this.scrollOffset = Math.max(

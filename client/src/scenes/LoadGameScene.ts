@@ -10,7 +10,8 @@ import { CharacterCreationScene } from "./CharacterCreationScene";
 
 /**
  * Lists every saved hunter from CharacterRepository.
- * Selecting one writes it into GameSession and goes to Lobby.
+ * Selecting one writes it into GameSession and goes to Lobby. Each row
+ * also has a delete button, backed by CharacterRepo's existing delete().
  */
 export class LoadGameScene implements Scene {
 	readonly view = new Container();
@@ -19,6 +20,7 @@ export class LoadGameScene implements Scene {
 	private title!: Text;
 	private emptyText!: Text;
 	private charButtons: Button[] = [];
+	private deleteButtons: Button[] = [];
 	private backBtn!: Button;
 	private createBtn!: Button;
 
@@ -38,6 +40,12 @@ export class LoadGameScene implements Scene {
 	}
 
 	private buildUI(): void {
+		// buildUI can now be called more than once (delete triggers a
+		// rebuild) — clear everything first so children don't double up.
+		this.view.removeChildren();
+		this.charButtons = [];
+		this.deleteButtons = [];
+
 		this.title = new Text({
 			text: "Load Character",
 			style: { fill: 0xffffff, fontSize: 32, fontWeight: "bold" },
@@ -63,6 +71,16 @@ export class LoadGameScene implements Scene {
 			});
 			this.charButtons.push(btn);
 			this.view.addChild(btn.view);
+
+			const deleteBtn = new Button({
+				text: "✕",
+				width: 40,
+				height: 48,
+				fontSize: 16,
+				onClick: () => this.deleteCharacter(char.id),
+			});
+			this.deleteButtons.push(deleteBtn);
+			this.view.addChild(deleteBtn.view);
 		}
 
 		this.createBtn = new Button({
@@ -95,6 +113,12 @@ export class LoadGameScene implements Scene {
 		void this.game.sceneManager.changeScene(new LobbyScene(this.game));
 	}
 
+	private deleteCharacter(id: string): void {
+		this.repo.delete(id);
+		this.buildUI();
+		this.layout(this.game.app.screen.width, this.game.app.screen.height);
+	}
+
 	private layout(width: number, height: number): void {
 		this.title.x = width / 2 - this.title.width / 2;
 		this.title.y = 50;
@@ -103,9 +127,11 @@ export class LoadGameScene implements Scene {
 		this.emptyText.y = 140;
 
 		let y = 140;
-		for (const btn of this.charButtons) {
-			btn.view.x = width / 2 - 210;
-			btn.view.y = y;
+		for (let i = 0; i < this.charButtons.length; i++) {
+			this.charButtons[i].view.x = width / 2 - 210;
+			this.charButtons[i].view.y = y;
+			this.deleteButtons[i].view.x = width / 2 + 220;
+			this.deleteButtons[i].view.y = y;
 			y += 60;
 		}
 

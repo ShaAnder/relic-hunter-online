@@ -750,7 +750,10 @@ export class MapScene implements Scene {
 			!decideEngagement(unit.archetype, self, targetCombatant);
 
 		if (!wouldDeclineOnArrival) {
-			const blocked = new Set(others.map((o) => coordKey(o.coord)));
+			const blocked = new Set([
+				...others.map((o) => coordKey(o.coord)),
+				...this.livingMonsterCoords().map(coordKey),
+			]);
 
 			// Uncapped range purely to read the real, wall-aware path distance to
 			// the target — not a straight-line guess, which could send AI toward
@@ -808,11 +811,12 @@ export class MapScene implements Scene {
 
 		if (victim) {
 			const victimUnit = this.units.find((u) => u.state.id === victim.id);
-			if (
+			const canFight =
 				victimUnit &&
 				victimUnit.state.currentHp > 0 &&
-				unit.turnManager.spendAttack()
-			) {
+				unit.turnManager.spendAttack();
+
+			if (canFight && victimUnit) {
 				if (victimUnit.pilot === "local") {
 					this.showTargetMarker(victimUnit.mercenary);
 					await this.delay(500);
@@ -824,53 +828,62 @@ export class MapScene implements Scene {
 					this.hideTargetMarker();
 					await this.resolveAiVsAi(unit, victimUnit);
 				}
+			} else {
+				await this.runFallbackBehavior(unit, selfAfter, othersAfter);
 			}
 		} else {
-			const adjacentThreats = othersAfter.filter((o) =>
-				isAdjacent(unit.state.coord, o.coord),
-			);
-			const fallback = decideFallbackAction(
-				selfAfter,
-				adjacentThreats,
-				unit.archetype,
-				unit.turnManager.canDisengage,
-				unit.turnManager.canRest,
-			);
-
-			if (fallback === "rest" && unit.turnManager.spendRest()) {
-				clearFleeMemory(unit.memory);
-				this.showFeedback(`💤 ${unit.archetype} hunter rests`);
-			} else if (fallback === "retreat" && unit.turnManager.beginDisengage()) {
-				const retreatBlocked = new Set(
-					othersAfter.map((o) => coordKey(o.coord)),
-				);
-				const retreatRange = computeMovementRange(
-					this.grid,
-					unit.state.coord,
-					unit.state.stats.movement,
-					retreatBlocked,
-				);
-				const retreatFrom = unit.state.coord;
-				const retreatTile = pickRetreatTile(
-					retreatRange,
-					adjacentThreats[0].coord,
-					retreatFrom,
-					unit.memory,
-				);
-				if (retreatTile) {
-					const retreatPath = getPathTo(retreatRange, retreatTile) ?? [];
-					if (retreatPath.length > 0) {
-						unit.state.coord = retreatTile;
-						recordFlee(unit.memory, retreatFrom, retreatTile);
-						// No applyZoneStrikes — Disengage is ZoC-immune, that's its whole point.
-						await unit.mercenary.moveAlongPath(retreatPath);
-					}
-				}
-			}
+			await this.runFallbackBehavior(unit, selfAfter, othersAfter);
 		}
 
 		this.activeAi = null;
 		this.camera.unlock();
+	}
+
+	private async runFallbackBehavior(
+		unit: PilotedMercenary,
+		selfAfter: AiCombatant,
+		othersAfter: AiCombatant[],
+	): Promise<void> {
+		if (!unit.archetype || !unit.memory) return;
+
+		const adjacentThreats = othersAfter.filter((o) =>
+			isAdjacent(unit.state.coord, o.coord),
+		);
+		const fallback = decideFallbackAction(
+			selfAfter,
+			adjacentThreats,
+			unit.archetype,
+			unit.turnManager.canDisengage,
+			unit.turnManager.canRest,
+		);
+		if (fallback === "rest" && unit.turnManager.spendRest()) {
+			clearFleeMemory(unit.memory);
+			this.showFeedback(`💤 ${unit.archetype} hunter rests`);
+		} else if (fallback === "retreat" && unit.turnManager.beginDisengage()) {
+			const retreatBlocked = new Set(othersAfter.map((o) => coordKey(o.coord)));
+			const retreatRange = computeMovementRange(
+				this.grid,
+				unit.state.coord,
+				unit.state.stats.movement,
+				retreatBlocked,
+			);
+			const retreatFrom = unit.state.coord;
+			const retreatTile = pickRetreatTile(
+				retreatRange,
+				adjacentThreats[0].coord,
+				retreatFrom,
+				unit.memory,
+			);
+			if (retreatTile) {
+				const retreatPath = getPathTo(retreatRange, retreatTile) ?? [];
+				if (retreatPath.length > 0) {
+					unit.state.coord = retreatTile;
+					recordFlee(unit.memory, retreatFrom, retreatTile);
+					// No applyZoneStrikes — Disengage is ZoC-immune, that's its whole point.
+					await unit.mercenary.moveAlongPath(retreatPath);
+				}
+			}
+		}
 	}
 
 	private async processMonsterTurns(): Promise<void> {
@@ -948,11 +961,17 @@ export class MapScene implements Scene {
 		);
 
 		if (!isAdjacentNow) {
-			const blocked = new Set(
-				this.units
+			const blocked = new Set([
+				...this.units
 					.filter((u) => u.state.currentHp > 0)
 					.map((u) => coordKey(u.state.coord)),
-			);
+				...this.livingMonsterCoords()
+					.filter(
+						(c) =>
+							!(c.x === monster.state.coord.x && c.y === monster.state.coord.y),
+					)
+					.map(coordKey),
+			]);
 			const range = computeMovementRange(
 				this.grid,
 				monster.state.coord,
@@ -1188,6 +1207,10 @@ export class MapScene implements Scene {
 
 		this.monsters.push({ state, token });
 		this.showFeedback(`👹 A ${tier} monster appears!`);
+	}
+
+	private livingMonsterCoords(): GridCoord[] {
+		return this.livingMonsters().map((m) => m.state.coord);
 	}
 
 	private livingMonsters(): MonsterEntity[] {
@@ -1735,10 +1758,12 @@ export class MapScene implements Scene {
 			mercenary: this.localUnit.mercenary,
 			getMercenaryCoord: () => this.localUnit.state.coord,
 			getMovementRemaining: () => this.localUnit.turnManager.movementRemaining,
-			getBlockedCoords: () =>
-				this.aiUnits
+			getBlockedCoords: () => [
+				...this.aiUnits
 					.filter((u) => u.state.currentHp > 0)
 					.map((u) => u.state.coord),
+				...this.livingMonsterCoords(),
+			],
 			onMoveCommitted: (
 				target: GridCoord,
 				path: GridCoord[],

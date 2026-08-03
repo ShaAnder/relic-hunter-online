@@ -13,6 +13,7 @@ import {
 } from "@relic-hunter/shared";
 import { LocalCharacterRepo } from "@/core/entities/CharacterRepo";
 import { LobbyScene } from "./LobbyScene";
+import { MainMenuScene } from "./MainMenuScene";
 
 const CLASSES: CharacterClass[] = [
 	"tank",
@@ -70,6 +71,7 @@ export class CharacterCreationScene implements Scene {
 	}[] = [];
 	private pointsRemainingText!: Text;
 	private confirmBtn!: Button;
+	private backBtn!: Button;
 	private nameInput: HTMLInputElement | null = null;
 
 	constructor(private game: Game) {
@@ -179,6 +181,18 @@ export class CharacterCreationScene implements Scene {
 			this.statRows.push({ key, label, valueText, finalText, minus, plus });
 		}
 
+		// Back to main menu
+		this.backBtn = new Button({
+			text: "Back",
+			width: 120,
+			height: 40,
+			fontSize: 15,
+			onClick: () => {
+				void this.game.sceneManager.changeScene(new MainMenuScene(this.game));
+			},
+		});
+		this.view.addChild(this.backBtn.view);
+
 		// Confirm
 		this.confirmBtn = new Button({
 			text: "Confirm",
@@ -246,6 +260,9 @@ export class CharacterCreationScene implements Scene {
 
 		this.confirmBtn.view.x = panelX;
 		this.confirmBtn.view.y = y + 24;
+
+		this.backBtn.view.x = 24;
+		this.backBtn.view.y = 24;
 	}
 
 	// ---------- Model silhouettes ----------
