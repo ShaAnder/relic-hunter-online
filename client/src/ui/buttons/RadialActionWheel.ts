@@ -1,5 +1,12 @@
-import { Container, Graphics } from "pixi.js";
+import { Container, Graphics, Sprite } from "pixi.js";
 import type { TurnManager } from "@/systems/TurnManager";
+import { loadIconSprite } from "@/rendering/Svgicon";
+import moveSvgUrl from "@/assets/icons/move.svg";
+import actionsSvgUrl from "@/assets/icons/actions.svg";
+import endTurnSvgUrl from "@/assets/icons/endTurn.svg";
+import attackSvgUrl from "@/assets/icons/attack.svg";
+import restSvgUrl from "@/assets/icons/rest.svg";
+import engageSvgUrl from "@/assets/icons/engage.svg";
 
 export type ButtonAction =
 	| "move"
@@ -9,10 +16,10 @@ export type ButtonAction =
 	| "endTurn"
 	| null;
 
-const HUB_RADIUS = 18;
-const NODE_RADIUS = 22;
-const INNER_RING_R = 80;
-const OUTER_RING_R = 144;
+const HUB_RADIUS = 25;
+const NODE_RADIUS = 25;
+const INNER_RING_R = 100; // was 80, widened to match bigger NODE_RADIUS
+const OUTER_RING_R = 169; // was 144, widened to match bigger NODE_RADIUS
 
 const INNER_EASE_SPEED = 1.0; // px per ms — fast/snappy, was miscalibrated ~100x too slow before
 const OUTER_ANGLE_EASE_SPEED = 0.018; // radians per ms — same fast feel, angular instead of linear
@@ -246,48 +253,42 @@ export class RadialActionWheel {
 
 	private buildInnerRing(): void {
 		this.innerNodes.push(
-			this.makeInnerNode("move", "move", INNER_ANGLES.move, this.drawMoveIcon),
+			this.makeInnerNode("move", "move", INNER_ANGLES.move, () => {}),
 		);
 		this.innerNodes.push(
-			this.makeInnerNode(
-				"actionHub",
-				null,
-				INNER_ANGLES.actionHub,
-				this.drawActionIcon,
-			),
+			this.makeInnerNode("actionHub", null, INNER_ANGLES.actionHub, () => {}),
 		);
 		this.innerNodes.push(
-			this.makeInnerNode(
-				"endTurn",
-				"endTurn",
-				INNER_ANGLES.endTurn,
-				this.drawEndTurnIcon,
-			),
+			this.makeInnerNode("endTurn", "endTurn", INNER_ANGLES.endTurn, () => {}),
 		);
 
 		for (const node of this.innerNodes) this.view.addChild(node.container);
 		this.applyInnerRadius(INNER_RING_R);
+
+		this.attachSvgIcon(this.innerNodes[0].container, moveSvgUrl);
+		this.attachSvgIcon(this.innerNodes[1].container, actionsSvgUrl);
+		this.attachSvgIcon(this.innerNodes[2].container, endTurnSvgUrl);
 	}
 
+	/**
+	 * Outer ring construction. Attack uses the real SVG-icon pattern (see
+	 * attachSvgIcon); Rest/Disengage still use hand-drawn placeholders
+	 * until their own icons are downloaded and swapped in the same way.
+	 */
 	private buildOuterRing(): void {
 		this.outerNodes.push(
 			this.makeOuterNode(
 				"disengage",
 				"disengage",
 				OUTER_ANGLES.disengage,
-				this.drawDisengageIcon,
+				() => {},
 			),
 		);
 		this.outerNodes.push(
-			this.makeOuterNode("rest", "rest", OUTER_ANGLES.rest, this.drawRestIcon),
+			this.makeOuterNode("rest", "rest", OUTER_ANGLES.rest, () => {}),
 		);
 		this.outerNodes.push(
-			this.makeOuterNode(
-				"attack",
-				"attack",
-				OUTER_ANGLES.attack,
-				this.drawAttackIcon,
-			),
+			this.makeOuterNode("attack", "attack", OUTER_ANGLES.attack, () => {}),
 		);
 
 		for (const node of this.outerNodes) {
@@ -296,6 +297,31 @@ export class RadialActionWheel {
 			node.container.y = OUTER_RING_R * Math.sin(HIDDEN_ANGLE);
 			node.container.visible = false;
 		}
+
+		this.attachSvgIcon(this.outerNodes[0].container, engageSvgUrl);
+		this.attachSvgIcon(this.outerNodes[1].container, restSvgUrl);
+		this.attachSvgIcon(this.outerNodes[2].container, attackSvgUrl);
+	}
+
+	/**
+	 * The standard pattern for every real (downloaded) icon on the wheel —
+	 * load as a texture-backed Sprite, size and mask against NODE_RADIUS
+	 * (the button's own real border, not a guessed number), attach as a
+	 * child so it moves with the button for free. Async — the icon pops
+	 * in shortly after the button itself exists, not before. Sized and
+	 * masked slightly past NODE_RADIUS so the icon reads as filling the
+	 * circle right up to the border, not floating undersized inside it.
+	 */
+	private attachSvgIcon(container: Container, svgUrl: string): void {
+		loadIconSprite(svgUrl, NODE_RADIUS * 1.6).then((sprite: Sprite) => {
+			const clip = new Graphics();
+			clip.circle(0, 0, NODE_RADIUS + 2);
+			clip.fill(0xffffff);
+
+			container.addChild(sprite);
+			container.addChild(clip);
+			sprite.mask = clip;
+		});
 	}
 
 	private makeInnerNode(
@@ -363,59 +389,5 @@ export class RadialActionWheel {
 			color: 0xffffff,
 			alpha: node.enabled ? 0.6 : 0.3,
 		});
-	}
-
-	// ---------- icon placeholders ----------
-
-	private drawMoveIcon(g: Graphics): void {
-		g.moveTo(-6, 0);
-		g.lineTo(6, 0);
-		g.moveTo(2, -5);
-		g.lineTo(6, 0);
-		g.lineTo(2, 5);
-		g.stroke({ width: 2, color: 0xffffff });
-	}
-
-	private drawActionIcon(g: Graphics): void {
-		g.moveTo(0, -7);
-		g.lineTo(0, 7);
-		g.moveTo(-7, 0);
-		g.lineTo(7, 0);
-		g.stroke({ width: 2, color: 0xffffff });
-	}
-
-	private drawEndTurnIcon(g: Graphics): void {
-		g.moveTo(-6, -6);
-		g.lineTo(6, -6);
-		g.lineTo(-6, 6);
-		g.lineTo(6, 6);
-		g.stroke({ width: 2, color: 0xffffff });
-	}
-
-	private drawAttackIcon(g: Graphics): void {
-		g.moveTo(-6, 6);
-		g.lineTo(6, -6);
-		g.stroke({ width: 3, color: 0xffffff });
-		g.moveTo(2, -6);
-		g.lineTo(6, -6);
-		g.lineTo(6, -2);
-		g.stroke({ width: 2, color: 0xffffff });
-	}
-
-	private drawRestIcon(g: Graphics): void {
-		g.moveTo(-6, -4);
-		g.lineTo(6, -4);
-		g.lineTo(-6, 4);
-		g.lineTo(6, 4);
-		g.stroke({ width: 2, color: 0xffffff });
-	}
-
-	private drawDisengageIcon(g: Graphics): void {
-		g.moveTo(-6, 0);
-		g.lineTo(3, 0);
-		g.moveTo(-1, -4);
-		g.lineTo(6, 0);
-		g.lineTo(-1, 4);
-		g.stroke({ width: 2, color: 0xffffff });
 	}
 }

@@ -79,6 +79,11 @@ import type { PilotedMercenary } from "@/types/entities";
 import { LogsButton } from "@/ui/buttons/LogButton";
 import { LogPanel } from "@/ui/LogPanel";
 import { logMatchEvent } from "@/core/game/GameSession";
+import { InspectButton } from "@/ui/buttons/InspectButton";
+import {
+	HunterSummaryPanel,
+	type HunterSummaryEntry,
+} from "@/ui/HunterSummaryPanel";
 import { MonsterToken } from "@/entities/Monster";
 import type { MonsterEntity } from "@/types/entities";
 
@@ -151,6 +156,8 @@ export class MapScene implements Scene {
 	private buttonBar: RadialActionWheel;
 	private logsButton: LogsButton;
 	private logPanel: LogPanel;
+	private inspectButton: InspectButton;
+	private hunterSummaryPanel: HunterSummaryPanel;
 	private statsText: Text;
 	private feedbackText: Text;
 	private feedbackTimer = 0;
@@ -270,6 +277,12 @@ export class MapScene implements Scene {
 
 		this.logPanel = new LogPanel();
 		this.view.addChild(this.logPanel.view);
+
+		this.inspectButton = new InspectButton();
+		this.view.addChild(this.inspectButton.view);
+
+		this.hunterSummaryPanel = new HunterSummaryPanel();
+		this.view.addChild(this.hunterSummaryPanel.view);
 
 		this.playZone = new PlayZone();
 		this.view.addChild(this.playZone.view);
@@ -429,7 +442,17 @@ export class MapScene implements Scene {
 			this.characterPanel.view.y,
 			this.characterPanel.panelHeight,
 		);
-		this.logsButton.layout(this.bagButton.view.x, this.bagButton.view.y);
+
+		this.inspectButton.layout(this.bagButton.view.x, this.bagButton.view.y);
+		this.hunterSummaryPanel.layout(
+			this.bagButton.view.x,
+			this.bagButton.view.y + 56,
+		);
+
+		this.logsButton.layout(
+			this.inspectButton.view.x,
+			this.inspectButton.view.y,
+		);
 		this.logPanel.layout(this.bagButton.view.x, this.bagButton.view.y + 56);
 
 		this.inventoryPanel.layoutRightOfCharacter(
@@ -1180,6 +1203,18 @@ export class MapScene implements Scene {
 		}
 	}
 
+	private buildHunterSummaryEntries(): HunterSummaryEntry[] {
+		return this.units.map((u) => ({
+			id: u.state.id,
+			label: this.getUnitLabel(u),
+			accentColor:
+				u.pilot === "local" ? 0x4a9eff : ARCHETYPE_COLORS[u.archetype!],
+			currentHp: u.state.currentHp,
+			maxHp: u.state.hpCeiling > 0 ? u.state.hpCeiling : u.state.stats.maxHp,
+			items: u.state.items,
+		}));
+	}
+
 	private trySpawnMonster(): void {
 		if (!shouldSpawnMonster(this.monsters.length)) return;
 
@@ -1567,6 +1602,11 @@ export class MapScene implements Scene {
 			return;
 		}
 
+		if (this.inspectButton.hitTest(screenX, screenY)) {
+			this.hunterSummaryPanel.toggle();
+			return;
+		}
+
 		switch (action) {
 			case "move":
 				this.handleMovePressed();
@@ -1632,6 +1672,7 @@ export class MapScene implements Scene {
 			local.turnManager.apRemaining,
 			local.turnManager.baseAP,
 		);
+		this.hunterSummaryPanel.sync(this.buildHunterSummaryEntries());
 	}
 
 	// ---------- Cards ----------
