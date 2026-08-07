@@ -51,67 +51,58 @@ export interface CharacterData {
 }
 
 export const UNIVERSAL_BASE: MercenaryStats = {
-	movement: 1,
-	attack: 1,
+	movement: 2,
+	attack: 3,
 	defense: 1,
 	maxHp: 15,
 	ap: 3,
 };
 
-/**
- * Per class stat modifiers
- * specific classes start with higher baselines, to accomodate for weaknesses
- */
-export const CLASS_MODIFIERS: Record<CharacterClass, MercenaryStats> = {
-	tank: { movement: 0, attack: 0, defense: 2, maxHp: 0, ap: 0 },
-	brawler: { movement: 0, attack: 2, defense: 0, maxHp: 0, ap: 0 },
-	hunter: { movement: 1, attack: 1, defense: 0, maxHp: 0, ap: 0 },
-	scout: { movement: 2, attack: 0, defense: 0, maxHp: 0, ap: 0 },
-	mage: { movement: 0, attack: 1, defense: 0, maxHp: 0, ap: 0 },
-	summoner: { movement: 0, attack: 0, defense: 0, maxHp: 0, ap: 1 },
-};
-
 /* Character creation PT budget */
 export const CHAR_POINT_BUDGET = 12;
 
-/**
- * Cost per + 1 of each stat. HP is priced per + 3 hp
- * AP creation has no cost as it's not purchasable at creation
- */
-export const STAT_POINT_COST: Record<keyof StatAllocation, number> = {
-	movement: 3,
-	attack: 1,
+//** Cost of allocating the Kth point into a stat — escalates by 1 every `interval` points, so later points cost progressively more. */
+function costOfPoint(k: number, interval: number): number {
+	return Math.ceil(k / interval);
+}
+
+const ESCALATION_INTERVAL: Record<keyof StatAllocation, number> = {
+	movement: 1,
+	attack: 2,
 	defense: 2,
-	hp: 1,
+	hp: 3,
 };
 
-/* Sum the point cost of a given allowcation so we can enforce 12 budget */
+function cumulativeCost(points: number, interval: number): number {
+	let total = 0;
+	for (let k = 1; k <= points; k++) {
+		total += costOfPoint(k, interval);
+	}
+	return total;
+}
+
 export function totalPointsSpent(allocation: StatAllocation): number {
 	return (
-		allocation.movement * STAT_POINT_COST.movement +
-		allocation.attack * STAT_POINT_COST.attack +
-		allocation.defense * STAT_POINT_COST.defense +
-		allocation.hp * STAT_POINT_COST.hp
+		cumulativeCost(allocation.movement, ESCALATION_INTERVAL.movement) +
+		cumulativeCost(allocation.attack, ESCALATION_INTERVAL.attack) +
+		cumulativeCost(allocation.defense, ESCALATION_INTERVAL.defense) +
+		cumulativeCost(allocation.hp, ESCALATION_INTERVAL.hp)
 	);
 }
 
-/* Compute final stats */
 export function computeCharacterStats(
 	characterClass: CharacterClass,
 	pointsSpent: StatAllocation,
 ): MercenaryStats {
-	const mod = CLASS_MODIFIERS[characterClass];
-
 	return {
-		movement: UNIVERSAL_BASE.movement + mod.movement + pointsSpent.movement,
-		attack: UNIVERSAL_BASE.attack + mod.attack + pointsSpent.attack,
-		defense: UNIVERSAL_BASE.defense + mod.defense + pointsSpent.defense,
-		maxHp: UNIVERSAL_BASE.maxHp + mod.maxHp + pointsSpent.hp * 3,
-		ap: UNIVERSAL_BASE.ap + mod.ap,
+		movement: UNIVERSAL_BASE.movement + pointsSpent.movement,
+		attack: UNIVERSAL_BASE.attack + pointsSpent.attack,
+		defense: UNIVERSAL_BASE.defense + pointsSpent.defense,
+		maxHp: UNIVERSAL_BASE.maxHp + pointsSpent.hp * 3,
+		ap: UNIVERSAL_BASE.ap,
 	};
 }
 
-/* Build a full charData record computing and caching final stats */
 /* Build a full charData record computing and caching final stats */
 export function createCharacter(
 	name: string,
