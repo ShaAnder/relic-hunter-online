@@ -166,16 +166,15 @@ export class MoveController {
 	}
 
 	/** Commit the previewed move; returns false if nothing valid to commit. */
-	tryCommit(): boolean {
+	tryCommit(clickedTile: GridCoord): boolean {
 		if (!this.isActive) return false;
 		if (this.options.mercenary.isAnimating) return false;
-		if (!this.previewTarget || this.previewPath.length === 0) return false;
+		if (!this.movementRange?.has(coordKey(clickedTile))) return false;
 
-		this.options.onMoveCommitted(
-			this.previewTarget,
-			this.previewPath,
-			this.currentIgnoresZoc,
-		);
+		const path = getPathTo(this.movementRange, clickedTile) ?? [];
+		if (path.length === 0) return false;
+
+		this.options.onMoveCommitted(clickedTile, path, this.currentIgnoresZoc);
 		return true;
 	}
 

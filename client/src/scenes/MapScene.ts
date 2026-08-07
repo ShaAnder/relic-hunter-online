@@ -86,6 +86,7 @@ import {
 } from "@/ui/HunterSummaryPanel";
 import { MonsterToken } from "@/entities/Monster";
 import type { MonsterEntity } from "@/types/entities";
+import { pointInContainer } from "@/rendering/HitTest";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -204,6 +205,22 @@ export class MapScene implements Scene {
 
 	private getUnitLabel(unit: PilotedMercenary): string {
 		return unit.pilot === "local" ? "You" : archetypeLabel(unit.archetype!);
+	}
+
+	/** Every UI surface hover/click should never reach board interaction through. Add a new panel here once — nothing else needs updating. */
+	private get uiSurfaces(): Container[] {
+		return [
+			this.inventoryPanel.view,
+			this.logPanel.view,
+			this.hunterSummaryPanel.view,
+			this.characterPanel.view,
+			this.bagButton.view,
+			this.logsButton.view,
+			this.inspectButton.view,
+			this.deckTracker.view,
+			this.hand.view,
+			this.playZone.view,
+		];
 	}
 
 	/** Every AI-piloted unit — replaces the old `enemies` array. */
@@ -478,12 +495,13 @@ export class MapScene implements Scene {
 			this.buttonBar.setMoveActive(false);
 			return;
 		}
-
 		if (this.hand.isSelecting) {
 			this.hand.exitSelectionMode();
 			this.buttonBar.setMoveActive(false);
 			return;
 		}
+
+		this.resetActionState();
 
 		const tm = this.localUnit.turnManager;
 		if (!tm.canMove) return;
@@ -621,6 +639,10 @@ export class MapScene implements Scene {
 			this.chestContainer.addChild(entity.view);
 			this.placedChests.push({ coord, plan: chestPlan, entity });
 		}
+	}
+
+	private isPointOverUiSurface(screenX: number, screenY: number): boolean {
+		return this.uiSurfaces.some((c) => pointInContainer(screenX, screenY, c));
 	}
 
 	/** A random walkable tile not already in `used`. Null if none remain. */
@@ -1320,9 +1342,7 @@ export class MapScene implements Scene {
 			return;
 		}
 
-		this.moveController.exit();
-		this.buttonBar.setMoveActive(false);
-		this.buttonBar.closeMenu();
+		this.resetActionState();
 		this.enterTargetingMode();
 	}
 
@@ -1494,10 +1514,8 @@ export class MapScene implements Scene {
 
 	/** Spend 1 AP on Rest, lock Move, draw up to 2 cards. */
 	private handleRest(): void {
+		this.resetActionState();
 		if (!this.localUnit.turnManager.spendRest()) return;
-		this.moveController.exit();
-		this.buttonBar.setMoveActive(false);
-		this.buttonBar.closeMenu();
 		this.showFeedback("💤 Rested — drew cards");
 	}
 
@@ -1508,6 +1526,9 @@ export class MapScene implements Scene {
 			this.buttonBar.setMoveActive(false);
 			return;
 		}
+
+		this.resetActionState();
+
 		if (!this.localUnit.turnManager.beginDisengage()) return;
 
 		this.moveController.enter(this.localUnit.state.stats.movement, true);
@@ -1625,7 +1646,11 @@ export class MapScene implements Scene {
 				break;
 			case null:
 				if (this.handleTargetClick(screenX, screenY)) break;
-				if (this.moveController.active) this.moveController.tryCommit();
+				if (this.moveController.active) {
+					this.moveController.tryCommit(
+						this.screenPointToGrid(screenX, screenY),
+					);
+				}
 				break;
 		}
 	};
@@ -1641,6 +1666,7 @@ export class MapScene implements Scene {
 		this.hand.setHovered(nearHand);
 
 		if (!this.moveController.active) return;
+		if (this.isPointOverUiSurface(screenX, screenY)) return;
 		this.moveController.onHover(this.screenPointToGrid(screenX, screenY));
 	};
 
@@ -1854,6 +1880,15 @@ export class MapScene implements Scene {
 		this.renderMap();
 		this.centerCameraOnMap();
 		this.syncUI();
+	}
+
+	/** Cancels whatever action-mode is currently active */
+	private resetActionState(): void {
+		this.moveController.exit();
+		this.exitTargetingMode();
+		this.hand.exitSelectionMode();
+		this.buttonBar.setMoveActive(false);
+		this.buttonBar.closeMenu();
 	}
 
 	/** Convert a mouse event to canvas-local screen coordinates. */
