@@ -363,3 +363,12 @@ export interface SurrenderConsequence {
 export function resolveSurrender(itemCount: number): SurrenderConsequence {
 	return { teleport: true, itemGiven: itemCount > 0 };
 }
+
+/**
+ * A monster's combat choice — always Attack, own stats only, never a card.
+ */
+export function monsterCombatChoice(
+	monsterStats: MercenaryStats,
+): CombatChoice {
+	return { action: "attack", stats: monsterStats };
+}

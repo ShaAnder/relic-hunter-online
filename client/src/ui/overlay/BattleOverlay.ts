@@ -19,7 +19,11 @@ import {
 } from "@relic-hunter/shared";
 import { PlayZone } from "@/ui/PlayZone";
 import { InventoryPanel } from "@/ui/InventoryPanel";
-import { decideLootChoice, decideSurrenderChoice } from "@relic-hunter/shared";
+import {
+	decideLootChoice,
+	decideSurrenderChoice,
+	monsterCombatChoice,
+} from "@relic-hunter/shared";
 
 const ALLOWED_COLORS: Record<CombatAction, CardColor[]> = {
 	attack: ["red", "yellow", "blue"],
@@ -127,6 +131,7 @@ export class BattleOverlay implements Overlay {
 		defenderMapCoord: { x: number; y: number },
 		private isRangedInitiated: boolean = false,
 		private availableActions: CombatAction[] = ACTIONS,
+		private isAttackerMonster: boolean = false,
 	) {
 		this.localHand = new Hand(this.game.app.stage, this.localPlayZone, (card) =>
 			this.onHandCardConfirmed(card),
