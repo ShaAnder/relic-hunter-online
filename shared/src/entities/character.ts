@@ -81,6 +81,14 @@ function cumulativeCost(points: number, interval: number): number {
 	return total;
 }
 
+/** Cost of the NEXT point for a stat, given how many are already allocated — for UI affordability checks (can this stat afford +1 right now). */
+export function costOfNextPoint(
+	key: keyof StatAllocation,
+	currentAllocation: number,
+): number {
+	return costOfPoint(currentAllocation + 1, ESCALATION_INTERVAL[key]);
+}
+
 export function totalPointsSpent(allocation: StatAllocation): number {
 	return (
 		cumulativeCost(allocation.movement, ESCALATION_INTERVAL.movement) +
