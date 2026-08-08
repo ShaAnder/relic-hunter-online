@@ -1,19 +1,14 @@
-import type { GridCoord } from "../world/grid";
+import { isAdjacent } from "../world/grid";
 import type { MonsterState } from "../types/monster";
+import type { EntityCore } from "../types/entity";
 
-export interface MonsterTargetCandidate {
-	id: string;
-	coord: GridCoord;
-	isCarryingTarget: boolean;
-}
-
-function isAdjacent(a: GridCoord, b: GridCoord): boolean {
-	return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) === 1;
-}
+/** A hunter as monster targeting logic sees it — core plus the one field this specific decision context needs (carrier status). */
+export type MonsterTargetCandidate = EntityCore & { isCarryingTarget: boolean };
 
 /**
  * Which hunter a monster targets this turn. Already-adjacent hunters take
  * priority over chasing anyone else
+ *
  * Otherwise the target relic carrier is chased, specifically if one exists;
  * If not falls back to whichever hunter is closest.
  */

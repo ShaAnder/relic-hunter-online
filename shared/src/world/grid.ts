@@ -29,6 +29,11 @@ export interface GridCoord {
 }
 
 // exported coord key fucntion for SST coord
+/** True if two coords are exactly one cardinal step apart. */
+export function isAdjacent(a: GridCoord, b: GridCoord): boolean {
+	return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) === 1;
+}
+
 export function coordKey(coord: GridCoord): string {
 	return `${coord.x},${coord.y}`;
 }
@@ -92,8 +97,8 @@ export class Grid {
 
 	/**
 	 * Changes the type of a tile.
-	 * Note: This mutates the Tile object in place. This is acceptable for Phase 1
-	 * and aligns with how Colyseus state syncing works (in-place mutation for change detection).
+	 * Note: This mutates the Tile object in place.
+	 * Similar to how Colyseus state syncing works (in-place mutation for change detection).
 	 */
 	setTileType(coord: GridCoord, type: TileType): void {
 		const tile = this.getTile(coord);

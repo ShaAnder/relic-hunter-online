@@ -1,6 +1,10 @@
 import type { GridCoord } from "../world/grid";
-import type { ItemData } from "../items/item";
-import type { CardData } from "../cards/card";
+import type {
+	EntityCore,
+	HasHand,
+	HasItems,
+	HasCharacterClass,
+} from "./entity";
 
 export type CharacterClass =
 	| "tank"
@@ -22,17 +26,11 @@ export interface MercenaryStats {
 	ap: number;
 }
 
-// mercenaries live state during a map
-export interface MercenaryState {
-	id: string;
-	coord: GridCoord;
-	stats: MercenaryStats;
-	characterClass: CharacterClass;
-	currentHp: number;
-	hpCeiling: number;
-	items: (ItemData | null)[];
-	hand: CardData[];
-}
+/** A hunter's live state during a match */
+export type MercenaryState = EntityCore &
+	HasHand &
+	HasItems &
+	HasCharacterClass;
 
 export function createMercenary(
 	id: string,

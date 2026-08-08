@@ -4,7 +4,9 @@ import type { CardData } from "../cards/card";
 import type { ItemData } from "../items/item";
 import type { CombatAction, CombatChoice } from "../combat/combat";
 import type { GridCoord } from "../world/grid";
+import { isAdjacent } from "../world/grid";
 import type { AiMemory } from "./aiMemory";
+import type { EntityCore } from "../types/entity";
 
 /** Hostile hunter behavior profile */
 export type AiArchetype = "aggressive" | "treasure" | "balanced";
@@ -27,13 +29,7 @@ export function archetypeLabel(archetype: AiArchetype): string {
 export type AiFallbackAction = "rest" | "retreat" | "hold";
 
 /** Minimal unit snapshot the AI reasons over — no Pixi, no scene refs. */
-export interface AiCombatant {
-	id: string;
-	coord: GridCoord;
-	stats: MercenaryStats;
-	currentHp: number;
-	items: ItemData[];
-}
+export type AiCombatant = EntityCore & { items: ItemData[] };
 
 export interface ChestInfo {
 	coord: GridCoord;
@@ -110,10 +106,6 @@ function nearestUnopenedChest(
  * @param a - first tile
  * @param b - second tile
  */
-export function isAdjacent(a: GridCoord, b: GridCoord): boolean {
-	return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) === 1;
-}
-
 /**
  * Movement goal for one AI hunter given the full living field.
  * Carrier of the match target (any hunter) overrides default goals for

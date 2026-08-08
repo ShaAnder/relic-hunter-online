@@ -1,26 +1,20 @@
 import type { GridCoord } from "../world/grid";
-import type { MercenaryState, MercenaryStats } from "./mercenary";
+import type { EntityCore } from "./entity";
+import type { MercenaryStats, MercenaryState } from "./mercenary";
 
 export type MonsterTier = "light" | "medium" | "heavy";
 
 /**
- * Non-hunter map entity — set stats per tier / variant
- * No hand, items always melee for now, Stats sit above hunter
- * for testing atm
+ * Non-hunter map entity — core only, plus tier. Has no hand,
+ * no items, no character class — not faked, not present at all.
  */
-export interface MonsterState {
-	id: string;
-	tier: MonsterTier;
-	coord: GridCoord;
-	stats: MercenaryStats;
-	currentHp: number;
-}
+export type MonsterState = EntityCore & { tier: MonsterTier };
 
 /** First-pass tier stats, each meaningfully stronger than the last. NOT TUNED */
 export const MONSTER_TIER_STATS: Record<MonsterTier, MercenaryStats> = {
 	light: { movement: 3, attack: 4, defense: 2, maxHp: 12, ap: 3 },
 	medium: { movement: 3, attack: 5, defense: 3, maxHp: 18, ap: 3 },
-	heavy: { movement: 2, attack: 7, defense: 4, maxHp: 26, ap: 3 },
+	heavy: { movement: 3, attack: 7, defense: 4, maxHp: 26, ap: 3 },
 };
 
 export function createMonster(
@@ -38,10 +32,10 @@ export function createMonster(
 }
 
 /**
- * Presents a MonsterState as a MercenaryState so it can pass through
- * BattleOverlay unchanged — empty hand (so chooseCombatAction naturally
- * falls back to card: undefined), empty items (nothing to loot), no real
- * characterClass since monsters don't use ranged/caster targeting logic (yet)./
+ * TEMPORARY BRIDGE — still needed only because BattleOverlay hasn't
+ * been updated to read against EntityCore + trait-checks yet (a later
+ * step in the composition rebuild). Once that lands, this adapter and
+ * every call site of it should be deleted outright, not kept around.
  */
 export function monsterAsMercenaryState(monster: MonsterState): MercenaryState {
 	return {
