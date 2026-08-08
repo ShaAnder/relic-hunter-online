@@ -1,5 +1,6 @@
 import type { CardData } from "../cards/card";
 import type { MercenaryStats, MercenaryState } from "../types/mercenary";
+import type { EntityCore, HasItems } from "../types/entity";
 
 /**
  * Combat is resolved as ONE simultaneous, single round — not sequential
@@ -44,7 +45,7 @@ const REST_HEAL_PERCENT = 0.25;
  * hunter capped at half health by a prior knockout can't Rest past that
  * cap. Only a fresh match resets the ceiling itself.
  */
-export function applyRestHeal(state: MercenaryState): void {
+export function applyRestHeal(state: EntityCore & HasItems): void {
 	const healAmount = Math.round(state.hpCeiling * REST_HEAL_PERCENT);
 	state.currentHp = Math.min(state.hpCeiling, state.currentHp + healAmount);
 }

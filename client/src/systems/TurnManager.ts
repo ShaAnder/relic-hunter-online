@@ -1,4 +1,10 @@
-import type { CardData, MercenaryState } from "@relic-hunter/shared";
+import type {
+	CardData,
+	MercenaryState,
+	EntityCore,
+	HasHand,
+	HasItems,
+} from "@relic-hunter/shared";
 import { drawCardsInto, applyRestHeal } from "@relic-hunter/shared";
 
 export type TurnAction = "move" | "action" | "pass";
@@ -7,19 +13,24 @@ export type TurnAction = "move" | "action" | "pass";
 const STARTING_HAND_SIZE = 4;
 
 /**
- * Manages the AP-based turn cycle for a single match.
+ * Anything TurnManager can be attached to — genuinely needs a hand (to draw/spend cards)
+ * and items (Rest heals toward hpCeiling). Not every entity has both — monsters deliberately don't,
+ * and never get a TurnManager.
+ */
+type ManagedEntity = EntityCore & HasHand & HasItems;
+
+/**
+ * Manages the AP-based turn cycle for a single match. Generic over any
+ * entity with a hand and items
  *
- * Each turn the mercenary has a base AP pool spent across Move and
- * Action (Attack / Rest / Disengage), in any order — acting doesn't
- * block a later move, and moving doesn't block a later action. Move
- * may only be pressed ONCE per turn; a blue Move card may be played on
- * that single press, no first/second-press distinction anymore.
+ * Each turn the entity has a base AP pool spent across Move and
+ * Action (Attack / Rest / Disengage), in any order.
  *
  * Also owns the draw side of the hand economy: 1 card at the start of
  * every turn, and up to 2 more from Rest. Both draw from the ONE shared
  * match deck (`getSharedDeck`, backed by `GameSession.sharedDeck`).
  */
-export class TurnManager {
+export class TurnManager<T extends ManagedEntity = MercenaryState> {
 	private _apRemaining: number;
 	private readonly _baseAp: number;
 
@@ -32,13 +43,13 @@ export class TurnManager {
 	private onChanged: () => void;
 
 	constructor(
-		private getMercState: () => MercenaryState,
+		private getEntity: () => T,
 		private getSharedDeck: () => CardData[],
 		onChanged: () => void,
 		baseAp?: number,
 	) {
 		this.onChanged = onChanged;
-		this._baseAp = baseAp ?? this.getMercState().stats.ap;
+		this._baseAp = baseAp ?? this.getEntity().stats.ap;
 		this._apRemaining = this._baseAp;
 		this.reset();
 	}
@@ -98,7 +109,7 @@ export class TurnManager {
 	}
 
 	get handSize(): number {
-		return this.getMercState().hand.length;
+		return this.getEntity().hand.length;
 	}
 
 	// ---------- MOVE ----------
@@ -111,7 +122,7 @@ export class TurnManager {
 	beginMovement(cardType: string, cardValue: number): boolean {
 		if (!this.canMove) return false;
 
-		let budget = this.getMercState().stats.movement;
+		let budget = this.getEntity().stats.movement;
 		if (cardType === "blue") {
 			budget += cardValue;
 		}
@@ -140,13 +151,14 @@ export class TurnManager {
 		return true;
 	}
 
-	/** Spend 1 AP on Rest, heal toward the current HP ceiling, draw up to 2 cards. No longer touches Move at all. */
+	/** Spend 1 AP on Rest, heal toward the current HP ceiling,
+	 * draw up to 2 cards. No longer touches Move at all. */
 	spendRest(): boolean {
 		if (!this.canRest) return false;
 		this._apRemaining -= 1;
 		this._hasRestedThisTurn = true;
 		this.drawCards(2);
-		applyRestHeal(this.getMercState());
+		applyRestHeal(this.getEntity());
 		this.onChanged();
 		return true;
 	}
@@ -176,12 +188,12 @@ export class TurnManager {
 	}
 
 	dealStartingHand(): void {
-		const merc = this.getMercState();
-		const needed = STARTING_HAND_SIZE - merc.hand.length;
+		const entity = this.getEntity();
+		const needed = STARTING_HAND_SIZE - entity.hand.length;
 		if (needed > 0) this.drawCards(needed);
 	}
 
 	private drawCards(count: number): void {
-		drawCardsInto(this.getMercState().hand, this.getSharedDeck(), count);
+		drawCardsInto(this.getEntity().hand, this.getSharedDeck(), count);
 	}
 }

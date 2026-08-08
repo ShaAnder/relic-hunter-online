@@ -11,6 +11,7 @@ export * from "./src/entities/chest";
 export * from "./src/entities/monsterSpawning";
 export * from "./src/items/item";
 export * from "./src/math/random";
+export * from "./src/types/entity";
 export * from "./src/types/mercenary";
 export * from "./src/types/monster";
 export * from "./src/world/grid";
