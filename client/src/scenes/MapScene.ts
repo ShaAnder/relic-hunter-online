@@ -39,6 +39,7 @@ import {
 	type MercenaryState,
 	type MonsterTier,
 	type MonsterTargetCandidate,
+	type EntityCore,
 	Grid,
 	TileType,
 	generateDungeon,
@@ -75,7 +76,7 @@ import {
 	recordFlee,
 	clearFleeMemory,
 } from "@relic-hunter/shared";
-import type { PilotedMercenary } from "@/types/entities";
+import type { PilotedMercenary, MovableToken } from "@/types/entities";
 import { LogsButton } from "@/ui/buttons/LogButton";
 import { LogPanel } from "@/ui/LogPanel";
 import { logMatchEvent } from "@/core/game/GameSession";
@@ -526,7 +527,11 @@ export class MapScene implements Scene {
 		if (ignoresZoc) {
 			await local.mercenary.moveAlongPath(path);
 		} else {
-			await this.moveWithZoneStrikes(local, path, local.state.id);
+			await this.moveEntityWithZoneStrikes(
+				{ state: local.state, token: local.mercenary },
+				path,
+				this.getUnitLabel(local),
+			);
 		}
 
 		this.tryOpenChestAt(local.state, target);
@@ -564,19 +569,27 @@ export class MapScene implements Scene {
 	 * Animates a path in segments, pausing exactly at each zone crossing to
 	 * apply the reaction strike and log it
 	 */
-	private async moveWithZoneStrikes(
-		unit: PilotedMercenary,
+	/**
+	 * Animates a path in segments, pausing exactly at each zone crossing to
+	 * apply the reaction strike and log it. Works for ANY entity with a
+	 * mutable EntityCore-shaped state and a MovableToken — hunters and
+	 * monsters both satisfy this structurally, so this single function
+	 * replaces what used to be two near-identical copies (moveWithZoneStrikes
+	 * for hunters, moveMonsterWithZoneStrikes for monsters).
+	 */
+	private async moveEntityWithZoneStrikes(
+		entity: { state: EntityCore; token: MovableToken },
 		path: GridCoord[],
-		excludeId: string,
+		label: string,
 	): Promise<void> {
-		const owners = this.buildZoneOwners(excludeId);
+		const owners = this.buildZoneOwners(entity.state.id);
 		const crossings = findZonesCrossed(this.grid, path, owners);
 
 		let segmentStart = 0;
 		for (const crossing of crossings) {
 			const segment = path.slice(segmentStart, crossing.pathIndex + 1);
 			if (segment.length > 0) {
-				await unit.mercenary.moveAlongPath(segment);
+				await entity.token.moveAlongPath(segment);
 			}
 			segmentStart = crossing.pathIndex + 1;
 
@@ -586,11 +599,11 @@ export class MapScene implements Scene {
 			if (ownerUnit) {
 				const strike = resolveReactionStrike(
 					ownerUnit.state.stats,
-					unit.state.stats,
+					entity.state.stats,
 				);
-				unit.state.currentHp -= strike.damage;
+				entity.state.currentHp -= strike.damage;
 				this.showFeedback(
-					`⚔ ${this.getUnitLabel(unit)} entered ${this.getUnitLabel(ownerUnit)}'s zone of control — took ${strike.damage} damage`,
+					`⚔ ${label} entered ${this.getUnitLabel(ownerUnit)}'s zone of control — took ${strike.damage} damage`,
 				);
 				await this.delay(400);
 			}
@@ -598,7 +611,7 @@ export class MapScene implements Scene {
 
 		const remaining = path.slice(segmentStart);
 		if (remaining.length > 0) {
-			await unit.mercenary.moveAlongPath(remaining);
+			await entity.token.moveAlongPath(remaining);
 		}
 	}
 
@@ -843,7 +856,11 @@ export class MapScene implements Scene {
 					}
 					unit.state.coord = reachable;
 					unit.turnManager.commitMove(path.length);
-					await this.moveWithZoneStrikes(unit, path, unit.state.id);
+					await this.moveEntityWithZoneStrikes(
+						{ state: unit.state, token: unit.mercenary },
+						path,
+						this.getUnitLabel(unit),
+					);
 				}
 			}
 		}
@@ -942,56 +959,19 @@ export class MapScene implements Scene {
 		}
 	}
 
-	private async moveMonsterWithZoneStrikes(
-		monster: MonsterEntity,
-		path: GridCoord[],
-	): Promise<void> {
-		const owners = this.buildZoneOwners(monster.state.id);
-		const crossings = findZonesCrossed(this.grid, path, owners);
-
-		let segmentStart = 0;
-		for (const crossing of crossings) {
-			const segment = path.slice(segmentStart, crossing.pathIndex + 1);
-			if (segment.length > 0) {
-				await monster.token.moveAlongPath(segment);
-			}
-			segmentStart = crossing.pathIndex + 1;
-
-			const ownerUnit = this.units.find(
-				(u) => u.state.id === crossing.owner.id,
-			);
-			if (ownerUnit) {
-				const strike = resolveReactionStrike(
-					ownerUnit.state.stats,
-					monster.state.stats,
-				);
-				monster.state.currentHp -= strike.damage;
-				this.showFeedback(
-					`⚔ A ${monster.state.tier} monster entered ${this.getUnitLabel(ownerUnit)}'s zone of control — took ${strike.damage} damage`,
-				);
-				await this.delay(400);
-			}
-		}
-
-		const remaining = path.slice(segmentStart);
-		if (remaining.length > 0) {
-			await monster.token.moveAlongPath(remaining);
-		}
-	}
-
 	private async processOneMonsterTurn(monster: MonsterEntity): Promise<void> {
 		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
-
 		const hunters: MonsterTargetCandidate[] = this.units
 			.filter((u) => u.state.currentHp > 0)
 			.map((u) => ({
 				id: u.state.id,
 				coord: u.state.coord,
+				stats: u.state.stats,
+				currentHp: u.state.currentHp,
 				isCarryingTarget: targetItemId
 					? u.state.items.some((i) => i?.id === targetItemId)
 					: false,
 			}));
-
 		const targetCandidate = decideMonsterTarget(monster.state, hunters);
 		if (!targetCandidate) return;
 
@@ -1034,7 +1014,11 @@ export class MapScene implements Scene {
 
 			if (path.length > 0) {
 				monster.state.coord = reachable;
-				await this.moveMonsterWithZoneStrikes(monster, path);
+				await this.moveEntityWithZoneStrikes(
+					monster,
+					path,
+					`A ${monster.state.tier} monster`,
+				);
 			}
 		}
 
