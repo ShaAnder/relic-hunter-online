@@ -463,6 +463,18 @@ export class MapScene implements Scene {
 		);
 	}
 
+	private beginPlayerTurn(): void {
+		this.camera.unlock();
+		this.camera.centerOn(
+			{
+				x: this.localUnit.mercenary.view.x,
+				y: this.localUnit.mercenary.view.y,
+			},
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
+	}
+
 	// ---------- Hud ----------
 
 	private layoutHud(): void {
@@ -781,15 +793,8 @@ export class MapScene implements Scene {
 		this.processingEnemyTurns = false;
 		this.camera.setInputLocked(false);
 		this.setPlayerControlsVisible(true);
+		this.beginPlayerTurn();
 
-		this.camera.centerOn(
-			{
-				x: this.localUnit.mercenary.view.x,
-				y: this.localUnit.mercenary.view.y,
-			},
-			this.game.app.screen.width,
-			this.game.app.screen.height,
-		);
 		this.syncUI();
 	}
 

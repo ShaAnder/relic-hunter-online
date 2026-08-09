@@ -122,15 +122,6 @@ export class Camera {
 			};
 
 			// Wall-clock timestamp rather than accumulating ticker.deltaMS.
-			// If the main thread was busy just before this (e.g. building a
-			// large map's tile graphics synchronously), the ticker's first
-			// tick afterward can report a hugely inflated deltaMS — it can't
-			// tick while JS is blocked, so that whole gap gets folded into
-			// whichever tick runs next. Accumulating that would jump elapsed
-			// straight past durationMs on frame one, resolving the pan
-			// instantly and invisibly. performance.now() sidesteps this
-			// entirely: elapsed is always "now minus when we started."
-			// https://developer.mozilla.org/en-US/docs/Web/API/Performance/now
 			const startTime = performance.now();
 
 			const tick = (): void => {
