@@ -70,6 +70,7 @@ import { MatchResultScene } from "./MatchResultScene";
 import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
 import { BagButton } from "@/ui/buttons/BagButton";
 import { RadialActionWheel } from "@/ui/buttons/RadialActionWheel";
+import { RefocusButton } from "@/ui/buttons/RefocusButton";
 import { PlayZone } from "@/ui/PlayZone";
 import {
 	createAiMemory,
@@ -156,6 +157,7 @@ export class MapScene implements Scene {
 	// UI
 	private bagButton: BagButton;
 	private buttonBar: RadialActionWheel;
+	private refocusButton: RefocusButton;
 	private logsButton: LogsButton;
 	private logPanel: LogPanel;
 	private inspectButton: InspectButton;
@@ -251,8 +253,8 @@ export class MapScene implements Scene {
 
 		this.camera = new Camera(this.boardContainer, {
 			initialZoom: 1.75,
-			minZoom: 0.75,
-			maxZoom: 3,
+			minZoom: 1.4,
+			maxZoom: 4,
 			panSpeed: 700,
 		});
 
@@ -325,6 +327,9 @@ export class MapScene implements Scene {
 
 		this.buttonBar = new RadialActionWheel();
 		this.view.addChild(this.buttonBar.view);
+
+		this.refocusButton = new RefocusButton();
+		this.view.addChild(this.refocusButton.view);
 
 		this.statsText = new Text({
 			text: "",
@@ -455,6 +460,7 @@ export class MapScene implements Scene {
 		this.characterPanel.layout(w, h);
 
 		this.buttonBar.layout(w, h);
+		this.refocusButton.layout(w - 40, h - 40, 280);
 		this.bagButton.layout(
 			this.characterPanel.view.x,
 			this.characterPanel.view.y,
@@ -1609,6 +1615,18 @@ export class MapScene implements Scene {
 
 		if (this.inspectButton.hitTest(screenX, screenY)) {
 			this.hunterSummaryPanel.toggle();
+			return;
+		}
+
+		if (this.refocusButton.hitTest(screenX, screenY)) {
+			this.camera.centerOn(
+				{
+					x: this.localUnit.mercenary.view.x,
+					y: this.localUnit.mercenary.view.y,
+				},
+				this.game.app.screen.width,
+				this.game.app.screen.height,
+			);
 			return;
 		}
 

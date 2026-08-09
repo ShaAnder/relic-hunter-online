@@ -11,6 +11,7 @@ import type {
 	CombatChoice,
 	MercenaryState,
 	AiArchetype,
+	EntityCore,
 } from "@relic-hunter/shared";
 import {
 	resolveCombatRound,
@@ -209,14 +210,16 @@ export class BattleOverlay implements Overlay {
 
 	private async runAutoFight(): Promise<void> {
 		await this.delay(700);
-		const attackerChoice = chooseCombatAction(
-			this.attackerState.hand,
-			this.attackerState.stats,
-			this.attackerArchetype,
-			this.attackerState.currentHp,
-			this.defenderState.stats,
-			true,
-		);
+		const attackerChoice = this.isAttackerMonster
+			? monsterCombatChoice(this.attackerState.stats)
+			: chooseCombatAction(
+					this.attackerState.hand,
+					this.attackerState.stats,
+					this.attackerArchetype,
+					this.attackerState.currentHp,
+					this.defenderState.stats,
+					true,
+				);
 		const defenderChoice = chooseCombatAction(
 			this.defenderState.hand,
 			this.defenderState.stats,
@@ -429,7 +432,7 @@ export class BattleOverlay implements Overlay {
 		panel: Container,
 		hpBar: Graphics,
 		label: string,
-		state: MercenaryState,
+		state: EntityCore,
 		accent: number,
 		isAttackerSlot: boolean,
 	): void {
@@ -488,7 +491,7 @@ export class BattleOverlay implements Overlay {
 	private syncOneHpBar(
 		text: Text,
 		bar: Graphics,
-		state: MercenaryState,
+		state: EntityCore,
 		fillColor: number,
 	): void {
 		const hp = Math.max(0, state.currentHp);
@@ -789,14 +792,21 @@ export class BattleOverlay implements Overlay {
 				? this.defenderArchetype
 				: this.attackerArchetype;
 
-		const otherChoice = chooseCombatAction(
-			otherState.hand,
-			otherState.stats,
-			otherArchetype,
-			otherState.currentHp,
-			localChoice.stats,
-			this.localHumanRole === "defender" ? true : !this.isRangedInitiated,
-		);
+		// otherState only equals attackerState when localHumanRole is
+		// "defender" — the exact case a monster attacker can show up here.
+		const otherIsMonster =
+			this.localHumanRole !== "attacker" && this.isAttackerMonster;
+
+		const otherChoice = otherIsMonster
+			? monsterCombatChoice(otherState.stats)
+			: chooseCombatAction(
+					otherState.hand,
+					otherState.stats,
+					otherArchetype,
+					otherState.currentHp,
+					localChoice.stats,
+					this.localHumanRole === "defender" ? true : !this.isRangedInitiated,
+				);
 
 		const attackerChoice =
 			this.localHumanRole === "attacker" ? localChoice : otherChoice;
