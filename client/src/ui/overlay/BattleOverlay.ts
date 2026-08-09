@@ -55,6 +55,7 @@ export type LocalHumanRole = "attacker" | "defender" | "none";
 export interface BattleResult {
 	attackerNeedsTeleport: boolean;
 	defenderNeedsTeleport: boolean;
+	attackerMonsterDied?: boolean;
 }
 
 /**
@@ -884,6 +885,7 @@ export class BattleOverlay implements Overlay {
 	): Promise<void> {
 		let attackerNeedsTeleport = false;
 		let defenderNeedsTeleport = false;
+		let attackerMonsterDied = false;
 
 		if (
 			attackerChoice.action === "surrender" ||
@@ -912,18 +914,25 @@ export class BattleOverlay implements Overlay {
 			else defenderNeedsTeleport = true;
 		} else {
 			if (this.attackerState.currentHp <= 0) {
-				const consequence = resolveDefeat(this.attackerState.stats, true);
-				this.attackerState.currentHp = consequence.hpCeiling;
-				this.attackerState.hpCeiling = consequence.hpCeiling;
-				if (consequence.itemStolen) {
-					await this.runLootSequence(
-						this.defenderState,
-						this.attackerState,
-						this.localHumanRole === "defender",
-						true,
-					);
+				if (this.isAttackerMonster) {
+					// Monsters die outright — no knockout revival, no loot
+					// (they carry none), no teleport. MapScene removes them
+					// from the board entirely on this flag.
+					attackerMonsterDied = true;
+				} else {
+					const consequence = resolveDefeat(this.attackerState.stats, true);
+					this.attackerState.currentHp = consequence.hpCeiling;
+					this.attackerState.hpCeiling = consequence.hpCeiling;
+					if (consequence.itemStolen) {
+						await this.runLootSequence(
+							this.defenderState,
+							this.attackerState,
+							this.localHumanRole === "defender",
+							true,
+						);
+					}
+					attackerNeedsTeleport = true;
 				}
-				attackerNeedsTeleport = true;
 			}
 
 			if (this.defenderState.currentHp <= 0) {
@@ -944,7 +953,11 @@ export class BattleOverlay implements Overlay {
 
 		setTimeout(() => {
 			this.game.overlays.hide();
-			this.onComplete({ attackerNeedsTeleport, defenderNeedsTeleport });
+			this.onComplete({
+				attackerNeedsTeleport,
+				defenderNeedsTeleport,
+				attackerMonsterDied,
+			});
 		}, RESULT_LINGER_MS);
 	}
 

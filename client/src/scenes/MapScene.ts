@@ -810,6 +810,7 @@ export class MapScene implements Scene {
 		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
 
 		const self = this.toCombatant(unit.state);
+		const preMoveHp = self.currentHp;
 		const others = this.buildOtherCombatants(unit.state.id);
 
 		const chestInfos: ChestInfo[] = this.placedChests.map((c) => ({
@@ -894,7 +895,16 @@ export class MapScene implements Scene {
 
 		const selfAfter = this.toCombatant(unit.state);
 		const othersAfter = this.buildOtherCombatants(unit.state.id);
-		const victim = pickEngagementTarget(unit.archetype, selfAfter, othersAfter);
+		// Engagement decision uses pre-approach HP specifically — a ZoC
+		// tick taken reaching the target shouldn't retroactively cancel
+		// the fight it was risked for. Real post-move HP (selfAfter) is
+		// still what runFallbackBehavior uses below if no fight happens.
+		const selfForEngagement = { ...selfAfter, currentHp: preMoveHp };
+		const victim = pickEngagementTarget(
+			unit.archetype,
+			selfForEngagement,
+			othersAfter,
+		);
 
 		if (victim) {
 			const victimUnit = this.units.find((u) => u.state.id === victim.id);
@@ -1082,6 +1092,9 @@ export class MapScene implements Scene {
 					target.state,
 					(result) => {
 						monster.state.currentHp = monsterAsState.currentHp;
+						if (result.attackerMonsterDied) {
+							this.removeMonster(monster);
+						}
 						if (result.defenderNeedsTeleport) {
 							this.teleportEntity(target.state, target.mercenary);
 						}
@@ -1296,6 +1309,14 @@ export class MapScene implements Scene {
 
 	private livingMonsters(): MonsterEntity[] {
 		return this.monsters.filter((m) => m.state.currentHp > 0);
+	}
+
+	/** Removes a dead monster from the board entirely — array entry and visual token both, not just letting HP sit at 0 forever. */
+	private removeMonster(monster: MonsterEntity): void {
+		const index = this.monsters.indexOf(monster);
+		if (index !== -1) this.monsters.splice(index, 1);
+		this.mercenaryContainer.removeChild(monster.token.view);
+		monster.token.view.destroy({ children: true });
 	}
 
 	private pickEnemySpawnTile(used: Set<string>): GridCoord | null {
