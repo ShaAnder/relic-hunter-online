@@ -36,6 +36,7 @@ export class Camera {
 	private options: Required<CameraOptions>;
 	private heldKeys = new Set<string>();
 	private lockedWorldPosition: { x: number; y: number } | null = null;
+	private inputLocked = false;
 
 	// Cached every frame via update() — handleWheel fires from a DOM event,
 	// not the game loop, so it has no other way to know the current screen size.
@@ -182,16 +183,25 @@ export class Camera {
 	}
 
 	// handle key events - down, up, scroll wheel
+	/** Blocks all pan/zoom input at the source — functionally the same as removing the listeners, without the risk of a leak from repeated attach/detach. */
+	setInputLocked(locked: boolean): void {
+		this.inputLocked = locked;
+		if (locked) this.heldKeys.clear();
+	}
+
 	private handleKeyDown = (event: KeyboardEvent): void => {
+		if (this.inputLocked) return;
 		this.heldKeys.add(event.key.toLowerCase());
 	};
 
 	private handleKeyUp = (event: KeyboardEvent): void => {
+		if (this.inputLocked) return;
 		this.heldKeys.delete(event.key.toLowerCase());
 	};
 
 	private handleWheel = (event: WheelEvent): void => {
 		event.preventDefault();
+		if (this.inputLocked) return;
 
 		const oldScale = this.target.scale.x;
 		const zoomDelta = -event.deltaY * this.options.zoomSpeed;

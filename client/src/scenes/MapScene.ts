@@ -148,6 +148,7 @@ export class MapScene implements Scene {
 	// Guards End Turn from re-firing while enemies are mid-move/mid-fight
 	private processingEnemyTurns = false;
 	private activeAi: PilotedMercenary | null = null;
+	private activeMonster: MonsterEntity | null = null;
 
 	// Character panel (top-right)
 	private characterPanel: CharacterPanel;
@@ -399,6 +400,17 @@ export class MapScene implements Scene {
 				x: this.activeAi.mercenary.view.x,
 				y: this.activeAi.mercenary.view.y,
 			});
+		} else if (this.processingEnemyTurns && this.activeMonster) {
+			this.camera.lockTo({
+				x: this.activeMonster.token.view.x,
+				y: this.activeMonster.token.view.y,
+			});
+		} else if (this.processingEnemyTurns) {
+			// Between individual units' turns — nothing specific is
+			// "active" right now, but the whole cycle is still running.
+			// Deliberately a no-op: holds whatever was last locked instead
+			// of falling through to unlock() below, which was the actual
+			// gap letting camera input sneak through mid-cycle.
 		} else if (
 			this.moveController.active ||
 			this.localUnit.mercenary.isAnimating ||
@@ -746,6 +758,7 @@ export class MapScene implements Scene {
 
 	private async processEnemyTurns(): Promise<void> {
 		this.processingEnemyTurns = true;
+		this.camera.setInputLocked(true);
 		this.setPlayerControlsVisible(false);
 
 		const BETWEEN_AI_MS = 600;
@@ -766,6 +779,7 @@ export class MapScene implements Scene {
 		await this.processMonsterTurns();
 
 		this.processingEnemyTurns = false;
+		this.camera.setInputLocked(false);
 		this.setPlayerControlsVisible(true);
 
 		this.camera.centerOn(
@@ -966,6 +980,13 @@ export class MapScene implements Scene {
 	}
 
 	private async processOneMonsterTurn(monster: MonsterEntity): Promise<void> {
+		this.activeMonster = monster;
+		this.camera.centerOn(
+			{ x: monster.token.view.x, y: monster.token.view.y },
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
+
 		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
 		const hunters: MonsterTargetCandidate[] = this.units
 			.filter((u) => u.state.currentHp > 0)
@@ -979,12 +1000,18 @@ export class MapScene implements Scene {
 					: false,
 			}));
 		const targetCandidate = decideMonsterTarget(monster.state, hunters);
-		if (!targetCandidate) return;
+		if (!targetCandidate) {
+			this.activeMonster = null;
+			return;
+		}
 
 		const targetUnit = this.units.find(
 			(u) => u.state.id === targetCandidate.id,
 		);
-		if (!targetUnit) return;
+		if (!targetUnit) {
+			this.activeMonster = null;
+			return;
+		}
 
 		const isAdjacentNow = isAdjacent(
 			monster.state.coord,
@@ -1031,6 +1058,8 @@ export class MapScene implements Scene {
 		if (isAdjacent(monster.state.coord, targetUnit.state.coord)) {
 			await this.monsterAttack(monster, targetUnit);
 		}
+
+		this.activeMonster = null;
 	}
 
 	private async monsterAttack(
