@@ -48,6 +48,7 @@ export class InventoryPanel {
 		null,
 	);
 	private selectedIndex: number | null = null;
+	private targetItemId: string | null = null;
 	private actionButtons: ActionButton[] = [];
 	private readonly hiddenY = PANEL_H;
 	private readonly shownY = PANEL_H + ACTION_ROW_Y_GAP;
@@ -135,6 +136,12 @@ export class InventoryPanel {
 	}
 
 	/** Refresh from live items. Treats missing/undefined entries as empty slots, not a shorter array. */
+	/** The match's relic — whichever loot item currently holds the "target" role. Never droppable from a player's own inventory, regardless of mode; see handleActionClick. */
+	setTargetItemId(id: string | null): void {
+		this.targetItemId = id;
+		this.updateActionButtonPositions();
+	}
+
 	sync(items: (ItemData | null)[]): void {
 		this.currentItems = items;
 		const filledCount = items.filter(
@@ -321,6 +328,19 @@ export class InventoryPanel {
 		for (const btn of this.actionButtons) {
 			btn.targetY = shown ? this.shownY : this.hiddenY;
 		}
+
+		const dropBtn = this.actionButtons.find((b) => b.key === "drop");
+		if (dropBtn) {
+			const selectedItem =
+				this.selectedIndex !== null
+					? this.currentItems[this.selectedIndex]
+					: null;
+			const isBlockedRelicDrop =
+				this.mode === "own" && selectedItem?.id === this.targetItemId;
+			dropBtn.bg.alpha = isBlockedRelicDrop ? 0.4 : 1;
+			dropBtn.icon.alpha = isBlockedRelicDrop ? 0.4 : 1;
+			dropBtn.container.eventMode = isBlockedRelicDrop ? "none" : "static";
+		}
 	}
 
 	private handleActionClick(key: ActionKey): void {
@@ -341,6 +361,11 @@ export class InventoryPanel {
 			} else if (this.mode === "surrendering") {
 				this.onGive?.(index);
 			} else {
+				// The relic can be surrendered or looted by another hunter
+				// (a legitimate transfer — the match still resolves normally
+				// for whoever ends up holding it) but never permanently
+				// dropped out of play entirely.
+				if (item.id === this.targetItemId) return;
 				this.onDrop?.(index);
 				this.deselect();
 			}

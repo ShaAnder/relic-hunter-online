@@ -1269,7 +1269,7 @@ export class MapScene implements Scene {
 			accentColor:
 				u.pilot === "local" ? 0x4a9eff : ARCHETYPE_COLORS[u.archetype!],
 			currentHp: u.state.currentHp,
-			maxHp: u.state.hpCeiling > 0 ? u.state.hpCeiling : u.state.stats.maxHp,
+			maxHp: u.state.stats.maxHp,
 			items: u.state.items,
 		}));
 	}
@@ -1749,6 +1749,9 @@ export class MapScene implements Scene {
 		this.hand.syncFromHand(local.state.hand);
 		this.deckTracker.sync(local.turnManager);
 		this.inventoryPanel.sync(local.state.items);
+		this.inventoryPanel.setTargetItemId(
+			this.game.session.chestPlan?.targetItem?.id ?? null,
+		);
 		this.characterPanel.setFromState(
 			this.game.session.character,
 			local.state,
@@ -1859,6 +1862,7 @@ export class MapScene implements Scene {
 	}
 
 	/** PASS 4 TODO: occupancy check iterates `units` directly rather than through a pilot-aware helper — fine mechanically, worth a second look once real multiplayer identity exists. */
+	/** Instant repositioning, same as before — but now also pans the camera to the destination so a teleport (knockout, surrender) is actually visible rather than happening silently wherever the camera currently isn't looking. Deliberately not awaited by callers: nothing needs to block on the pan finishing, it just needs to happen. */
 	private teleportEntity(state: MercenaryState, mercenary: Mercenary): void {
 		const occupied: GridCoord[] = this.units
 			.filter((u) => u.state.id !== state.id && u.state.currentHp > 0)
@@ -1870,6 +1874,13 @@ export class MapScene implements Scene {
 		const screenPos = gridToScreen(destination);
 		mercenary.view.x = screenPos.x;
 		mercenary.view.y = screenPos.y;
+
+		void this.camera.panTo(
+			{ x: screenPos.x, y: screenPos.y },
+			500,
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
 	}
 
 	// ---------- Helpers ----------

@@ -100,9 +100,13 @@ export class CharacterPanel {
 			`Mov ${state.stats.movement}   Atk ${state.stats.attack}   ` +
 			`Def ${state.stats.defense}   AP ${apRemaining}/${baseAP}`;
 
-		const maxHp = state.hpCeiling > 0 ? state.hpCeiling : state.stats.maxHp;
-		const hpRatio = Math.max(0, Math.min(1, state.currentHp / maxHp));
-		this.hpText.text = `${state.currentHp}/${maxHp}`;
+		// True original max, not the post-knockout ceiling — a hunter
+		// revived at half strength should visibly show a half-full bar,
+		// not a deceptive full one. hpCeiling still correctly caps how
+		// high currentHp can actually climb; this only changes display.
+		const trueMaxHp = state.stats.maxHp;
+		const hpRatio = Math.max(0, Math.min(1, state.currentHp / trueMaxHp));
+		this.hpText.text = `${state.currentHp}/${trueMaxHp}`;
 
 		this.hpBarFill.clear();
 		this.hpBarFill.roundRect(CONTENT_X, 0, HP_BAR_WIDTH * hpRatio, 14, 3);

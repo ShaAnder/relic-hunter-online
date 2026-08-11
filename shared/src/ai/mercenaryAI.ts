@@ -215,7 +215,11 @@ export function decideFallbackAction(
 ): AiFallbackAction {
 	if (adjacentThreats.length === 0) {
 		const hpRatio = self.currentHp / Math.max(1, self.stats.maxHp);
-		return canAffordRest && hpRatio < 0.5 ? "rest" : "hold";
+		// Lowered from 0.5 — resting at "just under half HP" was
+		// triggering too readily and often needed several consecutive
+		// rests to climb back over the line, reading as spam. 0.25 means
+		// a hunter only stops to rest when meaningfully hurt.
+		return canAffordRest && hpRatio < 0.25 ? "rest" : "hold";
 	}
 
 	if (archetype === "aggressive") {
