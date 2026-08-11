@@ -1,42 +1,23 @@
 # Enemy AI & Monsters
 
-Checked against `shared/src/ai/mercenaryAI.ts` and `monsterSpawning.ts`.
-
----
+Checked directly against `shared/src/ai/mercenaryAI.ts` and `monsterSpawning.ts` rather than written from memory of the original design intent, since those two things had already drifted apart once this session before.
 
 ## Enemy hunters
 
-Same shape as the player (`MercenaryState` + visual token). Only difference is `pilot: "ai"` and an archetype. They use the real TurnManager, real AP, and real hand cards.
+An AI-controlled hunter is built from exactly the same underlying shape as the player — the same `MercenaryState`, the same visual token, the same `TurnManager`. The only things that actually distinguish an AI hunter from a human player are its `pilot` field being set to `"ai"` instead of `"local"`, and having an archetype assigned that drives its decisions. This was a deliberate architectural choice made earlier in the project specifically so that AI and human hunters could never quietly diverge in capability — an AI hunter spends real AP, plays real cards from a real hand, and is bound by every constraint described in the turn-and-AP document exactly the way the player is.
 
-### Archetypes
+### The three archetypes, and how they actually decide things
 
-| Archetype | Default behaviour | Once the relic carrier is known |
-|-----------|-------------------|---------------------------------|
-| Aggressive | Path to nearest hunter, fight | Goes straight at the carrier |
-| Treasure | Open chests, avoid fair fights | Shadows the carrier, only fights when strong |
-| Balanced | Mix of pressure and objectives | Weighs risk before committing |
+An Aggressive hunter's default behavior, with no relic carrier yet known, is to path toward whichever hunter is currently nearest and commit to a fight. Once a carrier becomes known, that priority shifts entirely — it goes straight at the carrier specifically, deprioritizing everything else. A Treasure hunter runs the opposite instinct by default, prioritizing opening chests and generally avoiding fights it isn't confident it can win outright; once a carrier is known, it shifts to shadowing them rather than confronting them head-on, only actually committing to a fight if it clearly has the advantage. A Balanced hunter splits the difference from the start, mixing pressure on nearby threats with pursuing objectives on the map, and once a carrier is known it weighs the real risk of engaging before committing either way rather than defaulting to either extreme.
 
-Movement cards: smallest Blue that closes the real gap.  
-Engagement: scored by archetype (Aggressive is willing at low HP; Treasure needs a clear edge).  
-In combat: bias Attack/Defend by personality, Run or Surrender when the numbers look bad.  
-Loot priority: always take the match target if present, otherwise random filled slot.  
-Surrender: never give up the target while any other item exists.
+Movement card selection is consistent across all three archetypes: a hunter picks the smallest Blue card that actually closes the real, wall-aware distance to its target, rather than reflexively burning the biggest card in hand regardless of whether it's needed. This matters more than it might sound like — without this rule, AI hunters would waste high-value movement cards on short hops, which both feels wasteful to watch and actually weakens their own hand for later in the match.
 
----
+Whether to engage a target at all is scored per archetype rather than being a fixed rule — an Aggressive hunter is willing to commit to a fight even at fairly low HP, reflecting its whole personality, where a Treasure hunter needs a genuinely clear numerical edge before it's willing to risk a fight at all. Once a fight is actually happening, the choice between Attack and Defend each round is biased by the hunter's personality, and both Run and Surrender become live options once the numbers in a given exchange start looking bad enough for that archetype's own risk tolerance. Looting and surrender behavior for AI hunters follows the same rules laid out in the knockout-and-loot document — always take the match's actual target item first when looting a defeated opponent, and never surrender that same target item while any other item exists to give up in its place.
 
 ## Monsters
 
-Not part of the archetype system.
+Monsters sit deliberately outside this entire archetype system — they don't have one, and that's a real design decision rather than something still waiting to be built out. A monster always attacks and never plays a card in combat, because it genuinely has no hand to draw from or play out of; this isn't a limitation being worked around, it's a defining trait of what a monster is as opposed to a hunter. A monster's default target, with no relic carrier known, is whichever hunter happens to be nearest. Once the carrier becomes known, its focus shifts to them specifically — unless the monster is already adjacent to a different hunter, in which case it finishes that fight first rather than abandoning an opponent it's already engaged with just to chase a more valuable target across the map.
 
-- Always Attack, never play cards
-- Default target: nearest hunter
-- Once the carrier is known: switch to them, unless already adjacent to someone else
+Monster spawning happens as a series of small, repeated rolls rather than one larger check per round — specifically, a fifteen percent chance rolled after every individual mercenary's turn completes, the player included, capped at five monsters alive on the map simultaneously. This was chosen over a single per-round roll because it spreads spawn opportunities more evenly across a round instead of concentrating them all at one moment, and it means the exact timing of a spawn is tied to how the round is actually unfolding rather than a fixed checkpoint. Regardless of when during a round a given monster spawns, monsters as a group always act after every hunter — player and AI alike — has finished their turn for that round, meaning a monster that spawns early in a round still waits for the whole round to finish before it gets to act for the first time.
 
-**Spawning**  
-15% chance after every individual mercenary turn (player + each AI). Cap of 5 on the map.
-
-**Turn order**  
-Always after every hunter in the round, even if they spawned mid-round.
-
-**Still missing**  
-Deck-exhaustion boss. Frenzy movement bonus after the relic is found.
+Two real pieces of the intended monster design are still missing from what's actually built. A deck-exhaustion boss — some kind of significant threat tied to the shared deck running dry — hasn't been designed in detail or built at all. And the frenzy movement bonus that's supposed to make monsters meaningfully more dangerous once the relic has actually been found isn't wired into gameplay yet: the flag it depends on exists on the session object, but nothing in the actual map logic currently sets or reads it, so monsters behave identically whether the relic has been found or not, which isn't the intended behavior.

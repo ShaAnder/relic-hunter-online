@@ -1,46 +1,29 @@
 # Development Roadmap
 
----
+This isn't a feature checklist so much as a record of why the phases are sequenced the way they are, and what actually has to be true before each one can honestly be called finished. A lot of the individual pieces sound small in isolation — "hide the exit," "reset the deck" — but each one carries real implications for other systems that are worth writing down now rather than rediscovering later.
 
-## Phase 1 — Single-player core loop (current)
+## Phase 1 — single-player core loop (current)
 
-Most of the loop is in:
+The idea behind Phase 1 was never just "build a playable prototype." It was to prove out the actual core fantasy — card-driven movement and combat, tactical positioning via zones of control, a real single-elimination-style objective — with a single player against AI, before any of the complexity of networking or real opponents gets layered on top. If the core loop isn't fun against AI, it's not going to become fun by adding other humans to it; it'll just become complicated in more places at once.
 
-- Card + AP turn economy
-- Simultaneous combat
-- ZoC + Disengage
-- Real AI archetypes
-- Monsters as a separate entity type
-- Character creation, inventory, win condition, match result
+Most of the actual mechanical foundation is genuinely done. The card-and-AP turn economy works end to end for both the player and AI hunters, using the same `TurnManager` class with no simplified AI-only path. Combat resolves as one simultaneous round rather than a back-and-forth exchange, which was a deliberate choice early on to avoid the "whoever attacks first wins" problem that sequential resolution can create — worth noting that this exact decision is being revisited as a possible future change, tracked separately in the known-issues doc, since a playtester's card-precedence idea would mean giving that up. Zones of control are wall-aware and trigger real reaction strikes rather than just blocking movement outright, and Disengage exists as a genuine, repeatable way to leave a threatened area without eating a strike. AI hunters run on real archetypes with actual decision-making behind their movement and combat choices, not scripted patterns. Monsters exist as a fully separate entity type with their own combat rules, spawn logic, and targeting priority. Character creation, the inventory system, the win condition, and the match result screen are all built and playable.
 
-Still worth finishing before calling Phase 1 done:
+What's left before Phase 1 can honestly be called done is a shorter list, but each item on it is more involved than it sounds. The shared deck needs to actually reset between matches — right now it doesn't, so a fresh game can start with a deck that's already partially drawn down from whatever match came before it, which is a genuine bug rather than a design gap. Hiding the exit until the relic has actually been found is the single biggest remaining piece, and it's worth explaining why it matters this much: right now, both objectives — find the relic, reach the exit — are visible from the very start of a match, which means an efficient, high-movement build can plan a fully optimized route across both before ever taking a real risk. That's the actual mechanism behind the "just run and win" complaint that's come up in playtesting. Hiding the exit until the relic is found doesn't nerf movement directly; it removes the ability to pre-plan the second half of the route, which forces genuine improvisation regardless of how fast a build is. This touches map generation (the exit tile needs to exist on the grid from the start, generation-wise, but not be revealed to the player or rendered as interactable until the trigger fires), the win-condition check itself, and some kind of UI moment when the exit does reveal itself, since a silent state change would be confusing. None of that is built yet.
 
-- Shared deck reset between matches
-- Hidden exit until relic found
-- A couple of the remaining bugs
-- Basic interactive help / tutorial
+Beyond those two, there's a short remaining list of known bugs — tracked in detail in the known-issues doc rather than duplicated here — and the help screen needs to become a genuine interactive walkthrough instead of the static text page it currently is. A new player dropped into this game today has no in-game guidance beyond what they can infer from the UI itself, which is a real onboarding gap once this goes anywhere near actual playtesters who haven't been in the design conversations.
 
----
+## Phase 2 — local multiplayer & polish
 
-## Phase 2 — Local multiplayer & polish
+This phase exists specifically to test whether the core loop holds up against real human opponents making real decisions, before the much larger investment of building an authoritative server. Hotseat play — two to four players sharing one screen and taking turns — is the cheapest possible way to answer that question, since it requires no networking work at all, just making sure the existing turn structure and UI can gracefully hand control between different players sitting at the same machine.
 
-- Hotseat 2–4 players
-- Fuller trap set
-- Better hand / combat feedback
-- Map variety
+A fuller trap set belongs here too, since traps are currently underbuilt relative to the rest of the card system — Green cards exist and can be drawn, but where and how they can be placed is still quite limited, and this is exactly the kind of thing that becomes more interesting with more real opponents to use them against. Better feedback around hands and combat outcomes is also a Phase 2 concern rather than a Phase 1 one, because a lot of what's currently only legible if you're paying close attention becomes a much bigger problem the moment you're playing against a human who's actively trying to out-think you rather than an AI running a fixed archetype. And more map variety matters here for the same reason repeated single-player matches don't punish map sameness as hard as repeated multiplayer sessions would.
 
----
+## Phase 3 — online, authoritative
 
-## Phase 3 — Online (authoritative)
+This is the real inflection point for the project, where it stops being a local prototype and starts being an actual networked multiplayer game. The core idea is that an authoritative server — most likely Colyseus, though this isn't irreversibly locked in — takes real ownership of movement, combat resolution, and relic state, so that none of it can be manipulated from a compromised or simply buggy client. Everything currently living in `shared/` was deliberately kept free of any rendering dependency specifically so this transition is a matter of running that same logic server-side, not rewriting it.
 
-- Colyseus (or equivalent) authoritative rooms
-- All combat / movement / relic logic server-side
-- Simple lobby
+A simple lobby sits in front of this, just enough to get players into the same authoritative room together — this phase isn't attempting matchmaking or ranked play, just genuine networked play between people who've agreed to play together.
 
----
+## Phase 4 and beyond — accounts, progression, live service
 
-## Phase 4+ — Accounts, progression, live service
-
-Supabase auth + persistence, stat progression, matchmaking, seasons, cosmetics.
-
-See the tech stack ADR for the locked platform decisions.
+This is where the project becomes a platform rather than just a game. Real player accounts and persistence through Supabase, some form of stat or cosmetic progression across matches rather than every match starting from a blank slate, actual matchmaking instead of manually joining a lobby, and whatever the live-service layer on top ends up looking like — seasons, an economy, cosmetics. None of the platform-level decisions behind this are re-litigated here; they're locked in the tech stack ADR, and this roadmap just reflects the sequencing that ADR implies.

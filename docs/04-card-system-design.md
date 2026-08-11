@@ -1,31 +1,23 @@
 # Card System
 
-One shared deck for the whole match. Every hunter (player and AI) draws from it.
+There's exactly one deck for the entire match, shared by every hunter at the table — the player and every AI hunter draw from the same physical pool of cards. This was a deliberate choice rather than the more obvious "each hunter gets their own deck" approach, because a shared deck means every hunter's card choices genuinely affect what's available to everyone else. If someone draws and burns through the high-value Red cards early, that's fewer high-value Reds left in the deck for anyone else to draw later, including the AI. It ties every hunter's economy together instead of letting each one operate in a private bubble, which matters a lot for how tense a match can feel as it goes on and the deck thins out.
 
----
+## Colors and what they actually do
 
-## Colours
+Blue cards govern movement, generally valued one through three, and represent the most direct lever a player has over how far they can move in a single turn beyond their base movement stat. There's a special Blue card labeled **E**, for Exit, that behaves differently from every other card in the game: it doesn't add to a movement pool the normal way. Played during combat, it guarantees an escape from that fight outright. Played on the overworld map, it teleports the hunter directly to the exit tile — but critically, this does *not* trigger the win condition on its own, even if the hunter happens to already be carrying the match's relic. That's intentional, and it's worth being explicit about why: the E card is meant to be an escape tool for getting out of danger, not a shortcut past having to actually walk to the exit under normal movement. Making it win-eligible would make it strictly the best card in the deck for anyone racing to the exit, which undermines the tension the rest of the movement system is trying to create.
 
-| Colour | Role | Typical values |
-|--------|------|----------------|
-| Blue   | Movement | 1–3, plus special **E** (Exit) |
-| Red    | Attack   | 1–9, plus **A** (×2) and **C** (×1.5) |
-| Yellow | Defense  | 1–6, plus **A** (Nullify) and **C** (×2) |
-| Green  | Environment / traps | Present in the deck, placement still limited |
+Red cards govern attack, valued one through nine as a baseline, with two special variants worth calling out. An **A** card doubles the attack value outright — a significant spike that can swing an otherwise even fight. A **C** card multiplies it by one and a half, a smaller but still meaningful boost. Both specials are rarer draws than the numbered baseline cards, by design, since they're meant to feel like genuine swings when they show up rather than a routine part of every fight.
 
-Specials:
+Yellow cards govern defense, valued one through six, and carry their own pair of specials that mirror the Red side conceptually but land differently in practice. An **A** Yellow card fully nullifies incoming damage for that exchange — a hard counter rather than a scaling boost, which makes it feel meaningfully different to draw than a Red **A**. A **C** Yellow card doubles the defense value, the direct equivalent of Red's multiplier special.
 
-- **A** — doubles the relevant stat (or full Nullify on Yellow)
-- **C** — 1.5× (Red) or 2× (Yellow)
-- **E** (Blue only) — guaranteed escape in combat, or teleport to Exit on the map (does **not** trigger the win)
+Green cards are environment and trap cards, and they're honestly the least developed part of the card system right now. They exist in the deck and can be drawn like anything else, but where and how they can actually be placed on the map is still fairly restricted compared to what the rest of the card economy allows. This is a real area of design headroom — traps as a concept have come up repeatedly in feedback and design discussion as something worth expanding, but the actual placement rules and interaction with the grid haven't caught up to that interest yet.
 
----
+## The draw economy
 
-## Economy
+Every hunter draws exactly one card automatically at the start of their own turn, no action required. Choosing to Rest draws up to two more cards on top of whatever the automatic draw already provided, which is part of why Rest is a genuinely useful action beyond just healing — it's also the main lever a hunter has for refilling their hand faster than the passive one-per-turn rate. No more than one card can be played toward a single action; there's no stacking two Red cards into one attack for a compounded bonus. The shared deck itself is constructed exactly once, at the very start of a match, through `buildSharedDeck()`, and everything described above draws down from that one construction for the rest of the match.
 
-- Draw 1 at the start of every turn
-- Rest draws up to 2 more
-- One card per action maximum
-- Shared deck is built once per match via `buildSharedDeck()`
+The one confirmed, currently-open bug in this whole system is that the shared deck is never actually cleared or rebuilt when a new match starts after a previous one finishes. A fresh game can begin with a deck that's still partially depleted from whatever the last match left behind, rather than the fully intact deck a new match is supposed to start with. This is tracked in the known-issues document as a real, unfixed bug rather than a design gap.
 
-Known issue: the shared deck is not cleared between matches.
+## Ideas raised but not yet built
+
+A card that "binds" or "locks" an opponent into a longer, forced multi-round engagement has come up as a suggestion — something that would push combat away from its current one-round-and-done resolution toward occasionally forcing a real, extended fight. An item that expands hand size or otherwise alters the shared deck has also been floated, explicitly framed as something meant to create unusual, non-obviously-optimal interactions rather than a clean stat boost. Neither of these is built or scheduled; they're recorded here and in the known-issues doc so they aren't lost or reintroduced from scratch later.

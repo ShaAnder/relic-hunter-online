@@ -1,22 +1,15 @@
 # Zones of Control
 
----
+Only melee hunters project a zone of control around themselves — ranged and caster classes never threaten the tiles around them the way a melee hunter does, which is a direct extension of their identity as classes built around keeping distance rather than controlling adjacent space. This is currently a fixed rule rather than something that scales with any stat, though it's a natural candidate for future expansion if non-melee classes ever need their own version of area denial.
 
-## Rules
+The zones themselves are computed with genuine wall-awareness rather than raw tile distance — a wall standing between a melee hunter and a nearby tile correctly blocks that tile from being threatened at all, using actual line-of-sight math rather than just measuring how many tiles apart two points are. This matters a lot for how the zones feel in an actual dungeon layout with real geometry, since a naive distance-only version would threaten tiles right through solid walls, which reads as obviously wrong the moment a player encounters it.
 
-- Only Melee hunters project a ZoC
-- Wall-aware (real line-of-sight, not raw distance)
-- Entering a threatened tile never stops the move
-- Triggers a reaction strike at the crossing point (animation pauses), then the path continues
-- One charge per distinct enemy zone entered during a single move
+## What happens when a zone gets crossed
 
----
+Entering a tile that's threatened by an enemy zone never actually stops a move that's already in progress — this was a deliberate choice over the more obvious "you simply can't move through a threatened tile" rule, because that alternative would make zones of control function more like a hard wall than a real tactical hazard, and it would make certain paths literally impossible rather than costly. Instead, crossing into a threatened tile triggers a reaction strike right at the exact point of crossing — the movement animation genuinely pauses there rather than the damage just being applied silently after the whole move finishes — and then the rest of the path continues normally afterward. A single move can only ever take one charge per distinct enemy zone it passes through, regardless of how much of that particular zone's threatened area the path actually crosses; walking along the edge of one hunter's zone for several tiles still only costs one strike from that hunter, not one per tile.
 
-## Disengage
+## Disengage as the intended counter-play
 
-- 2 AP
-- Fully immune to ZoC
-- Repeatable as long as AP remains
-- Real alternative movement, not a special case of Move
+Disengage costs two AP and is fully immune to zones of control — it exists specifically as the answer to needing to leave a threatened area without taking a reaction strike for the privilege, which is a meaningfully different use case from a normal Move. It's repeatable as long as there's enough AP remaining to keep paying for it each time, and it's implemented as a genuinely separate movement path rather than a special case layered on top of normal Move — this was covered in more depth in the turn-and-AP document, but the short version is that Disengage exists as its own real option specifically to give players a deliberate, costed way to prioritize survival over anything else that turn.
 
-Reaction strike damage uses the full defense formula (not the attack-hedge half rule) and is halved again as a reaction.
+One precise mechanical detail worth recording here rather than leaving implicit: reaction strike damage is calculated using the full defense formula, the same one used for a normal, deliberate attack — not the reduced attack-hedge version that applies in some other combat contexts — and then that resulting number is halved again specifically because it's happening as a reaction to someone else's movement rather than as a chosen attack. That double consideration (full formula, then halved) is what keeps reaction strikes feeling meaningful without making crossing any threatened tile at all functionally suicidal.

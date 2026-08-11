@@ -1,16 +1,21 @@
 # Character Creation
 
----
+## Class and model are now one choice
 
-## What's in
+Picking a class and picking a visual model used to be two genuinely independent selections in the UI, cycled with separate controls, which meant it was structurally possible for a player to end up with a class and an appearance that had nothing to do with each other. That's been collapsed into one choice — the side arrows cycle through classes directly, and the model is derived from whichever class is currently selected rather than tracked as its own separate piece of state. There's no longer a code path where these two things can disagree with each other, because there's only one thing being chosen now, not two things being kept in sync.
 
-- Class and model are one choice (no desync)
-- Every class starts from the same numeric floor — no hidden stat bonuses
-- Class identity is purely mechanical (Melee projects ZoC, Ranged/Caster use different range geometry, Summoner will summon)
-- Stat allocation table: Move / Attack / Defense / HP
-- Diminishing returns:
-  - Movement — cost rises every point
-  - Attack / Defense — every two points
-  - HP — every three points
+## Why class stat bonuses got removed entirely
 
-Flavor text + short "why pick this" list per class are live.
+This is probably the single biggest change to character creation, and it's worth explaining the actual reasoning rather than just stating the outcome. Every class used to carry a small built-in stat bonus — Scout, for instance, started with extra movement before a single point had been allocated by the player. On its own that might sound like harmless flavor, but it created a real, compounding problem underneath the surface. First, it meant every time a new class got added to the game, its bonus had to be balanced against every existing class's bonus simultaneously, which is a cost that gets worse with every class added rather than staying constant — a genuine maintenance trap as the roster grows. Second, and more subtly, it was actively undermining the diminishing-returns system before that system even existed: if Scout starts with two free points of movement, those two points never touch the escalating cost curve at all, since the curve only applies to points a player actively chooses to spend. A class effectively starting ahead of the curve is a class that's partially opted out of the very restraint the curve is meant to enforce.
+
+The fix was to remove stat bonuses from classes entirely and push all class differentiation into mechanics instead. Every class now starts from the exact same numeric floor, with zero exceptions. What actually makes a class distinct is now purely what it *does*: melee classes project a zone of control that other classes simply don't have. Ranged and Caster classes use genuinely different targeting geometry from each other and from melee, not just a different range number. The Summoner, once it's actually built, brings a companion into the fight rather than leaning on any personal stat advantage at all. This is a cleaner foundation to build on specifically because a class's identity is no longer competing with an incidental stat number for a player's attention — the only thing left to notice about a class is what it mechanically brings to the table.
+
+## The diminishing-returns cost curve
+
+Stat allocation happens through a real table covering Movement, Attack, Defense, and HP, and every stat gets more expensive to invest in the more has already been put into it — this isn't a flat per-point cost the way it used to be. Movement has the steepest curve of the four: its cost rises with literally every single point spent on it, which is deliberate, since unchecked movement is the stat most directly responsible for a player being able to simply outrun the rest of the game rather than engage with it. Attack and Defense both step up in cost every two points instead of every one, a meaningfully gentler curve than movement's. HP is the most forgiving of the four, only getting more expensive every three points.
+
+The practical effect of this curve is that fully maxing out any single stat now consumes a disproportionate share of the overall point budget, which makes narrow, single-stat-focused builds a genuinely riskier choice than a more balanced spread — without ever making a narrow build literally impossible to attempt. That distinction mattered a lot during the design conversation that led here: a hard cap on any one stat was considered and specifically rejected, because it tells a player "you cannot attempt this," which is a much harsher and less interesting constraint than "attempting this is expensive."
+
+## What's visible in the actual UI right now
+
+Every class shows real flavor text describing its mechanical identity in one line, and a separate short list underneath explaining why a player might actually want to pick it — practical reasons tied to playstyle, not just restating the flavor text in bullet form. Both of these are live in the actual character creation screen right now, not just written down in this document waiting to be built.

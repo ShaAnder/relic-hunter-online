@@ -1,42 +1,23 @@
 # Summoner Class
 
-Status: design mostly locked, not built. Sequenced after the core loop and AI work.
+Status: the design here is mostly locked, but essentially none of it is built yet. It's deliberately sequenced after the core loop and the AI work are both solid, and that ordering isn't arbitrary — a Summoner pet needs to reuse the same AI controller framework that already drives enemy hunters, just flagged as friendly instead of hostile, and that framework only became genuinely trustworthy through the AI fixes done this session. Building the Summoner against an AI system that was still actively being debugged would mean building on unstable ground and likely redoing work once the underlying framework changed.
 
----
+## The baseline identity
 
-## Baseline
+The Summoner gets one extra AP over every other class — four instead of the standard three — and receives nothing in return on Attack, Defense, or HP. This is intentional, not an oversight or a placeholder waiting to be filled in: the Summoner is meant to be the weakest personal combat profile of any class in the game, on purpose, because its actual power is supposed to come from what it commands on the board rather than what it can personally survive or deal out in a direct fight. A Summoner that was also personally strong in combat would make the pets feel like a bonus on top of an already-viable hunter, rather than the actual core of how the class is meant to be played.
 
-- +1 AP (base 4 instead of 3)
-- No Attack / Defense / HP bonus — weakest personal combat profile on purpose
+## The Summon action
 
-## Summon action
+Summoning costs two AP. The detail that matters most here is that it does not lock out Move afterward, unlike Attack, Rest, or Disengage — a Summoner can genuinely Move and then Summon in the same turn, or even Summon twice back to back, since two Summons at two AP each fits exactly inside the four-AP baseline with nothing left over. Whether Attack and Summon can coexist in the same turn is still a genuinely open question rather than a decided one — it's easy to imagine an argument either way, and it's flagged explicitly below rather than assumed silently in either direction.
 
-- Costs 2 AP
-- Does **not** lock Move (unlike Attack / Rest / Disengage)
+## The three pet archetypes
 
-Legal combinations at 4 AP include Move + Summon and Summon + Summon.  
-Attack + Summon is still an open question.
+Three broad pet types are planned, differentiated mainly by how long they're meant to stick around and what they're for. An Aggressive pet is built for autonomous damage output but expires automatically after a fixed number of turns rather than lasting indefinitely — it's meant to be a burst of pressure, not a permanent addition to the board. A Defensive or Utility pet lasts until it's actually killed rather than expiring on a timer, and is meant to function as either a tank, some kind of supportive aura effect, or possibly some combination of both — the exact mechanical behavior here is one of the genuinely open questions below, not yet pinned down. An Exploration pet also lasts until killed, and is built specifically around finding things rather than fighting.
 
----
+The Exploration pet is worth dwelling on because it's the most mechanically interesting of the three, and the reason is a genuine tactical wrinkle rather than just flavor. It can locate loot or the match's relic on its own, but it can't extract anything itself — whatever it finds has to be physically carried back to the Summoner before it counts for anything. While it's carrying something valuable, the pet itself becomes a real, high-priority target for every other hunter and monster on the map, which means sending an Exploration pet out to find the relic isn't a free action — it creates a genuine window where an opponent who notices what's happening can intercept the pet before the hand-off ever completes. That's a real decision point for both the Summoner and their opponents, not just a fetch-quest mechanic.
 
-## Pet archetypes
+All three pet types are meant to reuse the exact same AI controller framework already driving enemy hunters, distinguished only by a friendly-versus-hostile flag rather than needing a separate decision-making system built from scratch. Whatever knockout and loot rules already apply to a normal hunter — covered in the knockout-and-loot document — apply identically to a pet, rather than the Summoner class needing its own parallel rule set for what happens when a pet goes down.
 
-| Type | Lifespan | Role |
-|------|----------|------|
-| Aggressive | Expires after N turns | Autonomous damage |
-| Defensive/Utility | Until killed | Tank and/or aura (exact behaviour open) |
-| Exploration | Until killed | Finds loot/relic, must bring it back to the Summoner |
+## What's still genuinely undecided
 
-Exploration pet is the interesting one: it can locate the relic but cannot extract. It has to return the item to the Summoner. While carrying, it becomes a high-value target.
-
-Pets reuse the same AI controller framework as enemy hunters (friendly vs hostile flag). Knockout/loot rules are the same as player characters.
-
----
-
-## Still open
-
-1. Is Attack + Summon intentionally blocked?
-2. Exact behaviour of the defensive/utility pet
-3. How the relic hand-off works (adjacency? free? costs AP?)
-4. Simultaneous summon cap
-5. What happens to pets when the Summoner is knocked out
+A handful of real questions need actual answers before this gets built, and listing them here is meant to make sure none of them get silently assumed one way or another during implementation. Whether Attack and Summon are meant to be usable together in one turn, or deliberately mutually exclusive, is unresolved. The exact behavior of the defensive or utility pet — is it a straightforward tank that draws aggro, an aura effect that buffs the Summoner passively, or genuinely both depending on some other choice — hasn't been decided. How the actual hand-off of a found item from an Exploration pet back to the Summoner works mechanically is open: does it require the two to be adjacent, is the hand-off free, or does it cost AP the same way most other meaningful actions in this game do. Whether there's any cap on how many pets a Summoner can have active on the board at once hasn't been settled. And what happens to any currently-active pets if the Summoner themselves gets knocked out mid-match — do they simply vanish, do they persist and keep acting independently, does ownership transfer somehow — is a real question with no current answer.
