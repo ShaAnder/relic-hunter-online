@@ -99,7 +99,7 @@ export function totalPointsSpent(allocation: StatAllocation): number {
 }
 
 export function computeCharacterStats(
-	characterClass: CharacterClass,
+	_characterClass: CharacterClass,
 	pointsSpent: StatAllocation,
 ): MercenaryStats {
 	return {

@@ -1,5 +1,5 @@
 import type { CardData } from "../cards/card";
-import type { MercenaryStats, MercenaryState } from "../types/mercenary";
+import type { MercenaryStats } from "../types/mercenary";
 import type { EntityCore, HasItems } from "../types/entity";
 
 /**

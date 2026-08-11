@@ -46,8 +46,6 @@ export class MoveController {
 	// Aiming state
 	private isActive = false;
 	private movementRange: Map<string, MovementRangeEntry> | null = null;
-	private previewTarget: GridCoord | null = null;
-	private previewPath: GridCoord[] = [];
 
 	// UX safety: slight delay after card play so range tiles don't overlap clicks
 	private pendingEnterTimeout: number | null = null;
@@ -124,8 +122,6 @@ export class MoveController {
 
 		this.isActive = false;
 		this.movementRange = null;
-		this.previewTarget = null;
-		this.previewPath = [];
 
 		this.rangeContainer.removeChildren();
 		this.pathContainer.removeChildren();
@@ -160,8 +156,6 @@ export class MoveController {
 		}
 
 		const path = getPathTo(this.movementRange, target) ?? [];
-		this.previewTarget = target;
-		this.previewPath = path;
 		this.renderPathPreview(this.options.getMercenaryCoord(), path);
 	}
 
@@ -267,7 +261,5 @@ export class MoveController {
 	private clearPreview(): void {
 		this.pathContainer.removeChildren();
 		this.highlightContainer.removeChildren();
-		this.previewTarget = null;
-		this.previewPath = [];
 	}
 }
