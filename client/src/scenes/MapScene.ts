@@ -1500,6 +1500,64 @@ export class MapScene implements Scene {
 				"attacker",
 				local.coord,
 				unit.state.coord,
+				false,
+				undefined,
+				true,
+			),
+		);
+	}
+
+	private tryStartCombatVsMonster(monster: MonsterEntity): void {
+		const local = this.localUnit.state;
+		const range = getRangeForClass(local.characterClass);
+		const inRangeTiles = computeAttackRange(
+			this.grid,
+			local.coord,
+			local.characterClass,
+			range,
+		);
+		const inRange = inRangeTiles.some(
+			(t) =>
+				t.coord.x === monster.state.coord.x &&
+				t.coord.y === monster.state.coord.y,
+		);
+		if (!inRange) {
+			this.showFeedback("⚔ Target out of range");
+			return;
+		}
+		if (!this.localUnit.turnManager.spendAttack()) return;
+
+		this.exitTargetingMode();
+
+		const monsterAsState = monsterAsMercenaryState(monster.state);
+		const tierLabel = `${monster.state.tier[0].toUpperCase()}${monster.state.tier.slice(1)} Monster`;
+
+		void this.game.overlays.show(
+			new BattleOverlay(
+				this.game,
+				local,
+				monsterAsState,
+				(result) => {
+					monster.state.currentHp = monsterAsState.currentHp;
+					if (result.defenderMonsterDied) this.removeMonster(monster);
+					if (result.attackerNeedsTeleport) {
+						this.teleportEntity(this.localUnit.state, this.localUnit.mercenary);
+					}
+					this.syncUI();
+				},
+				0x4a9eff,
+				"You",
+				0x8b0000,
+				tierLabel,
+				"balanced",
+				"balanced",
+				"attacker",
+				local.coord,
+				monster.state.coord,
+				false,
+				undefined,
+				false,
+				true,
 			),
 		);
 	}
@@ -1536,7 +1594,21 @@ export class MapScene implements Scene {
 			);
 		});
 
-		if (hit) this.tryStartCombat(hit);
+		if (hit) {
+			this.tryStartCombat(hit);
+			return true;
+		}
+
+		const monsterHit = this.livingMonsters().find((m) => {
+			const dx = m.token.view.x - localX;
+			const dy = m.token.view.y - localY;
+			if (Math.sqrt(dx * dx + dy * dy) > 20) return false;
+			return inRangeTiles.some(
+				(t) => t.coord.x === m.state.coord.x && t.coord.y === m.state.coord.y,
+			);
+		});
+
+		if (monsterHit) this.tryStartCombatVsMonster(monsterHit);
 		return true;
 	}
 

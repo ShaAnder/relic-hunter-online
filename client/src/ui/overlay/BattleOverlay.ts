@@ -56,6 +56,7 @@ export interface BattleResult {
 	attackerNeedsTeleport: boolean;
 	defenderNeedsTeleport: boolean;
 	attackerMonsterDied?: boolean;
+	defenderMonsterDied?: boolean;
 }
 
 /**
@@ -134,6 +135,7 @@ export class BattleOverlay implements Overlay {
 		private isRangedInitiated: boolean = false,
 		private availableActions: CombatAction[] = ACTIONS,
 		private isAttackerMonster: boolean = false,
+		private isDefenderMonster: boolean = false,
 	) {
 		this.localHand = new Hand(this.game.app.stage, this.localPlayZone, (card) =>
 			this.onHandCardConfirmed(card),
@@ -221,14 +223,16 @@ export class BattleOverlay implements Overlay {
 					this.defenderState.stats,
 					true,
 				);
-		const defenderChoice = chooseCombatAction(
-			this.defenderState.hand,
-			this.defenderState.stats,
-			this.defenderArchetype,
-			this.defenderState.currentHp,
-			this.attackerState.stats,
-			!this.isRangedInitiated,
-		);
+		const defenderChoice = this.isDefenderMonster
+			? monsterCombatChoice(this.defenderState.stats)
+			: chooseCombatAction(
+					this.defenderState.hand,
+					this.defenderState.stats,
+					this.defenderArchetype,
+					this.defenderState.currentHp,
+					this.attackerState.stats,
+					!this.isRangedInitiated,
+				);
 		void this.resolveRound(attackerChoice, defenderChoice);
 	}
 
@@ -886,6 +890,7 @@ export class BattleOverlay implements Overlay {
 		let attackerNeedsTeleport = false;
 		let defenderNeedsTeleport = false;
 		let attackerMonsterDied = false;
+		let defenderMonsterDied = false;
 
 		if (
 			attackerChoice.action === "surrender" ||
@@ -936,18 +941,23 @@ export class BattleOverlay implements Overlay {
 			}
 
 			if (this.defenderState.currentHp <= 0) {
-				const consequence = resolveDefeat(this.defenderState.stats, true);
-				this.defenderState.currentHp = consequence.hpCeiling;
-				this.defenderState.hpCeiling = consequence.hpCeiling;
-				if (consequence.itemStolen) {
-					await this.runLootSequence(
-						this.attackerState,
-						this.defenderState,
-						this.localHumanRole === "attacker",
-						true,
-					);
+				if (this.isDefenderMonster) {
+					defenderMonsterDied = true;
+				} else {
+					const consequence = resolveDefeat(this.defenderState.stats, true);
+					this.defenderState.currentHp = consequence.hpCeiling;
+
+					this.defenderState.hpCeiling = consequence.hpCeiling;
+					if (consequence.itemStolen) {
+						await this.runLootSequence(
+							this.attackerState,
+							this.defenderState,
+							this.localHumanRole === "attacker",
+							true,
+						);
+					}
+					defenderNeedsTeleport = true;
 				}
-				defenderNeedsTeleport = true;
 			}
 		}
 
