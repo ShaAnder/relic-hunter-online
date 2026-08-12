@@ -2,6 +2,15 @@ import type { MercenaryState, MercenaryStats } from "../types/mercenary";
 import { createMercenary } from "../types/mercenary";
 import { CharacterClass } from "../types/mercenary";
 
+export const ALL_CLASSES: CharacterClass[] = [
+	"tank",
+	"brawler",
+	"hunter",
+	"scout",
+	"mage",
+	"summoner",
+];
+
 export const MELEE_CLASSES: ReadonlySet<CharacterClass> = new Set([
 	"tank",
 	"brawler",
@@ -150,5 +159,11 @@ export function spawnFromCharacter(
 	character: CharacterData,
 	coord: MercenaryState["coord"],
 ): MercenaryState {
-	return createMercenary(character.id, coord, character.stats);
+	return createMercenary(
+		character.id,
+		coord,
+		character.stats,
+		character.characterClass,
+		character.name,
+	);
 }

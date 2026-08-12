@@ -1,5 +1,5 @@
 import type { MovementRangeEntry } from "../world/movement";
-import type { MercenaryStats } from "../types/mercenary";
+import type { MercenaryStats, CharacterClass } from "../types/mercenary";
 import type { CardData } from "../cards/card";
 import type { ItemData } from "../items/item";
 import type { CombatAction, CombatChoice } from "../combat/combat";
@@ -17,13 +17,15 @@ export const ARCHETYPE_COLORS: Record<AiArchetype, number> = {
 	balanced: 0x1abc9c,
 };
 
-export function archetypeLabel(archetype: AiArchetype): string {
-	const names: Record<AiArchetype, string> = {
-		aggressive: "Aggressive Hunter",
-		treasure: "Treasure Hunter",
-		balanced: "Balanced Hunter",
-	};
-	return names[archetype];
+export function hunterLabel(
+	name: string,
+	archetype: AiArchetype,
+	characterClass: CharacterClass,
+): string {
+	const archetypeCap = archetype.charAt(0).toUpperCase() + archetype.slice(1);
+	const classCap =
+		characterClass.charAt(0).toUpperCase() + characterClass.slice(1);
+	return `${name}, ${archetypeCap} ${classCap}`;
 }
 
 export type AiFallbackAction = "rest" | "retreat" | "hold";

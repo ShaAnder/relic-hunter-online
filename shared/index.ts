@@ -7,6 +7,7 @@ export * from "./src/combat/combat";
 export * from "./src/combat/zoneOfControl";
 export * from "./src/combat/targeting";
 export * from "./src/entities/character";
+export * from "./src/entities/names";
 export * from "./src/entities/chest";
 export * from "./src/entities/monsterSpawning";
 export * from "./src/items/item";

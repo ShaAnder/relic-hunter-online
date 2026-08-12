@@ -10,19 +10,11 @@ import {
 	totalPointsSpent,
 	computeCharacterStats,
 	createCharacter,
+	ALL_CLASSES as CLASSES,
 } from "@relic-hunter/shared";
 import { LocalCharacterRepo } from "@/core/entities/CharacterRepo";
 import { LobbyScene } from "./LobbyScene";
 import { MainMenuScene } from "./MainMenuScene";
-
-const CLASSES: CharacterClass[] = [
-	"tank",
-	"brawler",
-	"hunter",
-	"scout",
-	"mage",
-	"summoner",
-];
 
 /** Flavor-only for now — describes each class's intended identity, no underlying system implemented yet. */
 const CLASS_FLAVOR: Record<CharacterClass, string> = {

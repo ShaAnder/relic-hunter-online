@@ -29,7 +29,7 @@ import {
 	pickRetreatTile,
 	isAdjacent,
 	ARCHETYPE_COLORS,
-	archetypeLabel,
+	hunterLabel,
 } from "@relic-hunter/shared";
 import {
 	type GridCoord,
@@ -62,6 +62,8 @@ import {
 	monsterAsMercenaryState,
 	shouldSpawnMonster,
 	decideMonsterTarget,
+	ALL_CLASSES,
+	generateHunterName,
 } from "@relic-hunter/shared";
 import { Hand } from "@/ui/Hand";
 import { CharacterPanel } from "@/ui/CharacterPanel";
@@ -208,7 +210,13 @@ export class MapScene implements Scene {
 	}
 
 	private getUnitLabel(unit: PilotedMercenary): string {
-		return unit.pilot === "local" ? "You" : archetypeLabel(unit.archetype!);
+		return unit.pilot === "local"
+			? "You"
+			: hunterLabel(
+					unit.state.name,
+					unit.archetype!,
+					unit.state.characterClass,
+				);
 	}
 
 	/** Every UI surface hover/click should never reach board interaction through. Add a new panel here once — nothing else needs updating. */
@@ -1105,7 +1113,13 @@ export class MapScene implements Scene {
 					target.pilot === "local"
 						? 0x4a9eff
 						: ARCHETYPE_COLORS[target.archetype!],
-					target.pilot === "local" ? "You" : archetypeLabel(target.archetype!),
+					target.pilot === "local"
+						? "You"
+						: hunterLabel(
+								target.state.name,
+								target.archetype!,
+								target.state.characterClass,
+							),
 					"balanced",
 					target.archetype ?? "balanced",
 					target.pilot === "local" ? "defender" : "none",
@@ -1139,7 +1153,11 @@ export class MapScene implements Scene {
 						resolve();
 					},
 					ARCHETYPE_COLORS[attacker.archetype!],
-					archetypeLabel(attacker.archetype!),
+					hunterLabel(
+						attacker.state.name,
+						attacker.archetype!,
+						attacker.state.characterClass,
+					),
 					0x4a9eff,
 					"You",
 					attacker.archetype!,
@@ -1176,9 +1194,17 @@ export class MapScene implements Scene {
 						resolve();
 					},
 					ARCHETYPE_COLORS[attacker.archetype!],
-					archetypeLabel(attacker.archetype!),
+					hunterLabel(
+						attacker.state.name,
+						attacker.archetype!,
+						attacker.state.characterClass,
+					),
 					ARCHETYPE_COLORS[defender.archetype!],
-					archetypeLabel(defender.archetype!),
+					hunterLabel(
+						defender.state.name,
+						defender.archetype!,
+						defender.state.characterClass,
+					),
 					attacker.archetype!,
 					defender.archetype!,
 					"none",
@@ -1231,14 +1257,23 @@ export class MapScene implements Scene {
 			};
 			used.add(coordKey(coord));
 
-			const state = createMercenary(`enemy_${archetype}_${i}`, coord, {
-				movement: 3 + (archetype === "aggressive" ? 1 : 0),
-				attack: archetype === "aggressive" ? 4 : 3,
-				defense: archetype === "treasure" ? 3 : 2,
-				maxHp: 15,
-				ap: 3,
-			});
+			const aiClass =
+				ALL_CLASSES[Math.floor(Math.random() * ALL_CLASSES.length)];
+			const aiName = generateHunterName();
 
+			const state = createMercenary(
+				`enemy_${archetype}_${i}`,
+				coord,
+				{
+					movement: 3 + (archetype === "aggressive" ? 1 : 0),
+					attack: archetype === "aggressive" ? 4 : 3,
+					defense: archetype === "treasure" ? 3 : 2,
+					maxHp: 15,
+					ap: 3,
+				},
+				aiClass,
+				aiName,
+			);
 			const mercenary = new Mercenary(
 				coord,
 				MapScene.ENEMY_COLORS[i] ?? 0xe67e22,
@@ -1494,7 +1529,11 @@ export class MapScene implements Scene {
 				0x4a9eff,
 				"You",
 				ARCHETYPE_COLORS[unit.archetype!],
-				archetypeLabel(unit.archetype!),
+				hunterLabel(
+					unit.state.name,
+					unit.archetype!,
+					unit.state.characterClass,
+				),
 				"balanced",
 				unit.archetype!,
 				"attacker",

@@ -4,6 +4,7 @@ import type {
 	HasHand,
 	HasItems,
 	HasCharacterClass,
+	HasName,
 } from "./entity";
 
 export type CharacterClass =
@@ -30,19 +31,22 @@ export interface MercenaryStats {
 export type MercenaryState = EntityCore &
 	HasHand &
 	HasItems &
-	HasCharacterClass;
+	HasCharacterClass &
+	HasName;
 
 export function createMercenary(
 	id: string,
 	coord: GridCoord,
 	stats: MercenaryStats,
 	characterClass: CharacterClass = "brawler",
+	name: string = "Hunter",
 ): MercenaryState {
 	return {
 		id,
 		coord,
 		stats,
 		characterClass,
+		name,
 		currentHp: stats.maxHp,
 		hpCeiling: stats.maxHp,
 		items: new Array(6).fill(null),

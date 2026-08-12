@@ -33,6 +33,14 @@ export interface HasCharacterClass {
 	characterClass: CharacterClass;
 }
 
+export interface HasName {
+	name: string;
+}
+
+export function hasName(entity: EntityCore): entity is EntityCore & HasName {
+	return "name" in entity;
+}
+
 export function hasHand(entity: EntityCore): entity is EntityCore & HasHand {
 	return "hand" in entity;
 }
