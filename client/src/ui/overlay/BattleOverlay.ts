@@ -797,10 +797,11 @@ export class BattleOverlay implements Overlay {
 				? this.defenderArchetype
 				: this.attackerArchetype;
 
-		// otherState only equals attackerState when localHumanRole is
-		// "defender" — the exact case a monster attacker can show up here.
+		// otherState is the monster whenever it's on the side NOT being
+		// controlled by the local player right now
 		const otherIsMonster =
-			this.localHumanRole !== "attacker" && this.isAttackerMonster;
+			(this.localHumanRole !== "attacker" && this.isAttackerMonster) ||
+			(this.localHumanRole === "attacker" && this.isDefenderMonster);
 
 		const otherChoice = otherIsMonster
 			? monsterCombatChoice(otherState.stats)
@@ -967,6 +968,7 @@ export class BattleOverlay implements Overlay {
 				attackerNeedsTeleport,
 				defenderNeedsTeleport,
 				attackerMonsterDied,
+				defenderMonsterDied,
 			});
 		}, RESULT_LINGER_MS);
 	}
