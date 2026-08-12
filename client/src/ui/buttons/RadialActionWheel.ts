@@ -7,6 +7,7 @@ import endTurnSvgUrl from "@/assets/icons/endTurn.svg";
 import attackSvgUrl from "@/assets/icons/attack.svg";
 import restSvgUrl from "@/assets/icons/rest.svg";
 import engageSvgUrl from "@/assets/icons/engage.svg";
+import { pointInCircle } from "@/rendering/HitTest";
 
 export type ButtonAction =
 	| "move"
@@ -143,7 +144,7 @@ export class RadialActionWheel {
 		const localX = screenX - this.view.x;
 		const localY = screenY - this.view.y;
 
-		if (this.distSq(localX, localY, 0, 0) <= HUB_RADIUS * HUB_RADIUS) {
+		if (pointInCircle(localX, localY, 0, 0, HUB_RADIUS)) {
 			this.toggleInnerRing();
 			return null;
 		}
@@ -173,24 +174,24 @@ export class RadialActionWheel {
 
 	private hitInner(node: InnerNode, localX: number, localY: number): boolean {
 		if (!node.container.visible) return false;
-		return (
-			this.distSq(localX, localY, node.container.x, node.container.y) <=
-			NODE_RADIUS * NODE_RADIUS
+		return pointInCircle(
+			localX,
+			localY,
+			node.container.x,
+			node.container.y,
+			NODE_RADIUS,
 		);
 	}
 
 	private hitOuter(node: OuterNode, localX: number, localY: number): boolean {
 		if (!node.container.visible) return false;
-		return (
-			this.distSq(localX, localY, node.container.x, node.container.y) <=
-			NODE_RADIUS * NODE_RADIUS
+		return pointInCircle(
+			localX,
+			localY,
+			node.container.x,
+			node.container.y,
+			NODE_RADIUS,
 		);
-	}
-
-	private distSq(ax: number, ay: number, bx: number, by: number): number {
-		const dx = ax - bx;
-		const dy = ay - by;
-		return dx * dx + dy * dy;
 	}
 
 	private toggleInnerRing(): void {

@@ -88,7 +88,7 @@ import {
 } from "@/ui/HunterSummaryPanel";
 import { MonsterToken } from "@/entities/Monster";
 import type { MonsterEntity } from "@/types/entities";
-import { pointInContainer } from "@/rendering/HitTest";
+import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -1586,9 +1586,16 @@ export class MapScene implements Scene {
 
 		const hit = this.aiUnits.find((u) => {
 			if (u.state.currentHp <= 0) return false;
-			const dx = u.mercenary.view.x - localX;
-			const dy = u.mercenary.view.y - localY;
-			if (Math.sqrt(dx * dx + dy * dy) > 20) return false;
+			if (
+				!pointInCircle(
+					u.mercenary.view.x,
+					u.mercenary.view.y,
+					localX,
+					localY,
+					20,
+				)
+			)
+				return false;
 			return inRangeTiles.some(
 				(t) => t.coord.x === u.state.coord.x && t.coord.y === u.state.coord.y,
 			);
@@ -1600,9 +1607,8 @@ export class MapScene implements Scene {
 		}
 
 		const monsterHit = this.livingMonsters().find((m) => {
-			const dx = m.token.view.x - localX;
-			const dy = m.token.view.y - localY;
-			if (Math.sqrt(dx * dx + dy * dy) > 20) return false;
+			if (!pointInCircle(m.token.view.x, m.token.view.y, localX, localY, 20))
+				return false;
 			return inRangeTiles.some(
 				(t) => t.coord.x === m.state.coord.x && t.coord.y === m.state.coord.y,
 			);

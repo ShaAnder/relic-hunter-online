@@ -1,4 +1,5 @@
 import { Container, Graphics } from "pixi.js";
+import { pointInCircle } from "@/rendering/HitTest";
 
 /**
  * Recenters the camera on the player's own character — sits above the
@@ -42,8 +43,6 @@ export class RefocusButton {
 	}
 
 	hitTest(screenX: number, screenY: number): boolean {
-		const dx = screenX - this.view.x;
-		const dy = screenY - this.view.y;
-		return dx * dx + dy * dy <= 20 * 20;
+		return pointInCircle(screenX, screenY, this.view.x, this.view.y, 20);
 	}
 }
