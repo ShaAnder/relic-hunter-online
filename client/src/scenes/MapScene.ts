@@ -396,6 +396,7 @@ export class MapScene implements Scene {
 		);
 		for (const unit of this.units) {
 			unit.mercenary.update(deltaTime);
+			unit.mercenary.view.alpha = unit.state.currentHp <= 0 ? 0.4 : 1;
 		}
 		for (const monster of this.monsters) {
 			monster.token.update(deltaTime);
@@ -475,8 +476,30 @@ export class MapScene implements Scene {
 		);
 	}
 
-	private beginPlayerTurn(): void {
+	private async beginPlayerTurn(): Promise<void> {
 		this.camera.unlock();
+
+		if (this.localUnit.state.currentHp <= 0) {
+			await this.camera.panTo(
+				{
+					x: this.localUnit.mercenary.view.x,
+					y: this.localUnit.mercenary.view.y,
+				},
+				500,
+				this.game.app.screen.width,
+				this.game.app.screen.height,
+			);
+			this.localUnit.state.currentHp = this.localUnit.state.hpCeiling;
+			this.localUnit.turnManager.endTurn();
+			this.showFeedback("✨ You recover and get back up");
+			this.turnsTaken++;
+			this.trySpawnMonster();
+			this.syncUI();
+			void this.processEnemyTurns();
+			return;
+		}
+
+		this.setPlayerControlsVisible(true);
 		this.camera.centerOn(
 			{
 				x: this.localUnit.mercenary.view.x,
@@ -801,7 +824,12 @@ export class MapScene implements Scene {
 
 		let isFirst = true;
 		for (const unit of this.aiUnits) {
-			if (unit.state.currentHp <= 0) continue;
+			if (unit.state.currentHp <= 0) {
+				if (!isFirst) await this.delay(BETWEEN_AI_MS);
+				isFirst = false;
+				await this.processRecoveryTurn(unit);
+				continue;
+			}
 
 			if (!isFirst) {
 				await this.delay(BETWEEN_AI_MS);
@@ -816,7 +844,6 @@ export class MapScene implements Scene {
 
 		this.processingEnemyTurns = false;
 		this.camera.setInputLocked(false);
-		this.setPlayerControlsVisible(true);
 		this.beginPlayerTurn();
 
 		this.syncUI();
@@ -858,6 +885,7 @@ export class MapScene implements Scene {
 			!decideEngagement(unit.archetype, self, targetCombatant);
 
 		if (!wouldDeclineOnArrival) {
+			this.showFeedback(`🤔 ${this.getUnitLabel(unit)} avoids a fight`);
 			const blocked = new Set([
 				...others.map((o) => coordKey(o.coord)),
 				...this.livingMonsterCoords().map(coordKey),
@@ -910,6 +938,11 @@ export class MapScene implements Scene {
 			);
 			const tooRisky =
 				threatFraction > ARCHETYPE_ZOC_REFUSAL_THRESHOLD[unit.archetype];
+			if (tooRisky) {
+				this.showFeedback(
+					`⚠️ ${this.getUnitLabel(unit)} avoids a zone of control`,
+				);
+			}
 
 			if (path.length > 0 && !tooRisky) {
 				const cardType = moveCard?.color ?? "none";
@@ -920,6 +953,9 @@ export class MapScene implements Scene {
 					}
 					unit.state.coord = reachable;
 					unit.turnManager.commitMove(path.length);
+					this.showFeedback(
+						`🏃 ${this.getUnitLabel(unit)} moves toward its target`,
+					);
 					await this.moveEntityWithZoneStrikes(
 						{ state: unit.state, token: unit.mercenary },
 						path,
@@ -964,6 +1000,10 @@ export class MapScene implements Scene {
 				unit.turnManager.spendAttack();
 
 			if (canFight && victimUnit) {
+				this.showFeedback(
+					`⚔ ${this.getUnitLabel(unit)} attacks ${this.getUnitLabel(victimUnit)}`,
+				);
+
 				if (victimUnit.pilot === "local") {
 					this.showTargetMarker(victimUnit.mercenary);
 					await this.delay(500);
@@ -981,6 +1021,29 @@ export class MapScene implements Scene {
 		} else {
 			await this.runFallbackBehavior(unit, selfAfter, othersAfter);
 		}
+
+		this.activeAi = null;
+		this.camera.unlock();
+	}
+
+	/**
+	 * A downed unit's own turn is entirely consumed recovering — no move, no attack,
+	 * nothing else. Heals to the reduced ceiling set at defeat time and stands back up.
+	 */
+	private async processRecoveryTurn(unit: PilotedMercenary): Promise<void> {
+		this.activeAi = unit;
+		await this.camera.panTo(
+			{ x: unit.mercenary.view.x, y: unit.mercenary.view.y },
+			500,
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
+
+		unit.state.currentHp = unit.state.hpCeiling;
+		unit.turnManager.endTurn();
+		this.showFeedback(
+			`✨ ${this.getUnitLabel(unit)} recovers and gets back up`,
+		);
 
 		this.activeAi = null;
 		this.camera.unlock();
@@ -1024,6 +1087,7 @@ export class MapScene implements Scene {
 			if (retreatTile) {
 				const retreatPath = getPathTo(retreatRange, retreatTile) ?? [];
 				if (retreatPath.length > 0) {
+					this.showFeedback(`💨 ${this.getUnitLabel(unit)} uses Disengage`);
 					unit.state.coord = retreatTile;
 					recordFlee(unit.memory, retreatFrom, retreatTile);
 					// No applyZoneStrikes — Disengage is ZoC-immune, that's its whole point.
@@ -1140,7 +1204,7 @@ export class MapScene implements Scene {
 					this.game,
 					monsterAsState,
 					target.state,
-					(result) => {
+					async (result) => {
 						monster.state.currentHp = monsterAsState.currentHp;
 						if (result.attackerMonsterDied) {
 							this.removeMonster(monster);
@@ -1179,7 +1243,7 @@ export class MapScene implements Scene {
 					this.game,
 					attacker.state,
 					defender.state,
-					(result) => {
+					async (result) => {
 						if (result.attackerNeedsTeleport) {
 							this.teleportEntity(attacker.state, attacker.mercenary);
 						}
@@ -1216,7 +1280,7 @@ export class MapScene implements Scene {
 					this.game,
 					attacker.state,
 					defender.state,
-					(result) => {
+					async (result) => {
 						if (result.attackerNeedsTeleport) {
 							this.teleportEntity(attacker.state, attacker.mercenary);
 						}
@@ -1682,17 +1746,17 @@ export class MapScene implements Scene {
 	}
 
 	/** Enemy defeat/teleport are BattleOverlay's job via shared state; this handles the rest. */
-	private onBattleComplete(result: BattleResult): void {
+	private async onBattleComplete(result: BattleResult): Promise<void> {
 		const unit = this.activeCombatUnit;
 		this.activeCombatUnit = null;
 
 		if (result.defenderNeedsTeleport && unit) {
-			this.teleportEntity(unit.state, unit.mercenary);
+			await this.teleportEntity(unit.state, unit.mercenary);
 			this.showFeedback("💨 Enemy hunter fled the fight!");
 		}
 
 		if (result.attackerNeedsTeleport) {
-			this.teleportEntity(this.localUnit.state, this.localUnit.mercenary);
+			await this.teleportEntity(this.localUnit.state, this.localUnit.mercenary);
 		}
 
 		this.syncUI();
@@ -2002,9 +2066,16 @@ export class MapScene implements Scene {
 		return candidates[Math.floor(Math.random() * candidates.length)];
 	}
 
-	/** PASS 4 TODO: occupancy check iterates `units` directly rather than through a pilot-aware helper — fine mechanically, worth a second look once real multiplayer identity exists. */
-	/** Instant repositioning, same as before — but now also pans the camera to the destination so a teleport (knockout, surrender) is actually visible rather than happening silently wherever the camera currently isn't looking. Deliberately not awaited by callers: nothing needs to block on the pan finishing, it just needs to happen. */
-	private teleportEntity(state: MercenaryState, mercenary: Mercenary): void {
+	/**
+	 * Instant repositioning plus a real, awaited camera pan to the destination.
+	 * Callers await this directly — that's what guarantees a teleport finishes,
+	 * camera and all, before whatever happens next (the next unit's turn,
+	 * control returning to the player) ever begins.
+	 */
+	private async teleportEntity(
+		state: MercenaryState,
+		mercenary: Mercenary,
+	): Promise<void> {
 		const occupied: GridCoord[] = this.units
 			.filter((u) => u.state.id !== state.id && u.state.currentHp > 0)
 			.map((u) => u.state.coord);
@@ -2016,7 +2087,7 @@ export class MapScene implements Scene {
 		mercenary.view.x = screenPos.x;
 		mercenary.view.y = screenPos.y;
 
-		void this.camera.panTo(
+		await this.camera.panTo(
 			{ x: screenPos.x, y: screenPos.y },
 			500,
 			this.game.app.screen.width,

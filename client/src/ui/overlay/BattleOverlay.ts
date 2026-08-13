@@ -927,7 +927,6 @@ export class BattleOverlay implements Overlay {
 					attackerMonsterDied = true;
 				} else {
 					const consequence = resolveDefeat(this.attackerState.stats, true);
-					this.attackerState.currentHp = consequence.hpCeiling;
 					this.attackerState.hpCeiling = consequence.hpCeiling;
 					if (consequence.itemStolen) {
 						await this.runLootSequence(
@@ -946,8 +945,6 @@ export class BattleOverlay implements Overlay {
 					defenderMonsterDied = true;
 				} else {
 					const consequence = resolveDefeat(this.defenderState.stats, true);
-					this.defenderState.currentHp = consequence.hpCeiling;
-
 					this.defenderState.hpCeiling = consequence.hpCeiling;
 					if (consequence.itemStolen) {
 						await this.runLootSequence(

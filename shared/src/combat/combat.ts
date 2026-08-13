@@ -322,7 +322,7 @@ export function resolveReactionStrike(
 
 	if (nullified) return { damage: 0, nullified: true };
 	return {
-		damage: Math.max(0, attackValue - defenseValue) / 2,
+		damage: Math.max(0, attackValue - defenseValue) * 2,
 		nullified: false,
 	};
 }
