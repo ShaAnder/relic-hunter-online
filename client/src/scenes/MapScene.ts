@@ -489,7 +489,7 @@ export class MapScene implements Scene {
 				this.game.app.screen.width,
 				this.game.app.screen.height,
 			);
-			this.localUnit.state.currentHp = this.localUnit.state.hpCeiling;
+			this.localUnit.state.currentHp = 1;
 			this.localUnit.turnManager.endTurn();
 			this.showFeedback("✨ You recover and get back up");
 			this.turnsTaken++;
@@ -1039,7 +1039,7 @@ export class MapScene implements Scene {
 			this.game.app.screen.height,
 		);
 
-		unit.state.currentHp = unit.state.hpCeiling;
+		unit.state.currentHp = 1;
 		unit.turnManager.endTurn();
 		this.showFeedback(
 			`✨ ${this.getUnitLabel(unit)} recovers and gets back up`,
@@ -2084,8 +2084,7 @@ export class MapScene implements Scene {
 		if (!destination) return;
 		state.coord = destination;
 		const screenPos = gridToScreen(destination);
-		mercenary.view.x = screenPos.x;
-		mercenary.view.y = screenPos.y;
+		mercenary.setPositionInstant(screenPos);
 
 		await this.camera.panTo(
 			{ x: screenPos.x, y: screenPos.y },

@@ -347,7 +347,7 @@ export function resolveDefeat(
 ): DefeatConsequence {
 	return {
 		teleport: true,
-		hpCeiling: Math.floor(loserStats.maxHp / 2),
+		hpCeiling: Math.floor(loserStats.maxHp * 0.8),
 		itemStolen: defeatedByHunter,
 	};
 }

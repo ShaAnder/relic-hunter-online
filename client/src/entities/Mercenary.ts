@@ -63,6 +63,17 @@ export class Mercenary {
 		});
 	}
 
+	/**
+	 * Instantly relocates the token, bypassing animation — used for teleports,
+	 * where there's no path to walk, just an immediate repositioning.
+	 * Keeps the internal tracked position in sync with the view, so a
+	 * LATER animation (the unit's next move) doesn't start from stale pre-teleport data.
+	 */
+	setPositionInstant(screenPos: { x: number; y: number }): void {
+		this.currentScreenPos = { ...screenPos };
+		this.syncPosition();
+	}
+
 	/** Advance the animation — call once per frame. */
 	update(deltaTime: number): void {
 		if (!this._isAnimating || this.animPoints.length < 2) return;
