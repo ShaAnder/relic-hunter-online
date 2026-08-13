@@ -323,16 +323,17 @@ export function pickEngagementTarget(
 	archetype: AiArchetype,
 	self: AiCombatant,
 	others: AiCombatant[],
+	inRangeKeys: Set<string>,
 ): AiCombatant | null {
-	const adjacent = others.filter(
-		(o) => o.currentHp > 0 && isAdjacent(self.coord, o.coord),
+	const inRange = others.filter(
+		(o) => o.currentHp > 0 && inRangeKeys.has(`${o.coord.x},${o.coord.y}`),
 	);
-	if (adjacent.length === 0) return null;
+	if (inRange.length === 0) return null;
 
 	let best: AiCombatant | null = null;
 	let bestScore = -Infinity;
 
-	for (const candidate of adjacent) {
+	for (const candidate of inRange) {
 		if (!decideEngagement(archetype, self, candidate)) continue;
 
 		const score = engagementScore(archetype, self, candidate);

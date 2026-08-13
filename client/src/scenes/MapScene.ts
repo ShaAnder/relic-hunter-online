@@ -30,6 +30,10 @@ import {
 	isAdjacent,
 	ARCHETYPE_COLORS,
 	hunterLabel,
+	ThreatOwner,
+	computeMovementRangeWeighted,
+	computePathThreatFraction,
+	ARCHETYPE_ZOC_REFUSAL_THRESHOLD,
 } from "@relic-hunter/shared";
 import {
 	type GridCoord,
@@ -603,10 +607,22 @@ export class MapScene implements Scene {
 			.map((u) => ({ id: u.state.id, coord: u.state.coord, zocRadius: 2 }));
 	}
 
-	/**
-	 * Animates a path in segments, pausing exactly at each zone crossing to
-	 * apply the reaction strike and log it
-	 */
+	private buildThreatZoneOwners(excludeId: string): ThreatOwner[] {
+		return this.units
+			.filter(
+				(u) =>
+					u.state.id !== excludeId &&
+					u.state.currentHp > 0 &&
+					isMeleeClass(u.state.characterClass),
+			)
+			.map((u) => ({
+				id: u.state.id,
+				coord: u.state.coord,
+				zocRadius: 2,
+				stats: u.state.stats,
+			}));
+	}
+
 	/**
 	 * Animates a path in segments, pausing exactly at each zone crossing to
 	 * apply the reaction strike and log it. Works for ANY entity with a
@@ -870,18 +886,32 @@ export class MapScene implements Scene {
 				typeof moveCard?.value === "number" ? moveCard.value : 0;
 			const moveBudget = unit.state.stats.movement + cardBonus;
 
-			const range = computeMovementRange(
+			const threatOwners = this.buildThreatZoneOwners(unit.state.id);
+			const range = computeMovementRangeWeighted(
 				this.grid,
 				unit.state.coord,
 				moveBudget,
 				blocked,
+				threatOwners,
+				unit.state.stats,
+				unit.archetype,
 			);
 			const reachable =
 				findNearestReachableTile(this.grid, range, target, blocked) ??
 				unit.state.coord;
 			const path = getPathTo(range, reachable) ?? [];
 
-			if (path.length > 0) {
+			const threatFraction = computePathThreatFraction(
+				this.grid,
+				path,
+				threatOwners,
+				unit.state.stats,
+				unit.state.currentHp,
+			);
+			const tooRisky =
+				threatFraction > ARCHETYPE_ZOC_REFUSAL_THRESHOLD[unit.archetype];
+
+			if (path.length > 0 && !tooRisky) {
 				const cardType = moveCard?.color ?? "none";
 				if (unit.turnManager.beginMovement(cardType, cardBonus)) {
 					if (moveCard) {
@@ -908,10 +938,22 @@ export class MapScene implements Scene {
 		// the fight it was risked for. Real post-move HP (selfAfter) is
 		// still what runFallbackBehavior uses below if no fight happens.
 		const selfForEngagement = { ...selfAfter, currentHp: preMoveHp };
+		const engagementRange = getRangeForClass(unit.state.characterClass);
+		const engagementTiles = computeAttackRange(
+			this.grid,
+			unit.state.coord,
+			unit.state.characterClass,
+			engagementRange,
+		);
+		const inRangeKeys = new Set(
+			engagementTiles.map((t) => `${t.coord.x},${t.coord.y}`),
+		);
+
 		const victim = pickEngagementTarget(
 			unit.archetype,
 			selfForEngagement,
 			othersAfter,
+			inRangeKeys,
 		);
 
 		if (victim) {
@@ -1113,13 +1155,7 @@ export class MapScene implements Scene {
 					target.pilot === "local"
 						? 0x4a9eff
 						: ARCHETYPE_COLORS[target.archetype!],
-					target.pilot === "local"
-						? "You"
-						: hunterLabel(
-								target.state.name,
-								target.archetype!,
-								target.state.characterClass,
-							),
+					target.pilot === "local" ? "You" : target.state.name,
 					"balanced",
 					target.archetype ?? "balanced",
 					target.pilot === "local" ? "defender" : "none",
@@ -1153,11 +1189,7 @@ export class MapScene implements Scene {
 						resolve();
 					},
 					ARCHETYPE_COLORS[attacker.archetype!],
-					hunterLabel(
-						attacker.state.name,
-						attacker.archetype!,
-						attacker.state.characterClass,
-					),
+					attacker.state.name,
 					0x4a9eff,
 					"You",
 					attacker.archetype!,
@@ -1200,11 +1232,7 @@ export class MapScene implements Scene {
 						attacker.state.characterClass,
 					),
 					ARCHETYPE_COLORS[defender.archetype!],
-					hunterLabel(
-						defender.state.name,
-						defender.archetype!,
-						defender.state.characterClass,
-					),
+					defender.state.name,
 					attacker.archetype!,
 					defender.archetype!,
 					"none",
@@ -1529,11 +1557,7 @@ export class MapScene implements Scene {
 				0x4a9eff,
 				"You",
 				ARCHETYPE_COLORS[unit.archetype!],
-				hunterLabel(
-					unit.state.name,
-					unit.archetype!,
-					unit.state.characterClass,
-				),
+				unit.state.name,
 				"balanced",
 				unit.archetype!,
 				"attacker",

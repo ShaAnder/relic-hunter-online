@@ -1,6 +1,7 @@
 export * from "./src/ai/mercenaryAI";
 export * from "./src/ai/monsterAI";
 export * from "./src/ai/aiMemory";
+export * from "./src/ai/zocPathing";
 export * from "./src/cards/card";
 export * from "./src/cards/deck";
 export * from "./src/combat/combat";

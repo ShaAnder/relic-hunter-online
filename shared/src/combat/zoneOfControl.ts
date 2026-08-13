@@ -18,7 +18,11 @@ export interface ZoneCrossing {
  * physical reasoning as line-of-sight for ranged attacks: you can't
  * threaten a tile you can't actually reach around a wall.
  */
-function zoneReaches(grid: Grid, owner: ZoneOwner, tile: GridCoord): boolean {
+export function zoneReaches(
+	grid: Grid,
+	owner: ZoneOwner,
+	tile: GridCoord,
+): boolean {
 	const dist =
 		Math.abs(tile.x - owner.coord.x) + Math.abs(tile.y - owner.coord.y);
 	if (dist === 0 || dist > owner.zocRadius) return false;
