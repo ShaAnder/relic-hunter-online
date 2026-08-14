@@ -224,7 +224,7 @@ export class BattleOverlay implements Overlay {
 					true,
 				);
 		const defenderChoice = this.isDefenderMonster
-			? monsterCombatChoice(this.defenderState.stats)
+			? monsterCombatChoice(this.defenderState.stats, !this.isRangedInitiated)
 			: chooseCombatAction(
 					this.defenderState.hand,
 					this.defenderState.stats,
@@ -804,7 +804,10 @@ export class BattleOverlay implements Overlay {
 			(this.localHumanRole === "attacker" && this.isDefenderMonster);
 
 		const otherChoice = otherIsMonster
-			? monsterCombatChoice(otherState.stats)
+			? monsterCombatChoice(
+					otherState.stats,
+					this.localHumanRole === "defender" ? true : !this.isRangedInitiated,
+				)
 			: chooseCombatAction(
 					otherState.hand,
 					otherState.stats,

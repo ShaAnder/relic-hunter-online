@@ -370,6 +370,7 @@ export function resolveSurrender(itemCount: number): SurrenderConsequence {
  */
 export function monsterCombatChoice(
 	monsterStats: MercenaryStats,
+	canAttack: boolean = true,
 ): CombatChoice {
-	return { action: "attack", stats: monsterStats };
+	return { action: canAttack ? "attack" : "defend", stats: monsterStats };
 }

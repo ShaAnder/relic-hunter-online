@@ -257,6 +257,10 @@ export class MapScene implements Scene {
 		this.mapSeed =
 			this.game.session.mapSeed ?? Math.floor(Math.random() * 1_000_000);
 
+		// WE ADD THIS - So when a new match happens it's a fresh deck, without it
+		// would try to carry old deck over
+		this.game.session.sharedDeck = null;
+
 		this.grid = this.buildMap();
 
 		this.boardContainer.addChild(this.tilesContainer);
@@ -1261,6 +1265,7 @@ export class MapScene implements Scene {
 					"defender",
 					attacker.state.coord,
 					defender.state.coord,
+					!isAdjacent(attacker.state.coord, defender.state.coord),
 				),
 			);
 		});
@@ -1290,11 +1295,7 @@ export class MapScene implements Scene {
 						resolve();
 					},
 					ARCHETYPE_COLORS[attacker.archetype!],
-					hunterLabel(
-						attacker.state.name,
-						attacker.archetype!,
-						attacker.state.characterClass,
-					),
+					attacker.state.name,
 					ARCHETYPE_COLORS[defender.archetype!],
 					defender.state.name,
 					attacker.archetype!,
@@ -1302,6 +1303,7 @@ export class MapScene implements Scene {
 					"none",
 					attacker.state.coord,
 					defender.state.coord,
+					!isAdjacent(attacker.state.coord, defender.state.coord),
 				),
 			);
 		});
@@ -1627,7 +1629,7 @@ export class MapScene implements Scene {
 				"attacker",
 				local.coord,
 				unit.state.coord,
-				false,
+				!isAdjacent(local.coord, unit.state.coord),
 				undefined,
 				true,
 			),
@@ -1681,7 +1683,7 @@ export class MapScene implements Scene {
 				"attacker",
 				local.coord,
 				monster.state.coord,
-				false,
+				!isAdjacent(local.coord, monster.state.coord),
 				undefined,
 				false,
 				true,
@@ -2121,6 +2123,8 @@ export class MapScene implements Scene {
 	/** [R] dev shortcut: fresh seed/map/chests locally, no LoadingScene round-trip. */
 	private regenerateMap(): void {
 		if (this.localUnit.mercenary.isAnimating || this.exitCardInProgress) return;
+
+		this.game.session.sharedDeck = null;
 
 		this.moveController.exit();
 		this.hand.exitSelectionMode();
