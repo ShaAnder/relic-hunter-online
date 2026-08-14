@@ -1229,6 +1229,9 @@ export class MapScene implements Scene {
 					target.pilot === "local" ? "defender" : "none",
 					monster.state.coord,
 					target.state.coord,
+					false,
+					undefined,
+					true,
 				),
 			);
 		});
@@ -1630,8 +1633,6 @@ export class MapScene implements Scene {
 				local.coord,
 				unit.state.coord,
 				!isAdjacent(local.coord, unit.state.coord),
-				undefined,
-				true,
 			),
 		);
 	}
