@@ -1,24 +1,42 @@
-import { Container, Text } from "pixi.js";
+import { Container, Graphics, Text } from "pixi.js";
 import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
+import type { HunterScoreEntry } from "@/core/game/GameSession";
 import { Button } from "@/ui/generics/Button";
 import { LobbyScene } from "./LobbyScene";
 
+/** One row of the scoreboard — a label plus how to pull that metric's number out of a hunter's score. */
+interface ScoreRow {
+	label: string;
+	getValue: (entry: HunterScoreEntry) => number;
+}
+
+const SCORE_ROWS: ScoreRow[] = [
+	{ label: "Damage Dealt", getValue: (e) => e.matchScore.damageDealt },
+	{ label: "Items Owned", getValue: (e) => e.matchScore.itemsScore },
+	{ label: "Cards Remaining", getValue: (e) => e.matchScore.cardsRemaining },
+	{ label: "Environmental", getValue: (e) => e.matchScore.environmentalScore },
+	{ label: "Tactical", getValue: (e) => e.matchScore.tacticalScore },
+	{ label: "Objective", getValue: (e) => e.matchScore.objectiveTurnsHeld },
+];
+
+const COLUMN_WIDTH = 170;
+const ROW_HEIGHT = 36;
+const HEADER_HEIGHT = 90;
+const ICON_RADIUS = 24;
+
 /**
- * Minimal match result screen per `11-item-inventory-win-design.md`: a
- * win/loss headline, turns taken, items extracted, and a button back to
- * the Lobby. Reads game.session.matchResult (set by MapScene) and clears
- * it on return so a stale result can't leak into the next match.
- *
- * Deeper stats (damage dealt, tiles moved, etc.) are a later addition once
- * there's more gameplay generating numbers worth showing — deliberately
- * bare for this pass.
+ * Full-match scoreboard — a row per scoring metric, a column per hunter.
+ * Every hunter shown, not just the local one; whichever fields aren't
+ * wired to real gameplay yet just show their current (often zero, or a
+ * flat starting value)
+ * @author ShaAnder
  */
 export class MatchResultScene implements Scene {
 	readonly view = new Container();
 
 	private headline!: Text;
-	private statsText!: Text;
+	private grid = new Container();
 	private returnBtn!: Button;
 
 	constructor(private game: Game) {}
@@ -49,18 +67,16 @@ export class MatchResultScene implements Scene {
 		});
 		this.view.addChild(this.headline);
 
-		const lines = result
-			? [
-					`Turns taken: ${result.turnsTaken}`,
-					`Items extracted: ${result.itemsExtracted}`,
-				]
-			: ["No match data — did you get here directly?"];
-
-		this.statsText = new Text({
-			text: lines.join("\n"),
-			style: { fill: 0xffffff, fontSize: 18, fontFamily: "monospace" },
-		});
-		this.view.addChild(this.statsText);
+		this.view.addChild(this.grid);
+		if (result && result.hunterScores.length > 0) {
+			this.buildGrid(result.hunterScores);
+		} else {
+			const fallback = new Text({
+				text: "No match data — did you get here directly?",
+				style: { fill: 0xffffff, fontSize: 18 },
+			});
+			this.grid.addChild(fallback);
+		}
 
 		this.returnBtn = new Button({
 			text: "Return to Lobby",
@@ -74,6 +90,74 @@ export class MatchResultScene implements Scene {
 		this.view.addChild(this.returnBtn.view);
 	}
 
+	private buildGrid(hunters: HunterScoreEntry[]): void {
+		// Row labels down the left edge
+		const labelColumn = new Container();
+		labelColumn.y = HEADER_HEIGHT;
+		for (let r = 0; r < SCORE_ROWS.length; r++) {
+			const label = new Text({
+				text: SCORE_ROWS[r].label,
+				style: { fill: 0xaaaaaa, fontSize: 14 },
+			});
+			label.y = r * ROW_HEIGHT;
+			labelColumn.addChild(label);
+		}
+		const totalLabel = new Text({
+			text: "Total",
+			style: { fill: 0xffd700, fontSize: 16, fontWeight: "bold" },
+		});
+		totalLabel.y = SCORE_ROWS.length * ROW_HEIGHT + 10;
+		labelColumn.addChild(totalLabel);
+		this.grid.addChild(labelColumn);
+
+		const labelColumnWidth = 130;
+
+		for (let c = 0; c < hunters.length; c++) {
+			const hunter = hunters[c];
+			const columnX = labelColumnWidth + c * COLUMN_WIDTH;
+
+			const icon = new Graphics();
+			icon.circle(0, 0, ICON_RADIUS);
+			icon.fill(hunter.accentColor);
+			icon.stroke({ width: 2, color: 0xffffff, alpha: 0.7 });
+			icon.x = columnX + COLUMN_WIDTH / 2;
+			icon.y = ICON_RADIUS;
+			this.grid.addChild(icon);
+
+			const name = new Text({
+				text: hunter.label,
+				style: { fill: 0xffffff, fontSize: 13, fontWeight: "bold" },
+			});
+			name.anchor.set(0.5, 0);
+			name.x = columnX + COLUMN_WIDTH / 2;
+			name.y = ICON_RADIUS * 2 + 8;
+			this.grid.addChild(name);
+
+			let total = 0;
+			for (let r = 0; r < SCORE_ROWS.length; r++) {
+				const value = SCORE_ROWS[r].getValue(hunter);
+				total += value;
+				const valueText = new Text({
+					text: `${value}`,
+					style: { fill: 0xffffff, fontSize: 14 },
+				});
+				valueText.anchor.set(0.5, 0);
+				valueText.x = columnX + COLUMN_WIDTH / 2;
+				valueText.y = HEADER_HEIGHT + r * ROW_HEIGHT;
+				this.grid.addChild(valueText);
+			}
+
+			const totalText = new Text({
+				text: `${total}`,
+				style: { fill: 0xffd700, fontSize: 18, fontWeight: "bold" },
+			});
+			totalText.anchor.set(0.5, 0);
+			totalText.x = columnX + COLUMN_WIDTH / 2;
+			totalText.y = HEADER_HEIGHT + SCORE_ROWS.length * ROW_HEIGHT + 8;
+			this.grid.addChild(totalText);
+		}
+	}
+
 	/** Clear the consumed result so a stale one can't leak into the next match. */
 	private onReturnToLobby(): void {
 		this.game.session.matchResult = null;
@@ -82,12 +166,12 @@ export class MatchResultScene implements Scene {
 
 	private layout(width: number, height: number): void {
 		this.headline.x = width / 2 - this.headline.width / 2;
-		this.headline.y = height * 0.28;
+		this.headline.y = height * 0.08;
 
-		this.statsText.x = width / 2 - this.statsText.width / 2;
-		this.statsText.y = height * 0.42;
+		this.grid.x = width / 2 - this.grid.width / 2;
+		this.grid.y = height * 0.2;
 
 		this.returnBtn.view.x = width / 2 - 110;
-		this.returnBtn.view.y = height * 0.62;
+		this.returnBtn.view.y = height * 0.88;
 	}
 }

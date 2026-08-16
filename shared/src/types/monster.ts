@@ -43,9 +43,19 @@ export function monsterAsMercenaryState(monster: MonsterState): MercenaryState {
 		coord: monster.coord,
 		stats: monster.stats,
 		characterClass: "brawler",
+		name: "Monster",
 		currentHp: monster.currentHp,
 		hpCeiling: monster.stats.maxHp,
 		items: new Array(6).fill(null),
 		hand: [],
+		// For TS structure monsters need a match score, however they will never use this, result of extending from merc state
+		matchScore: {
+			damageDealt: 0,
+			itemsScore: 0,
+			cardsRemaining: 0,
+			environmentalScore: 0,
+			tacticalScore: 0,
+			objectiveTurnsHeld: 0,
+		},
 	};
 }

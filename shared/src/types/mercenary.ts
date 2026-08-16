@@ -1,11 +1,17 @@
 import type { GridCoord } from "../world/grid";
-import type {
-	EntityCore,
-	HasHand,
-	HasItems,
-	HasCharacterClass,
-	HasName,
+import {
+	type EntityCore,
+	type HasHand,
+	type HasItems,
+	type HasCharacterClass,
+	type HasName,
+	type HasMatchScore,
+	hasStatus,
+	HasStatus,
 } from "./entity";
+
+/** Starting card use budget for efficeincy score */
+const STARTING_HAND_BUDGET = 30;
 
 export type CharacterClass =
 	| "tank"
@@ -32,7 +38,9 @@ export type MercenaryState = EntityCore &
 	HasHand &
 	HasItems &
 	HasCharacterClass &
-	HasName;
+	HasName &
+	HasMatchScore &
+	HasStatus;
 
 export function createMercenary(
 	id: string,
@@ -51,5 +59,14 @@ export function createMercenary(
 		hpCeiling: stats.maxHp,
 		items: new Array(6).fill(null),
 		hand: [],
+		matchScore: {
+			damageDealt: 0,
+			itemsScore: 0,
+			cardsRemaining: STARTING_HAND_BUDGET,
+			environmentalScore: 0,
+			tacticalScore: 0,
+			objectiveTurnsHeld: 0,
+		},
+		stunnedTurnsRemaining: 0,
 	};
 }

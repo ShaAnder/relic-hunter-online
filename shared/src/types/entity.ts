@@ -37,6 +37,25 @@ export interface HasName {
 	name: string;
 }
 
+export interface HasStatus {
+	stunnedTurnsRemaining: number;
+}
+
+export interface MatchScore {
+	damageDealt: number;
+	itemsScore: number;
+	/** Reverse metric — starts high, decreases per card used. */
+	cardsRemaining: number;
+	environmentalScore: number;
+	tacticalScore: number;
+	/** Capped elsewhere at the point */
+	objectiveTurnsHeld: number;
+}
+
+export interface HasMatchScore {
+	matchScore: MatchScore;
+}
+
 export function hasName(entity: EntityCore): entity is EntityCore & HasName {
 	return "name" in entity;
 }
@@ -47,6 +66,12 @@ export function hasHand(entity: EntityCore): entity is EntityCore & HasHand {
 
 export function hasItems(entity: EntityCore): entity is EntityCore & HasItems {
 	return "items" in entity;
+}
+
+export function hasStatus(
+	entity: EntityCore,
+): entity is EntityCore & HasStatus {
+	return "stunnedTurnsRemaining" in entity;
 }
 
 export function hasCharacterClass(

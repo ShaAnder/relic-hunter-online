@@ -156,13 +156,7 @@ function buildYellowCards(): CardData[] {
 }
 
 /**
- * 15 Green cards — all Stun, the only real Green card as of Phase 1. Every
- * Green card is inherently "special" (a trap effect, not a numeric value),
- * so the 5-per-special cap that applies to Red/Yellow doesn't apply here —
- * there's nothing to differentiate yet. Written via pushCopies like the
- * others so adding trap types later (Blind, Shock, Paralyze, Heavy) just
- * means splitting this one pushCopies call into several, nothing else
- * about deck-building changes.
+ * 15 Green cards — all Stun, the only real Green card as of Phase 1.
  */
 function buildGreenCards(): CardData[] {
 	const cards: CardData[] = [];
@@ -180,13 +174,7 @@ function buildGreenCards(): CardData[] {
  * Build the ONE shared deck for the match — 75 cards total (20 Blue / 25
  * Red / 15 Yellow / 15 Green), shuffled once. This is not per-mercenary:
  * every hunter on the map draws from this same deck, turn by turn, until
- * it's exhausted (see `04-card-system-design.md` §Hand Economy for what
- * happens then — no reshuffle, a boss spawns).
- *
- * The composition is a fixed target regardless of how many hunters are on
- * the map — it does not scale with participant count. If that needs to
- * change once real multi-hunter matches exist, this is the one function
- * to revisit.
+ * it's exhausted
  */
 export function buildSharedDeck(): CardData[] {
 	const deck = [

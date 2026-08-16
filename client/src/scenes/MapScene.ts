@@ -34,6 +34,11 @@ import {
 	computeMovementRangeWeighted,
 	computePathThreatFraction,
 	ARCHETYPE_ZOC_REFUSAL_THRESHOLD,
+	Trap,
+	TrapKind,
+	HazardRollResult,
+	canSeeTrap,
+	resolveHazardRoll,
 } from "@relic-hunter/shared";
 import {
 	type GridCoord,
@@ -71,7 +76,7 @@ import {
 } from "@relic-hunter/shared";
 import { Hand } from "@/ui/Hand";
 import { CharacterPanel } from "@/ui/CharacterPanel";
-import { MAP_SIZE_DIMENSIONS } from "@/core/game/GameSession";
+import { HunterScoreEntry, MAP_SIZE_DIMENSIONS } from "@/core/game/GameSession";
 import { MatchResultScene } from "./MatchResultScene";
 import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
 import { BagButton } from "@/ui/buttons/BagButton";
@@ -183,6 +188,11 @@ export class MapScene implements Scene {
 	// Cards
 	private hand: Hand;
 	private playZone: PlayZone;
+
+	// traps
+	private traps: Trap[] = [];
+
+	private trapMarkerContainer = new Container();
 
 	// Map config — dimensions and seed come from GameSession (set by
 	// LoadingScene) rather than being hardcoded, so mission map size
@@ -341,6 +351,9 @@ export class MapScene implements Scene {
 		this.moveController = this.createMoveController();
 		this.boardContainer.addChild(this.moveController.view);
 		this.boardContainer.addChild(this.attackRangeContainer);
+
+		// traps
+		this.boardContainer.addChild(this.trapMarkerContainer);
 
 		this.buttonBar = new RadialActionWheel();
 		this.view.addChild(this.buttonBar.view);
@@ -503,6 +516,17 @@ export class MapScene implements Scene {
 			return;
 		}
 
+		if (this.localUnit.state.stunnedTurnsRemaining > 0) {
+			this.localUnit.state.stunnedTurnsRemaining -= 1;
+			this.localUnit.turnManager.endTurn();
+			this.showFeedback("🪤 You're stunned and can't act this turn");
+			this.turnsTaken++;
+			this.trySpawnMonster();
+			this.syncUI();
+			void this.processEnemyTurns();
+			return;
+		}
+
 		this.setPlayerControlsVisible(true);
 		this.camera.centerOn(
 			{
@@ -588,23 +612,37 @@ export class MapScene implements Scene {
 		ignoresZoc: boolean,
 	): Promise<void> {
 		const local = this.localUnit;
-		local.state.coord = target;
-		local.turnManager.commitMove(path.length);
+
+		const { truncatedPath, hazardHit } = this.resolveTrapsAlongPath(
+			local,
+			path,
+		);
+
+		local.state.coord =
+			truncatedPath.length > 0
+				? truncatedPath[truncatedPath.length - 1]
+				: local.state.coord;
+		local.turnManager.commitMove(truncatedPath.length);
 		this.buttonBar.setMoveActive(false);
 		this.moveController.exit();
 
 		if (ignoresZoc) {
-			await local.mercenary.moveAlongPath(path);
+			await local.mercenary.moveAlongPath(truncatedPath);
 		} else {
 			await this.moveEntityWithZoneStrikes(
 				{ state: local.state, token: local.mercenary },
-				path,
+				truncatedPath,
 				this.getUnitLabel(local),
 			);
 		}
 
+		if (hazardHit) {
+			this.applyHazardEffect(local, hazardHit.kind, hazardHit.result);
+		}
+		this.renderTrapMarkers();
+
 		this.tryOpenChestAt(local.state, target);
-		this.checkWinCondition();
+		await this.checkWinCondition(local);
 
 		this.syncUI();
 	}
@@ -854,8 +892,8 @@ export class MapScene implements Scene {
 	}
 
 	private async processOneEnemyTurn(unit: PilotedMercenary): Promise<void> {
-		if (!unit.archetype || !unit.memory) return; // AI units always have both — guard for the type
-
+		// AI units always have both — guard for the type
+		if (!unit.archetype || !unit.memory) return;
 		this.activeAi = unit;
 		this.camera.centerOn(
 			{ x: unit.mercenary.view.x, y: unit.mercenary.view.y },
@@ -890,9 +928,11 @@ export class MapScene implements Scene {
 
 		if (!wouldDeclineOnArrival) {
 			this.showFeedback(`🤔 ${this.getUnitLabel(unit)} avoids a fight`);
+			const visibleTraps = this.trapsVisibleTo(unit);
 			const blocked = new Set([
 				...others.map((o) => coordKey(o.coord)),
 				...this.livingMonsterCoords().map(coordKey),
+				...visibleTraps.map((t) => coordKey(t.coord)),
 			]);
 
 			// Uncapped range purely to read the real, wall-aware path distance to
@@ -955,21 +995,35 @@ export class MapScene implements Scene {
 						const idx = unit.state.hand.findIndex((c) => c.id === moveCard.id);
 						if (idx !== -1) unit.state.hand.splice(idx, 1);
 					}
-					unit.state.coord = reachable;
-					unit.turnManager.commitMove(path.length);
+
+					const { truncatedPath, hazardHit } = this.resolveTrapsAlongPath(
+						unit,
+						path,
+					);
+
+					unit.state.coord =
+						truncatedPath.length > 0
+							? truncatedPath[truncatedPath.length - 1]
+							: unit.state.coord;
+					unit.turnManager.commitMove(truncatedPath.length);
 					this.showFeedback(
 						`🏃 ${this.getUnitLabel(unit)} moves toward its target`,
 					);
 					await this.moveEntityWithZoneStrikes(
 						{ state: unit.state, token: unit.mercenary },
-						path,
+						truncatedPath,
 						this.getUnitLabel(unit),
 					);
+					if (hazardHit) {
+						this.applyHazardEffect(unit, hazardHit.kind, hazardHit.result);
+					}
+					this.renderTrapMarkers();
 				}
 			}
 		}
 
 		this.tryOpenChestAt(unit.state, unit.state.coord);
+		await this.checkWinCondition(unit);
 
 		const selfAfter = this.toCombatant(unit.state);
 		const othersAfter = this.buildOtherCombatants(unit.state.id);
@@ -1394,15 +1448,29 @@ export class MapScene implements Scene {
 		}
 	}
 
+	private buildHunterVisualInfo(u: PilotedMercenary): { accentColor: number } {
+		return {
+			accentColor:
+				u.pilot === "local" ? 0x4a9eff : ARCHETYPE_COLORS[u.archetype!],
+		};
+	}
+
 	private buildHunterSummaryEntries(): HunterSummaryEntry[] {
 		return this.units.map((u) => ({
 			id: u.state.id,
 			label: this.getUnitLabel(u),
-			accentColor:
-				u.pilot === "local" ? 0x4a9eff : ARCHETYPE_COLORS[u.archetype!],
+			...this.buildHunterVisualInfo(u),
 			currentHp: u.state.currentHp,
 			maxHp: u.state.stats.maxHp,
 			items: u.state.items,
+		}));
+	}
+
+	private buildHunterScoreEntries(): HunterScoreEntry[] {
+		return this.units.map((u) => ({
+			label: u.pilot === "local" ? "You" : u.state.name,
+			...this.buildHunterVisualInfo(u),
+			matchScore: u.state.matchScore,
 		}));
 	}
 
@@ -1474,21 +1542,32 @@ export class MapScene implements Scene {
 	}
 
 	/** Win check: standing on Exit with target held, via normal move only. PASS 4 TODO: local-only, revisit for multiplayer. */
-	private checkWinCondition(): void {
+	private async checkWinCondition(unit: PilotedMercenary): Promise<void> {
 		const exitTile = findExitTile(this.grid);
 		if (!exitTile) return;
-		const local = this.localUnit.state;
-		if (local.coord.x !== exitTile.x || local.coord.y !== exitTile.y) return;
-		if (!this.isCarryingTarget()) return;
+		if (unit.state.coord.x !== exitTile.x || unit.state.coord.y !== exitTile.y)
+			return;
 
-		this.triggerWin();
+		if (this.isCarryingTarget(unit)) {
+			if (unit.pilot === "local") {
+				this.triggerWin();
+			} else {
+				this.triggerLoss(unit);
+			}
+			return;
+		}
+
+		this.showFeedback(
+			`🌀 ${this.getUnitLabel(unit)} reached the exit without the relic and was cast away`,
+		);
+		await this.teleportEntity(unit.state, unit.mercenary);
 	}
 
-	/** Whether the local unit currently holds this match's target item. */
-	private isCarryingTarget(): boolean {
+	/** Whether the given unit currently holds this match's target item. */
+	private isCarryingTarget(unit: PilotedMercenary): boolean {
 		const target = this.game.session.chestPlan?.targetItem;
 		if (!target) return false;
-		return this.localUnit.state.items.some((item) => item?.id === target.id);
+		return unit.state.items.some((item) => item?.id === target.id);
 	}
 
 	/** Record the match result and transition to MatchResultScene. */
@@ -1498,6 +1577,19 @@ export class MapScene implements Scene {
 			turnsTaken: this.turnsTaken,
 			itemsExtracted: this.localUnit.state.items.filter((i) => i !== null)
 				.length,
+			hunterScores: this.buildHunterScoreEntries(),
+		};
+		void this.game.sceneManager.changeScene(new MatchResultScene(this.game));
+	}
+
+	/** An AI hunter reached the exit with the target first — a real loss, not a variant of winning. */
+	private triggerLoss(winner: PilotedMercenary): void {
+		this.showFeedback(`${this.getUnitLabel(winner)} escaped with the relic!`);
+		this.game.session.matchResult = {
+			won: false,
+			turnsTaken: this.turnsTaken,
+			itemsExtracted: 0,
+			hunterScores: this.buildHunterScoreEntries(),
 		};
 		void this.game.sceneManager.changeScene(new MatchResultScene(this.game));
 	}
@@ -1997,7 +2089,120 @@ export class MapScene implements Scene {
 				`🛡️ Defense ${card.value} active this turn (effect coming soon)`,
 			);
 		} else if (card.actionType === "stun") {
-			this.showFeedback("🪤 Trap card selected — placement coming soon");
+			// TEMPORARY: routed through the Move flow because there's no
+			// dedicated Trap action yet — every class, Trapper included
+			// once it exists, shares this path for now.
+			this.placeTrap(card);
+			if (!local.turnManager.beginMovement("none", 0)) return;
+			this.moveController.requestEnter();
+			this.buttonBar.setMoveActive(this.moveController.active);
+			return;
+		}
+	}
+
+	private placeTrapAtCurrentPosition(_card: CardData): void {
+		const coord = this.localUnit.state.coord;
+		this.traps.push({
+			id: `trap_${Date.now()}_${this.traps.length}`,
+			coord,
+			ownerId: this.localUnit.state.id,
+			kind: "stun",
+		});
+		this.showFeedback("🪤 Trap left behind");
+		this.renderTrapMarkers();
+	}
+
+	private visibleTrapsForLocalPlayer(): Trap[] {
+		const local = this.localUnit.state;
+		const isHunterClass = local.characterClass === "hunter";
+		return this.traps.filter((t) =>
+			canSeeTrap(t, local.id, local.coord, isHunterClass),
+		);
+	}
+
+	private trapsVisibleTo(unit: PilotedMercenary): Trap[] {
+		const isHunterClass = unit.state.characterClass === "hunter";
+		return this.traps.filter((t) =>
+			canSeeTrap(t, unit.state.id, unit.state.coord, isHunterClass),
+		);
+	}
+
+	private renderTrapMarkers(): void {
+		this.trapMarkerContainer.removeChildren();
+		for (const trap of this.visibleTrapsForLocalPlayer()) {
+			const pos = gridToScreen(trap.coord);
+			const g = new Graphics();
+			g.poly([
+				0,
+				-TILE_HEIGHT / 2,
+				TILE_WIDTH / 2,
+				0,
+				0,
+				TILE_HEIGHT / 2,
+				-TILE_WIDTH / 2,
+				0,
+			]);
+			g.fill({ color: 0x2ecc71, alpha: 0.4 });
+			g.stroke({ width: 2, color: 0x2ecc71, alpha: 0.8 });
+			g.x = pos.x;
+			g.y = pos.y;
+			this.trapMarkerContainer.addChild(g);
+		}
+	}
+
+	private resolveTrapsAlongPath(
+		unit: PilotedMercenary,
+		path: GridCoord[],
+	): {
+		truncatedPath: GridCoord[];
+		hazardHit: { kind: TrapKind; result: HazardRollResult } | null;
+	} {
+		for (let i = 0; i < path.length; i++) {
+			const step = path[i];
+			const index = this.traps.findIndex(
+				(t) => t.coord.x === step.x && t.coord.y === step.y,
+			);
+			if (index === -1) continue;
+			const trap = this.traps[index];
+
+			this.traps.splice(index, 1);
+
+			const result = resolveHazardRoll(unit.state.stats);
+			if (!result.landed) {
+				this.showFeedback(
+					`🪤 ${this.getUnitLabel(unit)} resisted a hazard (${result.hazardRoll} vs ${result.victimRoll})`,
+				);
+				continue;
+			}
+
+			return {
+				truncatedPath: path.slice(0, i + 1),
+				hazardHit: { kind: trap.kind, result },
+			};
+		}
+		return { truncatedPath: path, hazardHit: null };
+	}
+
+	private placeTrap(card: CardData): void {
+		switch (this.localUnit.state.characterClass) {
+			// case trapper goes here later
+
+			default:
+				this.placeTrapAtCurrentPosition(card);
+		}
+	}
+
+	private applyHazardEffect(
+		unit: PilotedMercenary,
+		kind: TrapKind,
+		result: HazardRollResult,
+	): void {
+		switch (kind) {
+			case "stun":
+				unit.state.stunnedTurnsRemaining += 1;
+				this.showFeedback(
+					`🪤 ${this.getUnitLabel(unit)} was stunned! (${result.hazardRoll} vs ${result.victimRoll})`,
+				);
 		}
 	}
 
@@ -2013,9 +2218,9 @@ export class MapScene implements Scene {
 			this.showFeedback("🌀 Exit card played — heading to the exit...");
 			await this.flyMercenaryTo(exitTile);
 
-			if (this.isCarryingTarget()) {
+			if (this.isCarryingTarget(local)) {
 				this.exitCardInProgress = false;
-				this.triggerWin();
+				await this.checkWinCondition(local);
 				return;
 			}
 		}

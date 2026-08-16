@@ -4,6 +4,7 @@ import type {
 	ItemData,
 	GridCoord,
 	CardData,
+	MatchScore,
 } from "@relic-hunter/shared";
 
 /**
@@ -29,10 +30,17 @@ export interface TurnOrderEntry {
 	roll: number;
 }
 
+export interface HunterScoreEntry {
+	label: string;
+	accentColor: number;
+	matchScore: MatchScore;
+}
+
 export interface MatchResult {
 	won: boolean;
 	turnsTaken: number;
 	itemsExtracted: number;
+	hunterScores: HunterScoreEntry[];
 }
 
 export interface MatchLogEntry {

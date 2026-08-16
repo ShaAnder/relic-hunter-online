@@ -856,6 +856,8 @@ export class BattleOverlay implements Overlay {
 
 		this.attackerState.currentHp -= result.a.damageTaken;
 		this.defenderState.currentHp -= result.b.damageTaken;
+		this.attackerState.matchScore.damageDealt += result.b.damageTaken;
+		this.defenderState.matchScore.damageDealt += result.a.damageTaken;
 		this.syncHpDisplay();
 
 		this.roundText.text = this.describeOutcome(
