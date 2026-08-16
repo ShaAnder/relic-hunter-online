@@ -49,3 +49,37 @@ A rare item that expands hand size or otherwise alters the shared deck's composi
 Switching combat from its current simultaneous-resolution model to a sequential one — attacker resolves before defender — is fully designed but deliberately unbuilt. The consequence is understood and real: surrender still always wins outright regardless of order, and most action pairings don't actually change since they were never order-dependent in the first place, but a mutual double-attack changes meaningfully, since the attacker would always land their hit first, and a defender who'd be killed by that hit would never get the chance to land their own — mutual destruction becomes impossible where it's currently possible. That's a genuine balance shift, not just a mechanical rearrangement, and it needs its own dedicated pass where that consequence can be confirmed as actually wanted, rather than being folded into an unrelated change.
 
 An icon pass on cards, inventory slots, and the row of header buttons is still outstanding. The radial action wheel is the one place this is actually finished — all six of its nodes use real sourced icons through the texture-loading pipeline built this session. Everything else still uses hand-drawn placeholder shapes.
+
+## First real external playtest feedback — two sessions, bugs and balance both
+
+Two separate playtesters ran matches this round, one focused on finding breakage, one focused more on balance and pacing. Splitting what actually came out of it below by category, since a raw chat log isn't reusable as a task list.
+
+### Confirmed bugs
+
+**A genuinely severe camera bug — the camera can catapult itself off-screen and get stuck, uncontrollably, with the refocus button unable to fix it.** The reported trigger was right-clicking while actively panning the map. Once it started, the camera flew toward the bottom-left corner and kept moving — pressing the refocus button briefly snapped it back, then it immediately resumed flying away on its own. Holding a WASD key paused the runaway motion, but releasing the key let it resume immediately, which points at some kind of stuck or phantom input state feeding a continuous pan force, not a one-time miscalculation. It eventually cleared on its own after the player "button mashed while spamming right click," and separately, stepping on the exit tile (triggering the new teleport-away consequence) also incidentally cleared it. Video and screenshots of this exist and should be reviewed directly rather than working from the text description alone — this is a serious, high-priority bug, not cosmetic.
+
+**Input appears to get fully stuck in the same play session** — the same player later reported being completely unable to attack or take any action at all, describing it as "stuck." Worth investigating whether this is the *same* underlying stuck-input state as the camera bug above, surfacing a second way, or a genuinely separate lockup.
+
+**Viewing a defeated enemy's inventory can softlock the screen.** After winning a fight, the player tried to inspect the defeated hunter's inventory to check for the relic, and the screen wouldn't leave that view. Worth checking specifically whether this is the loot-sequence panel from the just-finished battle failing to close correctly, versus the separate hunter-inspection panel being used against a unit in a state it wasn't built to handle.
+
+**Moving the game window to a different monitor breaks the UI layout** — controls visibly shift position after the window moves to a different screen. Likely a resize/DPI handling gap rather than anything content-related.
+
+**Click-targeting appears biased toward the left side of a tile.** A player reported needing to aim noticeably right-of-center on a tile for a click to register correctly, describing it as consistent and directional rather than random misses. Their own guess was the isometric projection angle skewing the hit area — worth checking `screenToGrid`/`gridToScreen` for a systematic, not just occasional, offset.
+
+### Real balance findings, not bugs
+
+**Chest and relic placement can produce trivially easy wins.** One player reported a seed where they spawned ten tiles from the exit with the relic in the very first, closest chest — an effectively free win with no real engagement. Relic/chest placement currently has no minimum distance or spread requirement relative to spawn or exit; this is a real gap, not a rare fluke, since it happened across multiple matches for the same player.
+
+**High-mobility ranged classes may be significantly overtuned against the current AI.** A player specifically described Hunter as able to engage from max range, then use Disengage to kite indefinitely, with an Aggressive-archetype AI unable to ever close the distance. This is worth weighing directly against tonight's `isRangedInitiated` fix — that change makes a defender caught at range *less* able to fight back, which could make an already-strong kiting class stronger still if AI pursuit doesn't improve alongside it.
+
+**AI doesn't appear to specifically re-prioritize the relic carrier once the relic is actually found.** A player noted that after grabbing the objective, AI hunters didn't seem to shift focus onto them at all, and since AI mobility is currently low relative to a fast build, this made it trivial to just outrun pursuit and win. This lines up directly with "AI priority" already being an informally planned next step — worth formalizing here so it doesn't stay only a chat mention.
+
+**Pathfinding always resolves to the same single shortest route, even when multiple equidistant paths exist**, consistently favoring one side. Flagged by the player as more a missing feature than a bug — worth deciding whether the AI-facing weighted pathfinding system (or a lighter, player-facing version of the same idea) should ever offer a genuine choice between equally-good routes, rather than always silently picking one.
+
+### Suggestions raised directly by playtesters
+
+**A "fake exit" as an alternative or companion to the hidden-exit design.** Rather than (or alongside) hiding the real exit entirely until the relic is found, a decoy exit tile could exist for non-carriers — reaching it without the relic triggers a stall consequence ("the walls crumble," a skill or damage check to actually get through, tile resets on failure) rather than doing nothing. Framed explicitly as a way to slow down a fast, non-confrontational build without an outright hard block.
+
+**Items should carry passive value even for a "loot goblin," non-confrontational playstyle** — not just exist to eventually satisfy the win condition. Raised as a general design direction rather than a specific item proposal.
+
+**A clearer UI signal for who currently holds the relic.** More than one point of confusion in the sango session traced back to not knowing whether "target found" meant *they* were holding it — worth a dedicated, always-visible indicator rather than relying on the feedback-toast message alone.

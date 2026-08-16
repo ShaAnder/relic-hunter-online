@@ -25,11 +25,6 @@ const DEFAULTS: Required<CameraOptions> = {
  *  - Free: player can pan/zoom freely. Default, and the only mode right now.
  *  - Locked: camera snaps to and follows a given world position every frame,
  *    ignoring pan input.
- *
- * panTo() is a separate, self-contained scripted pan — it runs on PixiJS's
- * own shared ticker rather than through update(), specifically so it keeps
- * working even during a scene transition that suppresses update() calls.
- * See panTo()'s own docblock for why that matters.
  */
 export class Camera {
 	private target: Container;
@@ -55,12 +50,16 @@ export class Camera {
 		// create canvas event for mouse wheel, we pass in passive: false, this lets us
 		// call preventDefault() so we zoom camera instead of srooling the page
 		canvas.addEventListener("wheel", this.handleWheel, { passive: false });
+		canvas.addEventListener("contextmenu", this.handleContextMenu);
+		window.addEventListener("blur", this.handleWindowBlur);
 	}
 
 	detach(canvas: HTMLCanvasElement): void {
 		window.removeEventListener("keydown", this.handleKeyDown);
 		window.removeEventListener("keyup", this.handleKeyUp);
 		canvas.removeEventListener("wheel", this.handleWheel);
+		canvas.removeEventListener("contextmenu", this.handleContextMenu);
+		window.removeEventListener("blur", this.handleWindowBlur);
 	}
 
 	lockTo(worldPosition: { x: number; y: number }): void {
@@ -88,25 +87,7 @@ export class Camera {
 	/**
 	 * Scripted cinematic pan from the camera's current center to a target
 	 * position, eased over durationMs.
-	 *
-	 * Deliberately self-driving via PixiJS's global Ticker.shared rather
-	 * than depending on this scene's own update() being called — SceneManager
-	 * blocks update() for whatever scene is currently inside an in-flight
-	 * onEnter() (see its own docblock: "Blocks per-frame updates during
-	 * transitions"). If this pan's progress depended on that update() call,
-	 * awaiting it from inside onEnter() would deadlock forever: the promise
-	 * can only resolve once enough ticks have advanced it, but those ticks
-	 * are exactly what's suppressed while onEnter() is pending. Driving it
-	 * from the shared ticker instead sidesteps that entirely — it advances
-	 * regardless of any scene's transition state.
-	 *
-	 * screenWidth/screenHeight are taken as explicit parameters rather than
-	 * reading cached instance fields, since those fields are normally kept
-	 * fresh by the owning scene's update() — which, for the same reason
-	 * above, may never have run yet when a scene calls panTo() from its own
-	 * onEnter(). Reading a stale (possibly still-zero) cached value would
-	 * silently produce garbage camera positions.
-	 *
+	 * *
 	 * Overrides free-pan and any active lock while running.
 	 */
 	panTo(
@@ -160,6 +141,25 @@ export class Camera {
 		}
 		this.applyPan(deltaTime);
 	}
+
+	/**
+	 * Blocks the browser's native right-click menu over the canvas —
+	 * that menu stealing focus is the actual root cause of the camera-catapult bug,
+	 * since a held key's keyup event never reaches this listener once
+	 * focus moves away from the canvas.
+	 */
+	private handleContextMenu = (event: MouseEvent): void => {
+		event.preventDefault();
+	};
+
+	/**
+	 * ANY loss of window focus (alt-tab, a browser dialog, anything else that steals it)
+	 * can strand a held key the exact same way. Clearing on blur means a
+	 * stuck key can never survive longer than one focus loss, regardless of what caused it.
+	 */
+	private handleWindowBlur = (): void => {
+		this.heldKeys.clear();
+	};
 
 	// apply camera pan speed
 	private applyPan(deltaTime: number): void {
