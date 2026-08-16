@@ -6,7 +6,6 @@ import {
 	type HasCharacterClass,
 	type HasName,
 	type HasMatchScore,
-	hasStatus,
 	HasStatus,
 } from "./entity";
 

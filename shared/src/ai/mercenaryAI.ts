@@ -4,7 +4,6 @@ import type { CardData } from "../cards/card";
 import type { ItemData } from "../items/item";
 import type { CombatAction, CombatChoice } from "../combat/combat";
 import type { GridCoord } from "../world/grid";
-import { isAdjacent } from "../world/grid";
 import type { AiMemory } from "./aiMemory";
 import type { EntityCore } from "../types/entity";
 
