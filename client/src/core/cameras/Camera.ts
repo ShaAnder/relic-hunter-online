@@ -9,6 +9,18 @@ export interface CameraOptions {
 	panSpeed?: number;
 }
 
+export interface WorldBounds {
+	minX: number;
+	maxX: number;
+	minY: number;
+	maxY: number;
+}
+
+export type WorldPositionClamper = (worldPos: { x: number; y: number }) => {
+	x: number;
+	y: number;
+};
+
 const DEFAULTS: Required<CameraOptions> = {
 	initialZoom: 1.75,
 	minZoom: 0.75,
@@ -38,10 +50,16 @@ export class Camera {
 	private screenWidth = 0;
 	private screenHeight = 0;
 
+	private worldClamp: WorldPositionClamper | null = null;
+
 	constructor(target: Container, options: CameraOptions = {}) {
 		this.target = target;
 		this.options = { ...DEFAULTS, ...options };
 		this.target.scale.set(this.options.initialZoom);
+	}
+
+	get isLocked(): boolean {
+		return this.lockedWorldPosition !== null;
 	}
 
 	attach(canvas: HTMLCanvasElement): void {
@@ -62,16 +80,22 @@ export class Camera {
 		window.removeEventListener("blur", this.handleWindowBlur);
 	}
 
+	/**
+	 * Constrains free panning through a caller-provided function
+	 * that maps a world position to an allowed one. Camera has zero
+	 * knowledge of what "allowed" means — grid shape, isometric or otherwise,
+	 * is entirely up to whoever provides this.
+	 */
+	setWorldClamp(fn: WorldPositionClamper | null): void {
+		this.worldClamp = fn;
+	}
+
 	lockTo(worldPosition: { x: number; y: number }): void {
 		this.lockedWorldPosition = worldPosition;
 	}
 
 	unlock(): void {
 		this.lockedWorldPosition = null;
-	}
-
-	get isLocked(): boolean {
-		return this.lockedWorldPosition !== null;
 	}
 
 	// Centering camera position (snap to next player)
@@ -143,10 +167,28 @@ export class Camera {
 	}
 
 	/**
-	 * Blocks the browser's native right-click menu over the canvas —
-	 * that menu stealing focus is the actual root cause of the camera-catapult bug,
-	 * since a held key's keyup event never reaches this listener once
-	 * focus moves away from the canvas.
+	 * Reads the current world-center, runs it through the provided
+	 * clamp function, and re-derives target.x/y from whatever comes
+	 * back — same math centerOn already uses, just inverted first.
+	 */
+	private applyWorldClamp(): void {
+		if (!this.worldClamp) return;
+		const scale = this.target.scale.x;
+		const centerX = this.screenWidth / 2;
+		const centerY = this.screenHeight / 2;
+
+		const currentWorld = {
+			x: (centerX - this.target.x) / scale,
+			y: (centerY - this.target.y) / scale,
+		};
+		const clamped = this.worldClamp(currentWorld);
+
+		this.target.x = centerX - clamped.x * scale;
+		this.target.y = centerY - clamped.y * scale;
+	}
+
+	/**
+	 * Blocks the browser's native right-click menu over the canvas
 	 */
 	private handleContextMenu = (event: MouseEvent): void => {
 		event.preventDefault();
@@ -171,6 +213,8 @@ export class Camera {
 		if (this.heldKeys.has("s")) this.target.y -= distance;
 		if (this.heldKeys.has("a")) this.target.x += distance;
 		if (this.heldKeys.has("d")) this.target.x -= distance;
+
+		this.applyWorldClamp();
 	}
 
 	// handle key events - down, up, scroll wheel
@@ -213,6 +257,8 @@ export class Camera {
 		this.target.scale.set(newScale);
 		this.target.x = centerX - worldX * newScale;
 		this.target.y = centerY - worldY * newScale;
+
+		this.applyWorldClamp();
 	};
 }
 

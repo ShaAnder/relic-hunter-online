@@ -285,6 +285,8 @@ export class MapScene implements Scene {
 			panSpeed: 700,
 		});
 
+		this.applyCameraBounds();
+
 		this.spawnLocalUnit();
 		this.spawnEnemyHunters();
 
@@ -491,6 +493,45 @@ export class MapScene implements Scene {
 			this.game.app.screen.width,
 			this.game.app.screen.height,
 		);
+	}
+
+	/** Builds the actual clamp function and hands it to the camera —
+	 * converts the camera's world position to tile coordinates,
+	 * clamps those (a true rectangle in tile space), then converts back.
+	 */
+	private applyCameraBounds(): void {
+		const PADDING_TILES = 3;
+
+		this.camera.setWorldClamp((worldPos) => {
+			// Same inverse transform screenToGrid uses, but deliberately
+			// without its rounding — rounding here is what caused the
+			// camera to freeze, since it snapped every frame's small pan
+			// motion back to the same tile center before it could ever
+			// accumulate. We only need the exact fractional tile position
+			// to check against bounds, never an actual discrete tile index.
+			const a = worldPos.x / (TILE_WIDTH / 2);
+			const b = worldPos.y / (TILE_HEIGHT / 2);
+			const tileX = (a + b) / 2;
+			const tileY = (b - a) / 2;
+
+			const clampedTileX = Math.min(
+				Math.max(tileX, -PADDING_TILES),
+				this.grid.width + PADDING_TILES,
+			);
+			const clampedTileY = Math.min(
+				Math.max(tileY, -PADDING_TILES),
+				this.grid.height + PADDING_TILES,
+			);
+
+			// In bounds — return the exact original, untouched. Avoids
+			// even a lossless round-trip through the transform when
+			// nothing actually needed clamping.
+			if (clampedTileX === tileX && clampedTileY === tileY) {
+				return worldPos;
+			}
+
+			return gridToScreen({ x: clampedTileX, y: clampedTileY });
+		});
 	}
 
 	private async beginPlayerTurn(): Promise<void> {
@@ -2340,6 +2381,8 @@ export class MapScene implements Scene {
 
 		this.mapSeed = Math.floor(Math.random() * 1_000_000);
 		this.grid = this.buildMap();
+
+		this.applyCameraBounds();
 
 		this.mercenaryContainer.removeChildren();
 		this.units = [];
