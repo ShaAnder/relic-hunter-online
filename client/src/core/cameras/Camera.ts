@@ -68,7 +68,9 @@ export class Camera {
 		// create canvas event for mouse wheel, we pass in passive: false, this lets us
 		// call preventDefault() so we zoom camera instead of srooling the page
 		canvas.addEventListener("wheel", this.handleWheel, { passive: false });
-		canvas.addEventListener("contextmenu", this.handleContextMenu);
+		// window, not canvas — a right-click anywhere on the page still bubbles
+		// up to window, so this has to live here to actually catch it
+		window.addEventListener("contextmenu", this.handleContextMenu);
 		window.addEventListener("blur", this.handleWindowBlur);
 	}
 
@@ -76,7 +78,7 @@ export class Camera {
 		window.removeEventListener("keydown", this.handleKeyDown);
 		window.removeEventListener("keyup", this.handleKeyUp);
 		canvas.removeEventListener("wheel", this.handleWheel);
-		canvas.removeEventListener("contextmenu", this.handleContextMenu);
+		window.removeEventListener("contextmenu", this.handleContextMenu);
 		window.removeEventListener("blur", this.handleWindowBlur);
 	}
 
