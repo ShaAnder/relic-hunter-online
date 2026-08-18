@@ -10,7 +10,7 @@ export function manhattanDistance(a: GridCoord, b: GridCoord): number {
 }
 
 /** Preferred minimum and fallback gaps */
-export const CHEST_MIN_DIST = 5;
+export const CHEST_MIN_DIST = 7;
 export const FALLBACK_DIST = 3;
 
 /**

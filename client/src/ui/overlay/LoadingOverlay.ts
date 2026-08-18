@@ -14,9 +14,9 @@ import {
 	type GridCoord,
 	generateDungeon,
 	findFirstWalkableTile,
-	findExitTile,
 	planChests,
 	coordKey,
+	pickSpreadWalkableTile,
 } from "@relic-hunter/shared";
 import { Chest } from "@/entities/Chest";
 import { MapScene } from "@/scenes/MapScene";
@@ -166,11 +166,9 @@ export class LoadingOverlay implements Overlay {
 		const plan = planChests();
 		this.game.session.chestPlan = plan;
 
-		const exitTile = findExitTile(this.grid);
+		// Exit is not placed at generation — only reserve the player spawn.
 		const used = new Set<string>();
-		if (exitTile) used.add(coordKey(exitTile));
 
-		// Spawn first so chests avoid it
 		const spawn =
 			findFirstWalkableTile(this.grid) ?? ({ x: 0, y: 0 } as GridCoord);
 		this.spawnCoord = spawn;
@@ -179,7 +177,7 @@ export class LoadingOverlay implements Overlay {
 
 		this.placements = [];
 		for (const chestPlan of plan.chests) {
-			const coord = this.pickUnusedWalkableTile(used);
+			const coord = pickSpreadWalkableTile(this.grid, used);
 			if (!coord) break;
 			used.add(coordKey(coord));
 			this.placements.push({ plan: chestPlan, coord });
@@ -195,20 +193,6 @@ export class LoadingOverlay implements Overlay {
 		];
 
 		this.game.session.chestPlacements = this.placements;
-	}
-
-	private pickUnusedWalkableTile(used: Set<string>): GridCoord | null {
-		const candidates: GridCoord[] = [];
-		for (let x = 0; x < this.grid.width; x++) {
-			for (let y = 0; y < this.grid.height; y++) {
-				const coord = { x, y };
-				if (!this.grid.isWalkable(coord)) continue;
-				if (used.has(coordKey(coord))) continue;
-				candidates.push(coord);
-			}
-		}
-		if (candidates.length === 0) return null;
-		return candidates[Math.floor(Math.random() * candidates.length)];
 	}
 
 	private drawChestEntities(): void {
