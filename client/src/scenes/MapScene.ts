@@ -11,69 +11,14 @@ import {
 import { Mercenary } from "@/entities/Mercenary";
 import { Chest } from "@/entities/Chest";
 
+import * as RH from "@relic-hunter/shared";
+
 import { DeckTracker } from "@/ui/DeckTracker";
 import { InventoryPanel } from "@/ui/InventoryPanel";
 import { PauseOverlay } from "@/ui/overlay/PauseOverlay";
 import { BattleOverlay, type BattleResult } from "@/ui/overlay/BattleOverlay";
 import { MoveController } from "@/systems/MoveController";
 import { TurnManager } from "@/systems/TurnManager";
-import {
-	type ChestInfo,
-	type AiArchetype,
-	type AiCombatant,
-	decideMovementTarget,
-	decideMovementCard,
-	pickEngagementTarget,
-	decideEngagement,
-	decideFallbackAction,
-	pickRetreatTile,
-	isAdjacent,
-	ARCHETYPE_COLORS,
-	hunterLabel,
-	ThreatOwner,
-	computeMovementRangeWeighted,
-	computePathThreatFraction,
-	ARCHETYPE_ZOC_REFUSAL_THRESHOLD,
-	Trap,
-	TrapKind,
-	HazardRollResult,
-	canSeeTrap,
-	resolveHazardRoll,
-} from "@relic-hunter/shared";
-import {
-	type GridCoord,
-	type ItemData,
-	type ChestPlan,
-	type CardData,
-	type MercenaryState,
-	type MonsterTier,
-	type MonsterTargetCandidate,
-	type EntityCore,
-	Grid,
-	TileType,
-	generateDungeon,
-	findFirstWalkableTile,
-	findExitTile,
-	coordKey,
-	createMercenary,
-	spawnFromCharacter,
-	buildSharedDeck,
-	computeMovementRange,
-	getPathTo,
-	findNearestReachableTile,
-	findZonesCrossed,
-	isMeleeClass,
-	resolveReactionStrike,
-	ZoneOwner,
-	computeAttackRange,
-	getRangeForClass,
-	createMonster,
-	monsterAsMercenaryState,
-	shouldSpawnMonster,
-	decideMonsterTarget,
-	ALL_CLASSES,
-	generateHunterName,
-} from "@relic-hunter/shared";
 import { Hand } from "@/ui/Hand";
 import { CharacterPanel } from "@/ui/CharacterPanel";
 import { HunterScoreEntry, MAP_SIZE_DIMENSIONS } from "@/core/game/GameSession";
@@ -83,11 +28,6 @@ import { BagButton } from "@/ui/buttons/BagButton";
 import { RadialActionWheel } from "@/ui/buttons/RadialActionWheel";
 import { RefocusButton } from "@/ui/buttons/RefocusButton";
 import { PlayZone } from "@/ui/PlayZone";
-import {
-	createAiMemory,
-	recordFlee,
-	clearFleeMemory,
-} from "@relic-hunter/shared";
 import type { PilotedMercenary, MovableToken } from "@/types/entities";
 import { LogsButton } from "@/ui/buttons/LogButton";
 import { LogPanel } from "@/ui/LogPanel";
@@ -103,8 +43,8 @@ import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
-	coord: GridCoord;
-	plan: ChestPlan;
+	coord: RH.GridCoord;
+	plan: RH.ChestPlan;
 	entity: Chest;
 }
 
@@ -119,7 +59,7 @@ export class MapScene implements Scene {
 	readonly view = new Container();
 
 	// Board layers
-	private grid: Grid;
+	private grid: RH.Grid;
 	private boardContainer = new Container();
 	private tilesContainer = new Container();
 	private chestContainer = new Container();
@@ -135,7 +75,7 @@ export class MapScene implements Scene {
 
 	// Monster Entities
 	private monsters: MonsterEntity[] = [];
-	private static readonly MONSTER_TIERS: MonsterTier[] = [
+	private static readonly MONSTER_TIERS: RH.MonsterTier[] = [
 		"light",
 		"medium",
 		"heavy",
@@ -146,7 +86,6 @@ export class MapScene implements Scene {
 	// End Turn / regenerate from interrupting mid-sequence, same role
 	// mercenary.isAnimating plays for normal moves.
 	private exitCardInProgress = false;
-	private pendingExitCoord: GridCoord | null = null;
 	private turnsTaken = 0;
 
 	// Targeting mode — active while choosing which enemy to attack
@@ -191,7 +130,7 @@ export class MapScene implements Scene {
 	private playZone: PlayZone;
 
 	// traps
-	private traps: Trap[] = [];
+	private traps: RH.Trap[] = [];
 
 	private trapMarkerContainer = new Container();
 
@@ -204,10 +143,10 @@ export class MapScene implements Scene {
 	private roomCount: number;
 	private mapSeed: number;
 
-	private readonly TILE_COLORS: Record<TileType, number> = {
-		[TileType.Floor]: 0x3a3a3a,
-		[TileType.Wall]: 0x1a1a1a,
-		[TileType.Exit]: 0xd4af37,
+	private readonly TILE_COLORS: Record<RH.TileType, number> = {
+		[RH.TileType.Floor]: 0x3a3a3a,
+		[RH.TileType.Wall]: 0x1a1a1a,
+		[RH.TileType.Exit]: 0xd4af37,
 	};
 
 	private fpsAccumulator = 0;
@@ -222,7 +161,7 @@ export class MapScene implements Scene {
 	private getUnitLabel(unit: PilotedMercenary): string {
 		return unit.pilot === "local"
 			? "You"
-			: hunterLabel(
+			: RH.hunterLabel(
 					unit.state.name,
 					unit.archetype!,
 					unit.state.characterClass,
@@ -332,8 +271,10 @@ export class MapScene implements Scene {
 		this.playZone = new PlayZone();
 		this.view.addChild(this.playZone.view);
 
-		this.hand = new Hand(this.game.app.stage, this.playZone, (card: CardData) =>
-			this.handleCardConfirmed(card),
+		this.hand = new Hand(
+			this.game.app.stage,
+			this.playZone,
+			(card: RH.CardData) => this.handleCardConfirmed(card),
 		);
 		this.view.addChild(this.hand.view);
 
@@ -644,8 +585,8 @@ export class MapScene implements Scene {
 
 	/** Commit a move: update position, deduct tiles, animate, check chest/win. */
 	private async onMoveCommitted(
-		target: GridCoord,
-		path: GridCoord[],
+		target: RH.GridCoord,
+		path: RH.GridCoord[],
 		ignoresZoc: boolean,
 	): Promise<void> {
 		const local = this.localUnit;
@@ -698,24 +639,24 @@ export class MapScene implements Scene {
 
 	// ---------- Zone of Control ----------
 
-	private buildZoneOwners(excludeId: string): ZoneOwner[] {
+	private buildZoneOwners(excludeId: string): RH.ZoneOwner[] {
 		return this.units
 			.filter(
 				(u) =>
 					u.state.id !== excludeId &&
 					u.state.currentHp > 0 &&
-					isMeleeClass(u.state.characterClass),
+					RH.isMeleeClass(u.state.characterClass),
 			)
 			.map((u) => ({ id: u.state.id, coord: u.state.coord, zocRadius: 2 }));
 	}
 
-	private buildThreatZoneOwners(excludeId: string): ThreatOwner[] {
+	private buildThreatZoneOwners(excludeId: string): RH.ThreatOwner[] {
 		return this.units
 			.filter(
 				(u) =>
 					u.state.id !== excludeId &&
 					u.state.currentHp > 0 &&
-					isMeleeClass(u.state.characterClass),
+					RH.isMeleeClass(u.state.characterClass),
 			)
 			.map((u) => ({
 				id: u.state.id,
@@ -728,18 +669,18 @@ export class MapScene implements Scene {
 	/**
 	 * Animates a path in segments, pausing exactly at each zone crossing to
 	 * apply the reaction strike and log it. Works for ANY entity with a
-	 * mutable EntityCore-shaped state and a MovableToken — hunters and
+	 * mutable RH.EntityCore-shaped state and a MovableToken — hunters and
 	 * monsters both satisfy this structurally, so this single function
 	 * replaces what used to be two near-identical copies (moveWithZoneStrikes
 	 * for hunters, moveMonsterWithZoneStrikes for monsters).
 	 */
 	private async moveEntityWithZoneStrikes(
-		entity: { state: EntityCore; token: MovableToken },
-		path: GridCoord[],
+		entity: { state: RH.EntityCore; token: MovableToken },
+		path: RH.GridCoord[],
 		label: string,
 	): Promise<void> {
 		const owners = this.buildZoneOwners(entity.state.id);
-		const crossings = findZonesCrossed(this.grid, path, owners);
+		const crossings = RH.findZonesCrossed(this.grid, path, owners);
 
 		let segmentStart = 0;
 		for (const crossing of crossings) {
@@ -753,7 +694,7 @@ export class MapScene implements Scene {
 				(u) => u.state.id === crossing.owner.id,
 			);
 			if (ownerUnit) {
-				const strike = resolveReactionStrike(
+				const strike = RH.resolveReactionStrike(
 					ownerUnit.state.stats,
 					entity.state.stats,
 				);
@@ -795,15 +736,14 @@ export class MapScene implements Scene {
 		const plan = this.game.session.chestPlan;
 		if (!plan) return;
 
-		const exitTile = findExitTile(this.grid);
+		// No exit at match start — only reserve the local spawn tile.
 		const used = new Set<string>();
-		if (exitTile) used.add(coordKey(exitTile));
-		used.add(coordKey(this.localUnit.state.coord));
+		used.add(RH.coordKey(this.localUnit.state.coord));
 
 		for (const chestPlan of plan.chests) {
-			const coord = this.pickUnusedWalkableTile(used);
+			const coord = RH.pickSpreadWalkableTile(this.grid, used);
 			if (!coord) break;
-			used.add(coordKey(coord));
+			used.add(RH.coordKey(coord));
 			const entity = new Chest(coord);
 			this.chestContainer.addChild(entity.view);
 			this.placedChests.push({ coord, plan: chestPlan, entity });
@@ -814,23 +754,8 @@ export class MapScene implements Scene {
 		return this.uiSurfaces.some((c) => pointInContainer(screenX, screenY, c));
 	}
 
-	/** A random walkable tile not already in `used`. Null if none remain. */
-	private pickUnusedWalkableTile(used: Set<string>): GridCoord | null {
-		const candidates: GridCoord[] = [];
-		for (let x = 0; x < this.grid.width; x++) {
-			for (let y = 0; y < this.grid.height; y++) {
-				const coord = { x, y };
-				if (!this.grid.isWalkable(coord)) continue;
-				if (used.has(coordKey(coord))) continue;
-				candidates.push(coord);
-			}
-		}
-		if (candidates.length === 0) return null;
-		return candidates[Math.floor(Math.random() * candidates.length)];
-	}
-
 	/** Open the chest at coord if unopened, for whichever unit reached it. Stays closed if inventory full. */
-	private tryOpenChestAt(state: MercenaryState, coord: GridCoord): void {
+	private tryOpenChestAt(state: RH.MercenaryState, coord: RH.GridCoord): void {
 		const placed = this.placedChests.find(
 			(c) => !c.entity.isOpen && c.coord.x === coord.x && c.coord.y === coord.y,
 		);
@@ -850,14 +775,12 @@ export class MapScene implements Scene {
 		const isLocal = state.id === this.localUnit.state.id;
 		if (placed.plan.isTarget) {
 			this.game.session.relicFound = true;
-			if (this.pendingExitCoord) {
-				this.grid.setTileType(this.pendingExitCoord, TileType.Exit);
-			}
+			this.spawnExitFarFrom(coord);
 			this.renderMap();
 			this.showFeedback(
 				isLocal
-					? `🎯 Found the target: ${placed.plan.item.name}! Head to the Exit.`
-					: "⚠️ An enemy hunter found the target item!",
+					? `🎯 Found the target: ${placed.plan.item.name}! The Exit has revealed itself.`
+					: "⚠️ An enemy hunter found the target item! The Exit has revealed itself.",
 			);
 		} else if (isLocal) {
 			this.showFeedback(`📦 Found: ${placed.plan.item.name}`);
@@ -866,8 +789,35 @@ export class MapScene implements Scene {
 		if (isLocal) this.showItemPopup(placed.plan.item, placed.plan.isTarget);
 	}
 
+	/**
+	 * Spawns the match Exit far from the relic-find location. No exit
+	 * exists on the grid until this runs. Occupied hunter/monster tiles
+	 * and the find tile itself are blocked.
+	 */
+	private spawnExitFarFrom(from: RH.GridCoord): void {
+		if (RH.findExitTile(this.grid)) return;
+
+		const blocked = new Set<string>();
+		blocked.add(RH.coordKey(from));
+		for (const u of this.units) {
+			if (u.state.currentHp > 0) blocked.add(RH.coordKey(u.state.coord));
+		}
+		for (const m of this.monsters) {
+			if (m.state.currentHp > 0) blocked.add(RH.coordKey(m.state.coord));
+		}
+
+		const exitCoord = RH.pickExitFarFrom(this.grid, from, blocked, 0.35);
+		if (!exitCoord) {
+			const fallback = RH.pickSpreadWalkableTile(this.grid, blocked, 1, 1);
+			if (!fallback) return;
+			this.grid.setTileType(fallback, RH.TileType.Exit);
+			return;
+		}
+		this.grid.setTileType(exitCoord, RH.TileType.Exit);
+	}
+
 	/** Float an icon + item name above the mercenary's head briefly. */
-	private showItemPopup(item: ItemData, isTarget: boolean): void {
+	private showItemPopup(item: RH.ItemData, isTarget: boolean): void {
 		this.itemPopupIcon.clear();
 		this.itemPopupIcon.circle(0, -46, 10);
 		this.itemPopupIcon.fill(isTarget ? 0xffd700 : 0xffffff);
@@ -882,18 +832,18 @@ export class MapScene implements Scene {
 
 	// ---------- Enemy AI ----------
 
-	private toCombatant(state: MercenaryState): AiCombatant {
+	private toCombatant(state: RH.MercenaryState): RH.AiCombatant {
 		return {
 			id: state.id,
 			coord: state.coord,
 			stats: state.stats,
 			currentHp: state.currentHp,
-			items: state.items.filter((i): i is ItemData => i !== null),
+			items: state.items.filter((i): i is RH.ItemData => i !== null),
 		};
 	}
 
 	/** Every living combatant except excludeId. */
-	private buildOtherCombatants(excludeId: string): AiCombatant[] {
+	private buildOtherCombatants(excludeId: string): RH.AiCombatant[] {
 		return this.units
 			.filter((u) => u.state.id !== excludeId && u.state.currentHp > 0)
 			.map((u) => this.toCombatant(u.state));
@@ -948,12 +898,12 @@ export class MapScene implements Scene {
 		const preMoveHp = self.currentHp;
 		const others = this.buildOtherCombatants(unit.state.id);
 
-		const chestInfos: ChestInfo[] = this.placedChests.map((c) => ({
+		const chestInfos: RH.ChestInfo[] = this.placedChests.map((c) => ({
 			coord: c.coord,
 			isOpen: c.entity.isOpen,
 		}));
 
-		const target = decideMovementTarget(
+		const target = RH.decideMovementTarget(
 			unit.archetype,
 			self,
 			others,
@@ -966,32 +916,32 @@ export class MapScene implements Scene {
 		);
 		const wouldDeclineOnArrival =
 			targetCombatant !== undefined &&
-			!decideEngagement(unit.archetype, self, targetCombatant);
+			!RH.decideEngagement(unit.archetype, self, targetCombatant);
 
 		if (!wouldDeclineOnArrival) {
 			this.showFeedback(`🤔 ${this.getUnitLabel(unit)} avoids a fight`);
 			const visibleTraps = this.trapsVisibleTo(unit);
 			const blocked = new Set([
-				...others.map((o) => coordKey(o.coord)),
-				...this.livingMonsterCoords().map(coordKey),
-				...visibleTraps.map((t) => coordKey(t.coord)),
+				...others.map((o) => RH.coordKey(o.coord)),
+				...this.livingMonsterCoords().map(RH.coordKey),
+				...visibleTraps.map((t) => RH.coordKey(t.coord)),
 			]);
 
 			// Uncapped range purely to read the real, wall-aware path distance to
 			// the target — not a straight-line guess, which could send AI toward
 			// a card it doesn't actually need if the direct route is blocked.
-			const uncappedRange = computeMovementRange(
+			const uncappedRange = RH.computeMovementRange(
 				this.grid,
 				unit.state.coord,
 				this.grid.width * this.grid.height,
 				blocked,
 			);
 			const distanceNeeded =
-				uncappedRange.get(coordKey(target))?.distance ??
+				uncappedRange.get(RH.coordKey(target))?.distance ??
 				Math.abs(target.x - unit.state.coord.x) +
 					Math.abs(target.y - unit.state.coord.y);
 
-			const moveCard = decideMovementCard(
+			const moveCard = RH.decideMovementCard(
 				unit.state.hand,
 				unit.state.stats.movement,
 				distanceNeeded,
@@ -1001,7 +951,7 @@ export class MapScene implements Scene {
 			const moveBudget = unit.state.stats.movement + cardBonus;
 
 			const threatOwners = this.buildThreatZoneOwners(unit.state.id);
-			const range = computeMovementRangeWeighted(
+			const range = RH.computeMovementRangeWeighted(
 				this.grid,
 				unit.state.coord,
 				moveBudget,
@@ -1011,11 +961,11 @@ export class MapScene implements Scene {
 				unit.archetype,
 			);
 			const reachable =
-				findNearestReachableTile(this.grid, range, target, blocked) ??
+				RH.findNearestReachableTile(this.grid, range, target, blocked) ??
 				unit.state.coord;
-			const path = getPathTo(range, reachable) ?? [];
+			const path = RH.getPathTo(range, reachable) ?? [];
 
-			const threatFraction = computePathThreatFraction(
+			const threatFraction = RH.computePathThreatFraction(
 				this.grid,
 				path,
 				threatOwners,
@@ -1023,7 +973,7 @@ export class MapScene implements Scene {
 				unit.state.currentHp,
 			);
 			const tooRisky =
-				threatFraction > ARCHETYPE_ZOC_REFUSAL_THRESHOLD[unit.archetype];
+				threatFraction > RH.ARCHETYPE_ZOC_REFUSAL_THRESHOLD[unit.archetype];
 			if (tooRisky) {
 				this.showFeedback(
 					`⚠️ ${this.getUnitLabel(unit)} avoids a zone of control`,
@@ -1074,8 +1024,8 @@ export class MapScene implements Scene {
 		// the fight it was risked for. Real post-move HP (selfAfter) is
 		// still what runFallbackBehavior uses below if no fight happens.
 		const selfForEngagement = { ...selfAfter, currentHp: preMoveHp };
-		const engagementRange = getRangeForClass(unit.state.characterClass);
-		const engagementTiles = computeAttackRange(
+		const engagementRange = RH.getRangeForClass(unit.state.characterClass);
+		const engagementTiles = RH.computeAttackRange(
 			this.grid,
 			unit.state.coord,
 			unit.state.characterClass,
@@ -1085,7 +1035,7 @@ export class MapScene implements Scene {
 			engagementTiles.map((t) => `${t.coord.x},${t.coord.y}`),
 		);
 
-		const victim = pickEngagementTarget(
+		const victim = RH.pickEngagementTarget(
 			unit.archetype,
 			selfForEngagement,
 			othersAfter,
@@ -1151,15 +1101,15 @@ export class MapScene implements Scene {
 
 	private async runFallbackBehavior(
 		unit: PilotedMercenary,
-		selfAfter: AiCombatant,
-		othersAfter: AiCombatant[],
+		selfAfter: RH.AiCombatant,
+		othersAfter: RH.AiCombatant[],
 	): Promise<void> {
 		if (!unit.archetype || !unit.memory) return;
 
 		const adjacentThreats = othersAfter.filter((o) =>
-			isAdjacent(unit.state.coord, o.coord),
+			RH.isAdjacent(unit.state.coord, o.coord),
 		);
-		const fallback = decideFallbackAction(
+		const fallback = RH.decideFallbackAction(
 			selfAfter,
 			adjacentThreats,
 			unit.archetype,
@@ -1167,29 +1117,31 @@ export class MapScene implements Scene {
 			unit.turnManager.canRest,
 		);
 		if (fallback === "rest" && unit.turnManager.spendRest()) {
-			clearFleeMemory(unit.memory);
+			RH.clearFleeMemory(unit.memory);
 			this.showFeedback(`💤 ${unit.archetype} hunter rests`);
 		} else if (fallback === "retreat" && unit.turnManager.beginDisengage()) {
-			const retreatBlocked = new Set(othersAfter.map((o) => coordKey(o.coord)));
-			const retreatRange = computeMovementRange(
+			const retreatBlocked = new Set(
+				othersAfter.map((o) => RH.coordKey(o.coord)),
+			);
+			const retreatRange = RH.computeMovementRange(
 				this.grid,
 				unit.state.coord,
 				unit.state.stats.movement,
 				retreatBlocked,
 			);
 			const retreatFrom = unit.state.coord;
-			const retreatTile = pickRetreatTile(
+			const retreatTile = RH.pickRetreatTile(
 				retreatRange,
 				adjacentThreats[0].coord,
 				retreatFrom,
 				unit.memory,
 			);
 			if (retreatTile) {
-				const retreatPath = getPathTo(retreatRange, retreatTile) ?? [];
+				const retreatPath = RH.getPathTo(retreatRange, retreatTile) ?? [];
 				if (retreatPath.length > 0) {
 					this.showFeedback(`💨 ${this.getUnitLabel(unit)} uses Disengage`);
 					unit.state.coord = retreatTile;
-					recordFlee(unit.memory, retreatFrom, retreatTile);
+					RH.recordFlee(unit.memory, retreatFrom, retreatTile);
 					// No applyZoneStrikes — Disengage is ZoC-immune, that's its whole point.
 					await unit.mercenary.moveAlongPath(retreatPath);
 				}
@@ -1217,7 +1169,7 @@ export class MapScene implements Scene {
 		);
 
 		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
-		const hunters: MonsterTargetCandidate[] = this.units
+		const hunters: RH.MonsterTargetCandidate[] = this.units
 			.filter((u) => u.state.currentHp > 0)
 			.map((u) => ({
 				id: u.state.id,
@@ -1228,7 +1180,7 @@ export class MapScene implements Scene {
 					? u.state.items.some((i) => i?.id === targetItemId)
 					: false,
 			}));
-		const targetCandidate = decideMonsterTarget(monster.state, hunters);
+		const targetCandidate = RH.decideMonsterTarget(monster.state, hunters);
 		if (!targetCandidate) {
 			this.activeMonster = null;
 			return;
@@ -1242,7 +1194,7 @@ export class MapScene implements Scene {
 			return;
 		}
 
-		const isAdjacentNow = isAdjacent(
+		const isAdjacentNow = RH.isAdjacent(
 			monster.state.coord,
 			targetUnit.state.coord,
 		);
@@ -1251,28 +1203,28 @@ export class MapScene implements Scene {
 			const blocked = new Set([
 				...this.units
 					.filter((u) => u.state.currentHp > 0)
-					.map((u) => coordKey(u.state.coord)),
+					.map((u) => RH.coordKey(u.state.coord)),
 				...this.livingMonsterCoords()
 					.filter(
 						(c) =>
 							!(c.x === monster.state.coord.x && c.y === monster.state.coord.y),
 					)
-					.map(coordKey),
+					.map(RH.coordKey),
 			]);
-			const range = computeMovementRange(
+			const range = RH.computeMovementRange(
 				this.grid,
 				monster.state.coord,
 				monster.state.stats.movement,
 				blocked,
 			);
 			const reachable =
-				findNearestReachableTile(
+				RH.findNearestReachableTile(
 					this.grid,
 					range,
 					targetUnit.state.coord,
 					blocked,
 				) ?? monster.state.coord;
-			const path = getPathTo(range, reachable) ?? [];
+			const path = RH.getPathTo(range, reachable) ?? [];
 
 			if (path.length > 0) {
 				monster.state.coord = reachable;
@@ -1284,7 +1236,7 @@ export class MapScene implements Scene {
 			}
 		}
 
-		if (isAdjacent(monster.state.coord, targetUnit.state.coord)) {
+		if (RH.isAdjacent(monster.state.coord, targetUnit.state.coord)) {
 			await this.monsterAttack(monster, targetUnit);
 		}
 
@@ -1295,7 +1247,7 @@ export class MapScene implements Scene {
 		monster: MonsterEntity,
 		target: PilotedMercenary,
 	): Promise<void> {
-		const monsterAsState = monsterAsMercenaryState(monster.state);
+		const monsterAsState = RH.monsterAsMercenaryState(monster.state);
 		const tierLabel = `${monster.state.tier[0].toUpperCase()}${monster.state.tier.slice(1)} Monster`;
 
 		await new Promise<void>((resolve) => {
@@ -1318,7 +1270,7 @@ export class MapScene implements Scene {
 					tierLabel,
 					target.pilot === "local"
 						? 0x4a9eff
-						: ARCHETYPE_COLORS[target.archetype!],
+						: RH.ARCHETYPE_COLORS[target.archetype!],
 					target.pilot === "local" ? "You" : target.state.name,
 					"balanced",
 					target.archetype ?? "balanced",
@@ -1355,7 +1307,7 @@ export class MapScene implements Scene {
 						}
 						resolve();
 					},
-					ARCHETYPE_COLORS[attacker.archetype!],
+					RH.ARCHETYPE_COLORS[attacker.archetype!],
 					attacker.state.name,
 					0x4a9eff,
 					"You",
@@ -1364,7 +1316,7 @@ export class MapScene implements Scene {
 					"defender",
 					attacker.state.coord,
 					defender.state.coord,
-					!isAdjacent(attacker.state.coord, defender.state.coord),
+					!RH.isAdjacent(attacker.state.coord, defender.state.coord),
 				),
 			);
 		});
@@ -1393,16 +1345,16 @@ export class MapScene implements Scene {
 						}
 						resolve();
 					},
-					ARCHETYPE_COLORS[attacker.archetype!],
+					RH.ARCHETYPE_COLORS[attacker.archetype!],
 					attacker.state.name,
-					ARCHETYPE_COLORS[defender.archetype!],
+					RH.ARCHETYPE_COLORS[defender.archetype!],
 					defender.state.name,
 					attacker.archetype!,
 					defender.archetype!,
 					"none",
 					attacker.state.coord,
 					defender.state.coord,
-					!isAdjacent(attacker.state.coord, defender.state.coord),
+					!RH.isAdjacent(attacker.state.coord, defender.state.coord),
 				),
 			);
 		});
@@ -1414,7 +1366,7 @@ export class MapScene implements Scene {
 		0xe67e22, 0x9b59b6, 0x1abc9c,
 	] as const;
 
-	private static readonly ENEMY_ARCHETYPES: AiArchetype[] = [
+	private static readonly ENEMY_ARCHETYPES: RH.AiArchetype[] = [
 		"aggressive",
 		"treasure",
 		"balanced",
@@ -1427,7 +1379,7 @@ export class MapScene implements Scene {
 
 		const turnManager = new TurnManager(
 			() => state,
-			() => (this.game.session.sharedDeck ??= buildSharedDeck()),
+			() => (this.game.session.sharedDeck ??= RH.buildSharedDeck()),
 			() => this.syncUI(),
 		);
 
@@ -1438,9 +1390,9 @@ export class MapScene implements Scene {
 		this.units = this.units.filter((u) => u.pilot === "local");
 
 		const used = new Set<string>();
-		used.add(coordKey(this.localUnit.state.coord));
-		const exitTile = findExitTile(this.grid);
-		if (exitTile) used.add(coordKey(exitTile));
+		used.add(RH.coordKey(this.localUnit.state.coord));
+		const exitTile = RH.findExitTile(this.grid);
+		if (exitTile) used.add(RH.coordKey(exitTile));
 
 		for (let i = 0; i < MapScene.ENEMY_ARCHETYPES.length; i++) {
 			const archetype = MapScene.ENEMY_ARCHETYPES[i];
@@ -1448,13 +1400,13 @@ export class MapScene implements Scene {
 				x: this.localUnit.state.coord.x + 2 + i,
 				y: this.localUnit.state.coord.y,
 			};
-			used.add(coordKey(coord));
+			used.add(RH.coordKey(coord));
 
 			const aiClass =
-				ALL_CLASSES[Math.floor(Math.random() * ALL_CLASSES.length)];
-			const aiName = generateHunterName();
+				RH.ALL_CLASSES[Math.floor(Math.random() * RH.ALL_CLASSES.length)];
+			const aiName = RH.generateHunterName();
 
-			const state = createMercenary(
+			const state = RH.createMercenary(
 				`enemy_${archetype}_${i}`,
 				coord,
 				{
@@ -1475,7 +1427,7 @@ export class MapScene implements Scene {
 
 			const turnManager = new TurnManager(
 				() => state,
-				() => (this.game.session.sharedDeck ??= buildSharedDeck()),
+				() => (this.game.session.sharedDeck ??= RH.buildSharedDeck()),
 				() => {},
 			);
 
@@ -1485,7 +1437,7 @@ export class MapScene implements Scene {
 				mercenary,
 				turnManager,
 				archetype,
-				memory: createAiMemory(),
+				memory: RH.createAiMemory(),
 			});
 		}
 	}
@@ -1493,7 +1445,7 @@ export class MapScene implements Scene {
 	private buildHunterVisualInfo(u: PilotedMercenary): { accentColor: number } {
 		return {
 			accentColor:
-				u.pilot === "local" ? 0x4a9eff : ARCHETYPE_COLORS[u.archetype!],
+				u.pilot === "local" ? 0x4a9eff : RH.ARCHETYPE_COLORS[u.archetype!],
 		};
 	}
 
@@ -1517,12 +1469,12 @@ export class MapScene implements Scene {
 	}
 
 	private trySpawnMonster(): void {
-		if (!shouldSpawnMonster(this.monsters.length)) return;
+		if (!RH.shouldSpawnMonster(this.monsters.length)) return;
 
 		const used = new Set<string>(
-			this.units.map((u) => coordKey(u.state.coord)),
+			this.units.map((u) => RH.coordKey(u.state.coord)),
 		);
-		for (const m of this.monsters) used.add(coordKey(m.state.coord));
+		for (const m of this.monsters) used.add(RH.coordKey(m.state.coord));
 
 		const coord = this.pickEnemySpawnTile(used);
 		if (!coord) return;
@@ -1533,7 +1485,7 @@ export class MapScene implements Scene {
 			];
 		this.monsterSpawnIndex++;
 
-		const state = createMonster(
+		const state = RH.createMonster(
 			`monster_${Date.now()}_${this.monsterSpawnIndex}`,
 			tier,
 			coord,
@@ -1545,7 +1497,7 @@ export class MapScene implements Scene {
 		this.showFeedback(`👹 A ${tier} monster appears!`);
 	}
 
-	private livingMonsterCoords(): GridCoord[] {
+	private livingMonsterCoords(): RH.GridCoord[] {
 		return this.livingMonsters().map((m) => m.state.coord);
 	}
 
@@ -1561,9 +1513,9 @@ export class MapScene implements Scene {
 		monster.token.view.destroy({ children: true });
 	}
 
-	private pickEnemySpawnTile(used: Set<string>): GridCoord | null {
-		const preferred: GridCoord[] = [];
-		const fallback: GridCoord[] = [];
+	private pickEnemySpawnTile(used: Set<string>): RH.GridCoord | null {
+		const preferred: RH.GridCoord[] = [];
+		const fallback: RH.GridCoord[] = [];
 		const px = this.localUnit.state.coord.x;
 		const py = this.localUnit.state.coord.y;
 
@@ -1571,7 +1523,7 @@ export class MapScene implements Scene {
 			for (let y = 0; y < this.grid.height; y++) {
 				const coord = { x, y };
 				if (!this.grid.isWalkable(coord)) continue;
-				if (used.has(coordKey(coord))) continue;
+				if (used.has(RH.coordKey(coord))) continue;
 				fallback.push(coord);
 				const dist = Math.abs(x - px) + Math.abs(y - py);
 				if (dist >= 4) preferred.push(coord);
@@ -1585,7 +1537,7 @@ export class MapScene implements Scene {
 
 	/** Win check: standing on Exit with target held, via normal move only. PASS 4 TODO: local-only, revisit for multiplayer. */
 	private async checkWinCondition(unit: PilotedMercenary): Promise<void> {
-		const exitTile = findExitTile(this.grid);
+		const exitTile = RH.findExitTile(this.grid);
 		if (!exitTile) return;
 		if (unit.state.coord.x !== exitTile.x || unit.state.coord.y !== exitTile.y)
 			return;
@@ -1680,8 +1632,8 @@ export class MapScene implements Scene {
 	private renderAttackRange(): void {
 		this.attackRangeContainer.removeChildren();
 		const local = this.localUnit.state;
-		const range = getRangeForClass(local.characterClass);
-		const tiles = computeAttackRange(
+		const range = RH.getRangeForClass(local.characterClass);
+		const tiles = RH.computeAttackRange(
 			this.grid,
 			local.coord,
 			local.characterClass,
@@ -1730,8 +1682,8 @@ export class MapScene implements Scene {
 		if (!unit || unit.state.currentHp <= 0) return;
 
 		const local = this.localUnit.state;
-		const range = getRangeForClass(local.characterClass);
-		const inRangeTiles = computeAttackRange(
+		const range = RH.getRangeForClass(local.characterClass);
+		const inRangeTiles = RH.computeAttackRange(
 			this.grid,
 			local.coord,
 			local.characterClass,
@@ -1759,22 +1711,22 @@ export class MapScene implements Scene {
 				(result) => this.onBattleComplete(result),
 				0x4a9eff,
 				"You",
-				ARCHETYPE_COLORS[unit.archetype!],
+				RH.ARCHETYPE_COLORS[unit.archetype!],
 				unit.state.name,
 				"balanced",
 				unit.archetype!,
 				"attacker",
 				local.coord,
 				unit.state.coord,
-				!isAdjacent(local.coord, unit.state.coord),
+				!RH.isAdjacent(local.coord, unit.state.coord),
 			),
 		);
 	}
 
 	private tryStartCombatVsMonster(monster: MonsterEntity): void {
 		const local = this.localUnit.state;
-		const range = getRangeForClass(local.characterClass);
-		const inRangeTiles = computeAttackRange(
+		const range = RH.getRangeForClass(local.characterClass);
+		const inRangeTiles = RH.computeAttackRange(
 			this.grid,
 			local.coord,
 			local.characterClass,
@@ -1793,7 +1745,7 @@ export class MapScene implements Scene {
 
 		this.exitTargetingMode();
 
-		const monsterAsState = monsterAsMercenaryState(monster.state);
+		const monsterAsState = RH.monsterAsMercenaryState(monster.state);
 		const tierLabel = `${monster.state.tier[0].toUpperCase()}${monster.state.tier.slice(1)} Monster`;
 
 		void this.game.overlays.show(
@@ -1818,7 +1770,7 @@ export class MapScene implements Scene {
 				"attacker",
 				local.coord,
 				monster.state.coord,
-				!isAdjacent(local.coord, monster.state.coord),
+				!RH.isAdjacent(local.coord, monster.state.coord),
 				undefined,
 				false,
 				true,
@@ -1840,8 +1792,8 @@ export class MapScene implements Scene {
 			(screenY - this.boardContainer.y) / this.boardContainer.scale.y;
 
 		const local = this.localUnit.state;
-		const range = getRangeForClass(local.characterClass);
-		const inRangeTiles = computeAttackRange(
+		const range = RH.getRangeForClass(local.characterClass);
+		const inRangeTiles = RH.computeAttackRange(
 			this.grid,
 			local.coord,
 			local.characterClass,
@@ -2106,13 +2058,13 @@ export class MapScene implements Scene {
 	// ---------- Cards ----------
 
 	/** Removes card from real hand, spends AP. Blue E routes to handleExitCard; Attack doesn't reach here. */
-	private handleCardConfirmed(card: CardData): void {
+	private handleCardConfirmed(card: RH.CardData): void {
 		const local = this.localUnit;
 		const handIndex = local.state.hand.findIndex((c) => c.id === card.id);
 		if (handIndex !== -1) local.state.hand.splice(handIndex, 1);
 
 		if (card.color === "blue" && card.value === "E") {
-			this.handleExitCard();
+			void this.handleExitCard(card);
 			return;
 		}
 
@@ -2132,7 +2084,7 @@ export class MapScene implements Scene {
 			);
 		} else if (card.actionType === "stun") {
 			// TEMPORARY: routed through the Move flow because there's no
-			// dedicated Trap action yet — every class, Trapper included
+			// dedicated RH.Trap action yet — every class, Trapper included
 			// once it exists, shares this path for now.
 			this.placeTrap(card);
 			if (!local.turnManager.beginMovement("none", 0)) return;
@@ -2142,7 +2094,7 @@ export class MapScene implements Scene {
 		}
 	}
 
-	private placeTrapAtCurrentPosition(_card: CardData): void {
+	private placeTrapAtCurrentPosition(_card: RH.CardData): void {
 		const coord = this.localUnit.state.coord;
 		this.traps.push({
 			id: `trap_${Date.now()}_${this.traps.length}`,
@@ -2150,22 +2102,22 @@ export class MapScene implements Scene {
 			ownerId: this.localUnit.state.id,
 			kind: "stun",
 		});
-		this.showFeedback("🪤 Trap left behind");
+		this.showFeedback("🪤 RH.Trap left behind");
 		this.renderTrapMarkers();
 	}
 
-	private visibleTrapsForLocalPlayer(): Trap[] {
+	private visibleTrapsForLocalPlayer(): RH.Trap[] {
 		const local = this.localUnit.state;
 		const isHunterClass = local.characterClass === "hunter";
 		return this.traps.filter((t) =>
-			canSeeTrap(t, local.id, local.coord, isHunterClass),
+			RH.canSeeTrap(t, local.id, local.coord, isHunterClass),
 		);
 	}
 
-	private trapsVisibleTo(unit: PilotedMercenary): Trap[] {
+	private trapsVisibleTo(unit: PilotedMercenary): RH.Trap[] {
 		const isHunterClass = unit.state.characterClass === "hunter";
 		return this.traps.filter((t) =>
-			canSeeTrap(t, unit.state.id, unit.state.coord, isHunterClass),
+			RH.canSeeTrap(t, unit.state.id, unit.state.coord, isHunterClass),
 		);
 	}
 
@@ -2194,10 +2146,10 @@ export class MapScene implements Scene {
 
 	private resolveTrapsAlongPath(
 		unit: PilotedMercenary,
-		path: GridCoord[],
+		path: RH.GridCoord[],
 	): {
-		truncatedPath: GridCoord[];
-		hazardHit: { kind: TrapKind; result: HazardRollResult } | null;
+		truncatedPath: RH.GridCoord[];
+		hazardHit: { kind: RH.TrapKind; result: RH.HazardRollResult } | null;
 	} {
 		for (let i = 0; i < path.length; i++) {
 			const step = path[i];
@@ -2209,7 +2161,7 @@ export class MapScene implements Scene {
 
 			this.traps.splice(index, 1);
 
-			const result = resolveHazardRoll(unit.state.stats);
+			const result = RH.resolveHazardRoll(unit.state.stats);
 			if (!result.landed) {
 				this.showFeedback(
 					`🪤 ${this.getUnitLabel(unit)} resisted a hazard (${result.hazardRoll} vs ${result.victimRoll})`,
@@ -2225,7 +2177,7 @@ export class MapScene implements Scene {
 		return { truncatedPath: path, hazardHit: null };
 	}
 
-	private placeTrap(card: CardData): void {
+	private placeTrap(card: RH.CardData): void {
 		switch (this.localUnit.state.characterClass) {
 			// case trapper goes here later
 
@@ -2236,8 +2188,8 @@ export class MapScene implements Scene {
 
 	private applyHazardEffect(
 		unit: PilotedMercenary,
-		kind: TrapKind,
-		result: HazardRollResult,
+		kind: RH.TrapKind,
+		result: RH.HazardRollResult,
 	): void {
 		switch (kind) {
 			case "stun":
@@ -2248,20 +2200,31 @@ export class MapScene implements Scene {
 		}
 	}
 
-	/** Exit card: fly to the exit, then let checkWinCondition decide the rest — win if carrying the target, teleported away otherwise. No separate logic needed here anymore. */
-	private async handleExitCard(): Promise<void> {
+	/**
+	 * Blue E: if the Exit has not revealed yet, put the card back and
+	 * spend nothing. If it has, fly there — win if carrying the relic.
+	 */
+	private async handleExitCard(card: RH.CardData): Promise<void> {
 		const local = this.localUnit;
-		if (!local.turnManager.beginMovement("blue", 0)) return;
+		const exitTile = RH.findExitTile(this.grid);
 
-		this.exitCardInProgress = true;
-
-		const exitTile = findExitTile(this.grid);
-		if (exitTile) {
-			this.showFeedback("🌀 Exit card played — heading to the exit...");
-			await this.flyMercenaryTo(exitTile);
-			await this.checkWinCondition(local);
+		if (!exitTile) {
+			local.state.hand.push(card);
+			this.showFeedback("🌀 The Exit has not revealed itself yet");
+			this.syncUI();
+			return;
 		}
 
+		if (!local.turnManager.beginMovement("blue", 0)) {
+			local.state.hand.push(card);
+			this.syncUI();
+			return;
+		}
+
+		this.exitCardInProgress = true;
+		this.showFeedback("🌀 Exit card played — heading to the exit...");
+		await this.flyMercenaryTo(exitTile);
+		await this.checkWinCondition(local);
 		this.exitCardInProgress = false;
 	}
 
@@ -2270,7 +2233,7 @@ export class MapScene implements Scene {
 	 * teleportEntity uses, so this reads identically to every
 	 * other teleport rather than its own separate, slower animation.
 	 */
-	private async flyMercenaryTo(coord: GridCoord): Promise<void> {
+	private async flyMercenaryTo(coord: RH.GridCoord): Promise<void> {
 		const local = this.localUnit;
 		local.state.coord = coord;
 		const screenPos = gridToScreen(coord);
@@ -2290,15 +2253,15 @@ export class MapScene implements Scene {
 
 	/** Pick a random walkable (Floor) tile on the grid, excluding one coord. */
 	private randomWalkableTile(
-		exclude: GridCoord,
-		alsoExclude: GridCoord[] = [],
-	): GridCoord | null {
-		const candidates: GridCoord[] = [];
+		exclude: RH.GridCoord,
+		alsoExclude: RH.GridCoord[] = [],
+	): RH.GridCoord | null {
+		const candidates: RH.GridCoord[] = [];
 
 		for (let x = 0; x < this.grid.width; x++) {
 			for (let y = 0; y < this.grid.height; y++) {
 				const tile = this.grid.getTile({ x, y });
-				if (!tile || tile.type !== TileType.Floor) continue;
+				if (!tile || tile.type !== RH.TileType.Floor) continue;
 				if (tile.coord.x === exclude.x && tile.coord.y === exclude.y) continue;
 				if (
 					alsoExclude.some((c) => c.x === tile.coord.x && c.y === tile.coord.y)
@@ -2319,10 +2282,10 @@ export class MapScene implements Scene {
 	 * control returning to the player) ever begins.
 	 */
 	private async teleportEntity(
-		state: MercenaryState,
+		state: RH.MercenaryState,
 		mercenary: Mercenary,
 	): Promise<void> {
-		const occupied: GridCoord[] = this.units
+		const occupied: RH.GridCoord[] = this.units
 			.filter((u) => u.state.id !== state.id && u.state.currentHp > 0)
 			.map((u) => u.state.coord);
 
@@ -2357,8 +2320,8 @@ export class MapScene implements Scene {
 				...this.livingMonsterCoords(),
 			],
 			onMoveCommitted: (
-				target: GridCoord,
-				path: GridCoord[],
+				target: RH.GridCoord,
+				path: RH.GridCoord[],
 				ignoresZoc: boolean,
 			) => this.onMoveCommitted(target, path, ignoresZoc),
 		});
@@ -2430,7 +2393,7 @@ export class MapScene implements Scene {
 	}
 
 	/** Convert canvas-local screen coordinates to a grid tile. */
-	private screenPointToGrid(screenX: number, screenY: number): GridCoord {
+	private screenPointToGrid(screenX: number, screenY: number): RH.GridCoord {
 		const localX =
 			(screenX - this.boardContainer.x) / this.boardContainer.scale.x;
 		const localY =
@@ -2439,34 +2402,27 @@ export class MapScene implements Scene {
 	}
 
 	/**
-	 *  Generates the dungeon, then immediately un-spawns the exit
-	 * it's remembered here but the grid tile itself stays a normal
-	 * Floor until the relic is actually found.
+	 * Generates the dungeon with no exit tile. Exit spawns only after
+	 * the target relic is found (see tryOpenChestAt + spawnExitFarFrom).
 	 */
-	private buildMap(): Grid {
-		const grid = generateDungeon(this.mapWidth, this.mapHeight, {
+	private buildMap(): RH.Grid {
+		return RH.generateDungeon(this.mapWidth, this.mapHeight, {
 			seed: this.mapSeed,
 			roomCount: this.roomCount,
 		});
-		const realExit = findExitTile(grid);
-		if (realExit) {
-			this.pendingExitCoord = realExit;
-			grid.setTileType(realExit, TileType.Floor);
-		}
-		return grid;
 	}
 
-	/** Build the local player's MercenaryState. */
-	private spawnMercenary(): MercenaryState {
+	/** Build the local player's RH.MercenaryState. */
+	private spawnMercenary(): RH.MercenaryState {
 		const spawnCoord = this.game.session.playerSpawn ??
-			findFirstWalkableTile(this.grid) ?? { x: 0, y: 0 };
+			RH.findFirstWalkableTile(this.grid) ?? { x: 0, y: 0 };
 
 		const character = this.game.session.character;
 		if (character) {
-			return spawnFromCharacter(character, spawnCoord);
+			return RH.spawnFromCharacter(character, spawnCoord);
 		}
 
-		return createMercenary("player", spawnCoord, {
+		return RH.createMercenary("player", spawnCoord, {
 			movement: 4,
 			attack: 3,
 			defense: 2,

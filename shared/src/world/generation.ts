@@ -80,12 +80,6 @@ export function generateDungeon(
 		carveCorridor(grid, roomCenter(rooms[i - 1]), roomCenter(rooms[i]), random);
 	}
 
-	// Step 4: Drop the exit in the center of the last room in the chain.
-	if (rooms.length > 0) {
-		const lastRoom = rooms[rooms.length - 1];
-		grid.setTileType(roomCenter(lastRoom), TileType.Exit);
-	}
-
 	return grid;
 }
 

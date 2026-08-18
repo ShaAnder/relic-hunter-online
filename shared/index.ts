@@ -21,3 +21,4 @@ export * from "./src/types/monster";
 export * from "./src/world/grid";
 export * from "./src/world/generation";
 export * from "./src/world/movement";
+export * from "./src/world/placement";
