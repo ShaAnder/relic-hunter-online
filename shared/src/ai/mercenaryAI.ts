@@ -10,11 +10,22 @@ import type { EntityCore } from "../types/entity";
 /** Hostile hunter behavior profile */
 export type AiArchetype = "aggressive" | "treasure" | "balanced";
 
+/** AI Inventory slots for gauging leave potential */
+const AI_INVENTORY_SLOTS = 6;
+
 export const ARCHETYPE_COLORS: Record<AiArchetype, number> = {
 	aggressive: 0xe67e22,
 	treasure: 0x9b59b6,
 	balanced: 0x1abc9c,
 };
+
+/**
+ * Empty general slots. AiCombatant.items is already filtered to non-null
+ * by toCombatant, so length is filled count — not an array with holes.
+ */
+function emptyItemSlots(self: AiCombatant): number {
+	return Math.max(0, AI_INVENTORY_SLOTS - self.items.length);
+}
 
 export function hunterLabel(
 	name: string,
@@ -103,10 +114,48 @@ function nearestUnopenedChest(
 }
 
 /**
- * Chebyshev adjacency (range 1) — matches overworld attack range checks.
- * @param a - first tile
- * @param b - second tile
+ * When THIS hunter holds the relic: archetype-weighted extract vs linger.
+ * Treasure fills bags first; Aggressive fights until cornered;
+ * Balanced bails under monster pressure or low HP.
  */
+function decideCarrierTarget(
+	archetype: AiArchetype,
+	self: AiCombatant,
+	living: AiCombatant[],
+	chests: ChestInfo[],
+	exitCoord: GridCoord | null,
+	monsterCount: number,
+): GridCoord {
+	const hpRatio = self.currentHp / Math.max(1, self.stats.maxHp);
+	const foe = nearestOther(self.coord, living);
+	const chest = nearestUnopenedChest(self.coord, chests);
+	const goExit = (): GridCoord => exitCoord ?? self.coord;
+
+	switch (archetype) {
+		case "treasure": {
+			// Still room and still chests → loot before extract.
+			if (emptyItemSlots(self) > 0 && chest) return chest;
+			return goExit();
+		}
+		case "aggressive": {
+			// Critical HP, or wounded with multiple hunters still up.
+			const cornered = hpRatio < 0.3 || (hpRatio < 0.5 && living.length >= 2);
+			if (cornered) return goExit();
+			if (foe) return foe.coord;
+			return goExit();
+		}
+		case "balanced":
+		default: {
+			// Global monster pressure or low HP → leave; else nearby fight.
+			if (monsterCount >= 2 || hpRatio < 0.4) return goExit();
+			if (foe && manhattanDistance(self.coord, foe.coord) <= 4) {
+				return foe.coord;
+			}
+			return goExit();
+		}
+	}
+}
+
 /**
  * Movement goal for one AI hunter given the full living field.
  * Carrier of the match target (any hunter) overrides default goals for
@@ -124,17 +173,21 @@ export function decideMovementTarget(
 	others: AiCombatant[],
 	chests: ChestInfo[],
 	targetItemId: string | null,
+	exitCoord: GridCoord | null = null,
+	monsterCount: number = 0,
 ): GridCoord {
 	const living = others.filter((o) => o.currentHp > 0);
 	const carrier = findCarrier(self, living, targetItemId);
 
 	if (carrier && carrier.id === self.id) {
-		if (archetype === "treasure") {
-			const chest = nearestUnopenedChest(self.coord, chests);
-			return chest ?? self.coord;
-		}
-		const foe = nearestOther(self.coord, living);
-		return foe?.coord ?? self.coord;
+		return decideCarrierTarget(
+			archetype,
+			self,
+			living,
+			chests,
+			exitCoord,
+			monsterCount,
+		);
 	}
 
 	if (carrier) {

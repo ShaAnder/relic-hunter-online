@@ -903,12 +903,15 @@ export class MapScene implements Scene {
 			isOpen: c.entity.isOpen,
 		}));
 
+		const exitCoord = RH.findExitTile(this.grid);
 		const target = RH.decideMovementTarget(
 			unit.archetype,
 			self,
 			others,
 			chestInfos,
 			targetItemId,
+			exitCoord,
+			this.livingMonsters().length,
 		);
 
 		const targetCombatant = others.find(
