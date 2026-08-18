@@ -205,10 +205,16 @@ export class BattleOverlay implements Overlay {
 
 	/** Whichever action list a given role can actually choose from — defender loses Attack when the fight was initiated from outside melee range. */
 	private allowedActionsFor(role: "attacker" | "defender"): CombatAction[] {
+		let actions = ACTIONS;
 		if (role === "defender" && this.isRangedInitiated) {
-			return ACTIONS.filter((a) => a !== "attack");
+			actions = actions.filter((a) => a !== "attack");
 		}
-		return ACTIONS;
+		const opponentIsMonster =
+			role === "attacker" ? this.isDefenderMonster : this.isAttackerMonster;
+		if (opponentIsMonster) {
+			actions = actions.filter((a) => a !== "surrender");
+		}
+		return actions;
 	}
 
 	private async runAutoFight(): Promise<void> {

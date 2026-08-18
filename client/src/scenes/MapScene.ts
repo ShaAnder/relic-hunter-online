@@ -146,6 +146,7 @@ export class MapScene implements Scene {
 	// End Turn / regenerate from interrupting mid-sequence, same role
 	// mercenary.isAnimating plays for normal moves.
 	private exitCardInProgress = false;
+	private pendingExitCoord: GridCoord | null = null;
 	private turnsTaken = 0;
 
 	// Targeting mode — active while choosing which enemy to attack
@@ -202,11 +203,6 @@ export class MapScene implements Scene {
 	private mapHeight: number;
 	private roomCount: number;
 	private mapSeed: number;
-
-	/** How long the mercenary lingers, visible, at the exit tile before the second flight. */
-	private readonly EXIT_CARD_LINGER_MS = 1000;
-	/** Duration of each straight-line flight leg of the Exit card's teleport. */
-	private readonly EXIT_FLIGHT_MS = 1500;
 
 	private readonly TILE_COLORS: Record<TileType, number> = {
 		[TileType.Floor]: 0x3a3a3a,
@@ -853,6 +849,11 @@ export class MapScene implements Scene {
 
 		const isLocal = state.id === this.localUnit.state.id;
 		if (placed.plan.isTarget) {
+			this.game.session.relicFound = true;
+			if (this.pendingExitCoord) {
+				this.grid.setTileType(this.pendingExitCoord, TileType.Exit);
+			}
+			this.renderMap();
 			this.showFeedback(
 				isLocal
 					? `🎯 Found the target: ${placed.plan.item.name}! Head to the Exit.`
@@ -2247,7 +2248,7 @@ export class MapScene implements Scene {
 		}
 	}
 
-	/** Exit card: fly to exit, win immediately if carrying target, else linger + random flight. */
+	/** Exit card: fly to the exit, then let checkWinCondition decide the rest — win if carrying the target, teleported away otherwise. No separate logic needed here anymore. */
 	private async handleExitCard(): Promise<void> {
 		const local = this.localUnit;
 		if (!local.turnManager.beginMovement("blue", 0)) return;
@@ -2258,32 +2259,28 @@ export class MapScene implements Scene {
 		if (exitTile) {
 			this.showFeedback("🌀 Exit card played — heading to the exit...");
 			await this.flyMercenaryTo(exitTile);
-
-			if (this.isCarryingTarget(local)) {
-				this.exitCardInProgress = false;
-				await this.checkWinCondition(local);
-				return;
-			}
+			await this.checkWinCondition(local);
 		}
 
-		await this.delay(this.EXIT_CARD_LINGER_MS);
-
-		const destination = this.randomWalkableTile(local.state.coord);
-		if (destination) {
-			await this.flyMercenaryTo(destination);
-		}
-
-		this.showFeedback("🌀 Teleported randomly");
 		this.exitCardInProgress = false;
 	}
 
-	/** Fade out, fly in a straight line, fade in on arrival. Alpha 0 while moving, not visible=false, so the camera still tracks it. */
+	/**
+	 * Instantly relocates and pans the camera — same mechanism
+	 * teleportEntity uses, so this reads identically to every
+	 * other teleport rather than its own separate, slower animation.
+	 */
 	private async flyMercenaryTo(coord: GridCoord): Promise<void> {
 		const local = this.localUnit;
-		local.mercenary.view.alpha = 0;
 		local.state.coord = coord;
-		await local.mercenary.moveAlongPath([coord], this.EXIT_FLIGHT_MS);
-		local.mercenary.view.alpha = 1;
+		const screenPos = gridToScreen(coord);
+		local.mercenary.setPositionInstant(screenPos);
+		await this.camera.panTo(
+			screenPos,
+			500,
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
 	}
 
 	/** Promise-based delay — used for the Exit card's linger between flights. */
@@ -2441,12 +2438,22 @@ export class MapScene implements Scene {
 		return screenToGrid(localX, localY);
 	}
 
-	/** Generate the map grid. */
+	/**
+	 *  Generates the dungeon, then immediately un-spawns the exit
+	 * it's remembered here but the grid tile itself stays a normal
+	 * Floor until the relic is actually found.
+	 */
 	private buildMap(): Grid {
-		return generateDungeon(this.mapWidth, this.mapHeight, {
+		const grid = generateDungeon(this.mapWidth, this.mapHeight, {
 			seed: this.mapSeed,
 			roomCount: this.roomCount,
 		});
+		const realExit = findExitTile(grid);
+		if (realExit) {
+			this.pendingExitCoord = realExit;
+			grid.setTileType(realExit, TileType.Floor);
+		}
+		return grid;
 	}
 
 	/** Build the local player's MercenaryState. */
