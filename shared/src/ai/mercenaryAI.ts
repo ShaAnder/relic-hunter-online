@@ -586,18 +586,24 @@ export function chooseCombatAction(
 	const scores: { action: CombatAction; score: number }[] = [];
 
 	// --- Attack / Defend (stay in the fight) ---
-	let attackBase = 50;
-	let defendBase = 50;
+	let attackBase = 55;
+	let defendBase = 45;
 	if (archetype === "aggressive") {
-		attackBase = 70;
-		defendBase = 35;
+		attackBase = 75;
+		defendBase = 30;
 	} else if (archetype === "treasure") {
-		attackBase = 35;
-		defendBase = 60;
+		attackBase = 45;
+		defendBase = 55;
+	}
+
+	// Healthy hunters press the attack — stops mutual turtle defaults
+	if (hpRatio >= 0.5) {
+		attackBase += 15;
+		defendBase -= 5;
 	}
 	if (favoredOrEven) {
 		attackBase += 20;
-		defendBase += 10;
+		defendBase += 5;
 	}
 	if (badlyOutmatched) {
 		attackBase -= 25;

@@ -43,8 +43,6 @@ const ACTION_LABELS: Record<CombatAction, string> = {
 
 const RESULT_LINGER_MS = 2200;
 
-// Two base shapes — long axis always matches the fight's dominant real
-// direction. East/west fights get landscape, north/south get portrait.
 const LANDSCAPE_COLS = 15;
 const LANDSCAPE_ROWS = 7;
 const PORTRAIT_COLS = 7;
@@ -69,6 +67,8 @@ export interface BattleResult {
  */
 export class BattleOverlay implements Overlay {
 	readonly view = new Container();
+	/** MapScene must not dismiss this overlay on Escape mid-fight. */
+	readonly blocksEscape = true;
 
 	private backdrop = new Graphics();
 	private arena = new Container();
@@ -94,7 +94,6 @@ export class BattleOverlay implements Overlay {
 
 	private resolved = false;
 
-	// Computed once in the constructor from the real map positions
 	private arenaCols: number;
 	private arenaRows: number;
 	private nearTile: { x: number; y: number };
@@ -141,18 +140,10 @@ export class BattleOverlay implements Overlay {
 			this.onHandCardConfirmed(card),
 		);
 
-		// Orientation still comes from the raw grid axis dominance — that's
-		// a gameplay question (is this fight "reading" north-south or
-		// east-west), unaffected by iso screen quirks.
 		const dx = attackerMapCoord.x - defenderMapCoord.x;
 		const dy = attackerMapCoord.y - defenderMapCoord.y;
 		const isNorthSouth = Math.abs(dy) >= Math.abs(dx);
 
-		// But WHICH side each combatant renders on has to match what the
-		// player actually saw on the overworld screen — comparing raw grid
-		// coordinates isn't the same thing under this iso projection, since
-		// screenX depends on x AND y together, not x alone. Run the exact
-		// same projection the overworld map uses and compare THAT.
 		const attackerScreen = gridToScreen(attackerMapCoord);
 		const defenderScreen = gridToScreen(defenderMapCoord);
 
@@ -162,7 +153,6 @@ export class BattleOverlay implements Overlay {
 			const midCol = Math.floor(this.arenaCols / 2);
 			this.nearTile = { x: midCol, y: this.arenaRows - 2 };
 			this.farTile = { x: midCol, y: 1 };
-			// near = renders lower on screen
 			this.attackerNear = attackerScreen.y >= defenderScreen.y;
 		} else {
 			this.arenaCols = LANDSCAPE_COLS;
@@ -170,7 +160,6 @@ export class BattleOverlay implements Overlay {
 			const midRow = Math.floor(this.arenaRows / 2);
 			this.nearTile = { x: this.arenaCols - 2, y: midRow };
 			this.farTile = { x: 1, y: midRow };
-			// near = renders right on screen
 			this.attackerNear = attackerScreen.x >= defenderScreen.x;
 		}
 	}
@@ -182,6 +171,15 @@ export class BattleOverlay implements Overlay {
 
 	onHide(): void {
 		this.localHand.exitSelectionMode();
+		this.winnerLootPanel.view.visible = false;
+		this.loserLootPanel.view.visible = false;
+		this.surrenderLootPanel.view.visible = false;
+		this.lootConfirmPopup.visible = false;
+		this.pendingLootIndex = null;
+		this.lootResolve?.();
+		this.lootResolve = null;
+		this.loserLootPanel.setOnTake(() => {});
+		this.surrenderLootPanel.setOnGive(() => {});
 	}
 
 	update(deltaTime: number): void {
@@ -189,6 +187,7 @@ export class BattleOverlay implements Overlay {
 		this.localPlayZone.update(deltaTime);
 		this.winnerLootPanel.update(deltaTime);
 		this.loserLootPanel.update(deltaTime);
+		this.surrenderLootPanel.update(deltaTime);
 	}
 
 	onResize(width: number, height: number): void {
@@ -203,7 +202,6 @@ export class BattleOverlay implements Overlay {
 		return this.attackerNear ? this.farTile : this.nearTile;
 	}
 
-	/** Whichever action list a given role can actually choose from — defender loses Attack when the fight was initiated from outside melee range. */
 	private allowedActionsFor(role: "attacker" | "defender"): CombatAction[] {
 		let actions = ACTIONS;
 		if (role === "defender" && this.isRangedInitiated) {
@@ -265,8 +263,10 @@ export class BattleOverlay implements Overlay {
 
 		this.buildLootPanels();
 		this.buildLootConfirmPopup();
+		// Confirm lives on view (above panels), never on arena
+		this.view.addChild(this.lootConfirmPopup);
+		this.lootConfirmPopup.eventMode = "static";
 
-		this.arena.addChild(this.localPlayZone.view);
 		this.localPlayZone.view.x = 0;
 		this.localPlayZone.view.y = 0;
 
@@ -350,7 +350,7 @@ export class BattleOverlay implements Overlay {
 		this.lootConfirmPopup.addChild(this.lootSkipLabel);
 
 		this.lootConfirmPopup.visible = false;
-		this.arena.addChild(this.lootConfirmPopup);
+		// Do NOT add to arena — parent is this.view in buildUI
 	}
 
 	private buildTextButton(
@@ -653,10 +653,8 @@ export class BattleOverlay implements Overlay {
 	}
 
 	/**
-	 * Opens winner+loser panels above their respective corner panels. Human
-	 * winner picks via click+confirm; AI winner pauses (reads as thinking),
-	 * highlights its choice via decideLootChoice, then auto-applies — same
-	 * visible-decision pattern as everything else AI does in this file.
+	 * Defeat loot: winner takes from loser.
+	 * Human uses loserLootPanel + setOnTake. AI auto-picks.
 	 */
 	private async runLootSequence(
 		winnerState: MercenaryState,
@@ -707,6 +705,9 @@ export class BattleOverlay implements Overlay {
 			this.lootResolve = resolve;
 			this.loserLootPanel.setOnTake((index) => {
 				this.pendingLootIndex = index;
+				this.lootConfirmPopup.x = this.game.app.screen.width / 2;
+				this.lootConfirmPopup.y = this.game.app.screen.height / 2;
+				this.lootConfirmText.text = "Take this item?";
 				this.lootConfirmPopup.visible = true;
 			});
 		});
@@ -716,11 +717,8 @@ export class BattleOverlay implements Overlay {
 	}
 
 	/**
-	 * Loser browses their OWN inventory and gives up one item — the mirror
-	 * of runLootSequence (winner takes), used for surrender specifically.
-	 * AI gets the same "pause, then highlight the pick" beat as AI loot on
-	 * defeat, so it visibly reads as a real choice, not an instant snap.
-	 * No skip option — surrender always costs an item if one exists.
+	 * Surrender: loser gives one item from their own panel.
+	 * Human uses surrenderLootPanel + setOnGive. AI auto-picks.
 	 */
 	private async runSurrenderGiveSequence(
 		giverState: MercenaryState,
@@ -762,12 +760,8 @@ export class BattleOverlay implements Overlay {
 			this.lootResolve = resolve;
 			this.surrenderLootPanel.setOnGive((index) => {
 				this.pendingLootIndex = index;
-				this.lootConfirmPopup.x =
-					this.surrenderLootPanel.view.x -
-					this.arena.x +
-					this.surrenderLootPanel.panelWidth / 2;
-				this.lootConfirmPopup.y =
-					this.surrenderLootPanel.view.y - this.arena.y - 40;
+				this.lootConfirmPopup.x = this.game.app.screen.width / 2;
+				this.lootConfirmPopup.y = this.game.app.screen.height / 2;
 				this.lootConfirmText.text = "Give up this item?";
 				this.lootConfirmPopup.visible = true;
 			});
@@ -782,7 +776,7 @@ export class BattleOverlay implements Overlay {
 		this.pendingLootIndex = null;
 		this.lootConfirmPopup.visible = false;
 
-		if (!accept) return; // panels stay open, pick again
+		if (!accept) return;
 
 		this.applyLoot(index);
 		this.lootResolve?.();
@@ -796,7 +790,6 @@ export class BattleOverlay implements Overlay {
 		this.lootResolve = null;
 	}
 
-	/** If the winner's inventory is full, nothing transfers — they use their own panel's Drop, then Take again. */
 	private applyLoot(index: number): void {
 		if (!this.currentWinnerState || !this.currentLoserState) return;
 		const item = this.currentLoserState.items[index];
@@ -811,6 +804,7 @@ export class BattleOverlay implements Overlay {
 		this.currentWinnerState.items[emptySlot] = item;
 		this.winnerLootPanel.sync(this.currentWinnerState.items);
 		this.loserLootPanel.sync(this.currentLoserState.items);
+		this.surrenderLootPanel.sync(this.currentLoserState.items);
 	}
 
 	private async resolveLocalChoice(localChoice: CombatChoice): Promise<void> {
@@ -823,8 +817,6 @@ export class BattleOverlay implements Overlay {
 				? this.defenderArchetype
 				: this.attackerArchetype;
 
-		// otherState is the monster whenever it's on the side NOT being
-		// controlled by the local player right now
 		const otherIsMonster =
 			(this.localHumanRole !== "attacker" && this.isAttackerMonster) ||
 			(this.localHumanRole === "attacker" && this.isDefenderMonster);
@@ -939,10 +931,14 @@ export class BattleOverlay implements Overlay {
 			const receiverState =
 				surrenderer === "attacker" ? this.defenderState : this.attackerState;
 
+			const receiverIsMonster =
+				(surrenderer === "attacker" && this.isDefenderMonster) ||
+				(surrenderer === "defender" && this.isAttackerMonster);
+
 			const consequence = resolveSurrender(
 				giverState.items.filter((i) => i !== null).length,
 			);
-			if (consequence.itemGiven) {
+			if (consequence.itemGiven && !receiverIsMonster) {
 				await this.runSurrenderGiveSequence(
 					giverState,
 					receiverState,
@@ -956,14 +952,15 @@ export class BattleOverlay implements Overlay {
 		} else {
 			if (this.attackerState.currentHp <= 0) {
 				if (this.isAttackerMonster) {
-					// Monsters die outright — no knockout revival, no loot
-					// (they carry none), no teleport. MapScene removes them
-					// from the board entirely on this flag.
 					attackerMonsterDied = true;
 				} else {
-					const consequence = resolveDefeat(this.attackerState.stats, true);
+					const defeatedByHunter = !this.isDefenderMonster;
+					const consequence = resolveDefeat(
+						this.attackerState.stats,
+						defeatedByHunter,
+					);
 					this.attackerState.hpCeiling = consequence.hpCeiling;
-					if (consequence.itemStolen) {
+					if (consequence.itemStolen && defeatedByHunter) {
 						await this.runLootSequence(
 							this.defenderState,
 							this.attackerState,
@@ -979,9 +976,13 @@ export class BattleOverlay implements Overlay {
 				if (this.isDefenderMonster) {
 					defenderMonsterDied = true;
 				} else {
-					const consequence = resolveDefeat(this.defenderState.stats, true);
+					const defeatedByHunter = !this.isAttackerMonster;
+					const consequence = resolveDefeat(
+						this.defenderState.stats,
+						defeatedByHunter,
+					);
 					this.defenderState.hpCeiling = consequence.hpCeiling;
-					if (consequence.itemStolen) {
+					if (consequence.itemStolen && defeatedByHunter) {
 						await this.runLootSequence(
 							this.attackerState,
 							this.defenderState,
