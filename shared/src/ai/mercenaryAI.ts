@@ -53,6 +53,18 @@ function manhattanDistance(a: GridCoord, b: GridCoord): number {
 	return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 }
 
+function countNearby(
+	from: GridCoord,
+	coords: GridCoord[],
+	radius: number,
+): number {
+	let n = 0;
+	for (const c of coords) {
+		if (manhattanDistance(from, c) <= radius) n++;
+	}
+	return n;
+}
+
 /** True if this combatant's inventory holds the match target item. */
 function carriesTarget(
 	combatant: AiCombatant,
@@ -124,33 +136,71 @@ function decideCarrierTarget(
 	living: AiCombatant[],
 	chests: ChestInfo[],
 	exitCoord: GridCoord | null,
-	monsterCount: number,
+	monsterCoords: GridCoord[],
+	memory: AiMemory | null,
 ): GridCoord {
 	const hpRatio = self.currentHp / Math.max(1, self.stats.maxHp);
 	const foe = nearestOther(self.coord, living);
 	const chest = nearestUnopenedChest(self.coord, chests);
 	const goExit = (): GridCoord => exitCoord ?? self.coord;
 
+	const markExtract = () => {
+		if (memory) memory.extracting = true;
+	};
+
+	// Sticky: already committed to leaving — don't dither.
+	if (memory?.extracting && exitCoord) {
+		return goExit();
+	}
+
+	// Stolen-relic panic: any living hunter within 3 tiles → leave now.
+	const threatened = living.some(
+		(o) => manhattanDistance(self.coord, o.coord) <= 3,
+	);
+	if (threatened && exitCoord) {
+		markExtract();
+		return goExit();
+	}
+
 	switch (archetype) {
 		case "treasure": {
-			// Still room and still chests → loot before extract.
+			// 4+ items already: diminishing returns — extract.
+			if (self.items.length >= 4) {
+				markExtract();
+				return goExit();
+			}
 			if (emptyItemSlots(self) > 0 && chest) return chest;
+			markExtract();
 			return goExit();
 		}
 		case "aggressive": {
-			// Critical HP, or wounded with multiple hunters still up.
 			const cornered = hpRatio < 0.3 || (hpRatio < 0.5 && living.length >= 2);
-			if (cornered) return goExit();
+			if (cornered) {
+				const exitDist = exitCoord
+					? manhattanDistance(self.coord, exitCoord)
+					: Infinity;
+				// Exit too far and not critical yet → keep fighting locally.
+				if (exitDist > 12 && hpRatio >= 0.25 && foe) {
+					return foe.coord;
+				}
+				markExtract();
+				return goExit();
+			}
 			if (foe) return foe.coord;
+			markExtract();
 			return goExit();
 		}
 		case "balanced":
 		default: {
-			// Global monster pressure or low HP → leave; else nearby fight.
-			if (monsterCount >= 2 || hpRatio < 0.4) return goExit();
+			const nearbyMonsters = countNearby(self.coord, monsterCoords, 7);
+			if (nearbyMonsters >= 2 || hpRatio < 0.4) {
+				markExtract();
+				return goExit();
+			}
 			if (foe && manhattanDistance(self.coord, foe.coord) <= 4) {
 				return foe.coord;
 			}
+			markExtract();
 			return goExit();
 		}
 	}
@@ -174,7 +224,8 @@ export function decideMovementTarget(
 	chests: ChestInfo[],
 	targetItemId: string | null,
 	exitCoord: GridCoord | null = null,
-	monsterCount: number = 0,
+	monsterCoords: GridCoord[] = [],
+	memory: AiMemory | null = null,
 ): GridCoord {
 	const living = others.filter((o) => o.currentHp > 0);
 	const carrier = findCarrier(self, living, targetItemId);
@@ -186,7 +237,8 @@ export function decideMovementTarget(
 			living,
 			chests,
 			exitCoord,
-			monsterCount,
+			monsterCoords,
+			memory,
 		);
 	}
 

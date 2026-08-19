@@ -14,10 +14,16 @@ export interface AiMemory {
 	lastFleeDirection: GridCoord | null;
 	/** Consecutive turns spent fleeing without disengaging.  */
 	consecutiveFleeTurns: number;
+	/** Once true path toward exit until knockout / loss */
+	extracting: boolean;
 }
 
 export function createAiMemory(): AiMemory {
-	return { lastFleeDirection: null, consecutiveFleeTurns: 0 };
+	return {
+		lastFleeDirection: null,
+		consecutiveFleeTurns: 0,
+		extracting: false,
+	};
 }
 
 /** Call once an entity has committed to a flee move this turn. */
@@ -28,6 +34,10 @@ export function recordFlee(
 ): void {
 	memory.lastFleeDirection = { x: to.x - from.x, y: to.y - from.y };
 	memory.consecutiveFleeTurns += 1;
+}
+
+export function setExtracting(memory: AiMemory, value: boolean): void {
+	memory.extracting = value;
 }
 
 /** Call whenever an entity does NOT flee this turn — fights, rests, holds — so a stale direction doesn't bias a future flee. */

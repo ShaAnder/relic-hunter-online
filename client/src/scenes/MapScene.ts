@@ -893,6 +893,13 @@ export class MapScene implements Scene {
 			this.game.app.screen.height,
 		);
 		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
+		// Not carrying → drop sticky extract so a later pickup starts fresh.
+		if (
+			!targetItemId ||
+			!unit.state.items.some((i) => i?.id === targetItemId)
+		) {
+			unit.memory.extracting = false;
+		}
 
 		const self = this.toCombatant(unit.state);
 		const preMoveHp = self.currentHp;
@@ -904,6 +911,7 @@ export class MapScene implements Scene {
 		}));
 
 		const exitCoord = RH.findExitTile(this.grid);
+		const monsterCoords = this.livingMonsters().map((m) => m.state.coord);
 		const target = RH.decideMovementTarget(
 			unit.archetype,
 			self,
@@ -911,7 +919,8 @@ export class MapScene implements Scene {
 			chestInfos,
 			targetItemId,
 			exitCoord,
-			this.livingMonsters().length,
+			monsterCoords,
+			unit.memory ?? null,
 		);
 
 		const targetCombatant = others.find(
