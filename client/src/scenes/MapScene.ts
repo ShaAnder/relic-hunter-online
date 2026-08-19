@@ -1468,6 +1468,7 @@ export class MapScene implements Scene {
 			...this.buildHunterVisualInfo(u),
 			currentHp: u.state.currentHp,
 			maxHp: u.state.stats.maxHp,
+			hpCeiling: u.state.hpCeiling,
 			items: u.state.items,
 		}));
 	}

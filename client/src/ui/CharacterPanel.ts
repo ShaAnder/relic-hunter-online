@@ -21,6 +21,7 @@ export class CharacterPanel {
 	private portrait = new Graphics();
 	private hpBarBg = new Graphics();
 	private hpBarFill = new Graphics();
+	private hpBarLost = new Graphics();
 	private hpText: Text;
 	private nameText: Text;
 	private statsText: Text;
@@ -55,6 +56,8 @@ export class CharacterPanel {
 
 		this.hpBarFill.y = this.portrait.y + 22;
 		this.infoBlock.addChild(this.hpBarFill);
+		this.hpBarLost.y = this.portrait.y + 22;
+		this.infoBlock.addChild(this.hpBarLost);
 
 		this.hpText = new Text({
 			text: "",
@@ -93,6 +96,7 @@ export class CharacterPanel {
 			this.statsText.text = "";
 			this.hpText.text = "";
 			this.hpBarFill.clear();
+			this.hpBarLost.clear();
 			return;
 		}
 		this.nameText.text = `${character.name}  ·  ${this.capitalize(character.characterClass)}`;
@@ -100,17 +104,28 @@ export class CharacterPanel {
 			`Mov ${state.stats.movement}   Atk ${state.stats.attack}   ` +
 			`Def ${state.stats.defense}   AP ${apRemaining}/${baseAP}`;
 
-		// True original max, not the post-knockout ceiling — a hunter
-		// revived at half strength should visibly show a half-full bar,
-		// not a deceptive full one. hpCeiling still correctly caps how
-		// high currentHp can actually climb; this only changes display.
 		const trueMaxHp = state.stats.maxHp;
-		const hpRatio = Math.max(0, Math.min(1, state.currentHp / trueMaxHp));
-		this.hpText.text = `${state.currentHp}/${trueMaxHp}`;
+		const ceiling = Math.max(1, state.hpCeiling);
+		const current = Math.max(0, state.currentHp);
+
+		const fillRatio = Math.max(0, Math.min(1, current / trueMaxHp));
+		const ceilingRatio = Math.max(0, Math.min(1, ceiling / trueMaxHp));
+
+		// current / ceiling — heal target is the reduced max
+		this.hpText.text = `${current}/${ceiling}`;
 
 		this.hpBarFill.clear();
-		this.hpBarFill.roundRect(CONTENT_X, 0, HP_BAR_WIDTH * hpRatio, 14, 3);
-		this.hpBarFill.fill(hpRatio > 0.3 ? 0x2ecc71 : 0xe74c3c);
+		this.hpBarFill.roundRect(CONTENT_X, 0, HP_BAR_WIDTH * fillRatio, 14, 3);
+		this.hpBarFill.fill(fillRatio > 0.3 ? 0x2ecc71 : 0xe74c3c);
+
+		// Black out the strip you can never heal into (ceiling → true max)
+		this.hpBarLost.clear();
+		if (ceilingRatio < 1) {
+			const lostX = CONTENT_X + HP_BAR_WIDTH * ceilingRatio;
+			const lostW = HP_BAR_WIDTH * (1 - ceilingRatio);
+			this.hpBarLost.roundRect(lostX, 0, lostW, 14, 3);
+			this.hpBarLost.fill({ color: 0x000000, alpha: 0.55 });
+		}
 	}
 
 	/** Top-left corner, small margin. */

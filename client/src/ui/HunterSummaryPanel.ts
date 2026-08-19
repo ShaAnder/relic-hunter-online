@@ -18,9 +18,9 @@ export interface HunterSummaryEntry {
 	accentColor: number;
 	currentHp: number;
 	maxHp: number;
+	hpCeiling: number;
 	items: (ItemData | null)[];
 }
-
 /**
  * Drop-down of individual, self-backed hunter cards — no shared panel
  * background, each hunter is its own compact card: small portrait, name
@@ -73,15 +73,32 @@ export class HunterSummaryPanel {
 		hpBarBg.fill(0x333333);
 		card.addChild(hpBarBg);
 
-		const ratio =
-			entry.maxHp > 0 ? Math.max(0, entry.currentHp) / entry.maxHp : 0;
+		const trueMax = Math.max(1, entry.maxHp);
+		const ceiling = Math.max(1, entry.hpCeiling);
+		const current = Math.max(0, entry.currentHp);
+		const fillRatio = Math.min(1, current / trueMax);
+		const ceilingRatio = Math.min(1, ceiling / trueMax);
+
 		const hpBarFill = new Graphics();
-		hpBarFill.roundRect(CONTENT_X, PAD + 14, HP_BAR_WIDTH * ratio, 8, 2);
-		hpBarFill.fill(ratio > 0.3 ? 0x2ecc71 : 0xe74c3c);
+		hpBarFill.roundRect(CONTENT_X, PAD + 14, HP_BAR_WIDTH * fillRatio, 8, 2);
+		hpBarFill.fill(fillRatio > 0.3 ? 0x2ecc71 : 0xe74c3c);
 		card.addChild(hpBarFill);
 
+		if (ceilingRatio < 1) {
+			const lost = new Graphics();
+			lost.roundRect(
+				CONTENT_X + HP_BAR_WIDTH * ceilingRatio,
+				PAD + 14,
+				HP_BAR_WIDTH * (1 - ceilingRatio),
+				8,
+				2,
+			);
+			lost.fill({ color: 0x000000, alpha: 0.55 });
+			card.addChild(lost);
+		}
+
 		const hpText = new Text({
-			text: `${Math.max(0, entry.currentHp)}/${entry.maxHp}`,
+			text: `${current}/${ceiling}`,
 			style: { fill: 0xaaaaaa, fontSize: 8 },
 		});
 		hpText.anchor.set(1, 0);
@@ -89,23 +106,25 @@ export class HunterSummaryPanel {
 		hpText.y = PAD + 14;
 		card.addChild(hpText);
 
-		entry.items.forEach((item, i) => {
+		for (let s = 0; s < 6; s++) {
 			const slot = new Graphics();
 			slot.roundRect(0, 0, SLOT, SLOT, 3);
-			slot.fill(0x222222);
-			slot.stroke({ width: 1, color: item ? 0xd4af37 : 0x555555 });
-			if (item) {
-				slot.circle(SLOT / 2, SLOT / 2, 6);
-				slot.fill(
-					item.id.includes("crown") || item.id.includes("ember")
-						? 0xffd700
-						: 0x88ccff,
-				);
-			}
-			slot.x = PAD + i * (SLOT + SLOT_GAP);
+			slot.fill(0x2a2a2a);
+			slot.stroke({ width: 1, color: 0x555555 });
+			slot.x = PAD + s * (SLOT + SLOT_GAP);
 			slot.y = ROW2_Y;
 			card.addChild(slot);
-		});
+
+			const item = entry.items[s];
+			if (item) {
+				const dot = new Graphics();
+				dot.circle(SLOT / 2, SLOT / 2, 5);
+				dot.fill(0xd4af37);
+				dot.x = slot.x;
+				dot.y = slot.y;
+				card.addChild(dot);
+			}
+		}
 
 		return card;
 	}

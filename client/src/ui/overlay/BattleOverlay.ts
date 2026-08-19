@@ -502,18 +502,26 @@ export class BattleOverlay implements Overlay {
 	private syncOneHpBar(
 		text: Text,
 		bar: Graphics,
-		state: EntityCore,
+		state: MercenaryState,
 		fillColor: number,
 	): void {
 		const hp = Math.max(0, state.currentHp);
-		const max = state.stats.maxHp;
-		text.text = `${hp} / ${max} HP`;
-		const ratio = max > 0 ? hp / max : 0;
+		const trueMax = Math.max(1, state.stats.maxHp);
+		const ceiling = Math.max(1, state.hpCeiling);
+		const fillRatio = Math.min(1, hp / trueMax);
+		const ceilingRatio = Math.min(1, ceiling / trueMax);
+
+		text.text = `${hp} / ${ceiling} HP`;
+
 		bar.clear();
 		bar.rect(0, 0, 170, 10);
 		bar.fill(0x333333);
-		bar.rect(0, 0, 170 * ratio, 10);
-		bar.fill(ratio > 0.3 ? fillColor : 0xe74c3c);
+		bar.rect(0, 0, 170 * fillRatio, 10);
+		bar.fill(fillRatio > 0.3 ? fillColor : 0xe74c3c);
+		if (ceilingRatio < 1) {
+			bar.rect(170 * ceilingRatio, 0, 170 * (1 - ceilingRatio), 10);
+			bar.fill({ color: 0x000000, alpha: 0.55 });
+		}
 	}
 
 	private buildAttackerIndicator(): void {
