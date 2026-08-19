@@ -485,71 +485,206 @@ function cardStrength(card: CardData): number {
 }
 
 /**
- * In-combat action: Attack/Defend bias by archetype, then strongest legal
- * card. Flees when badly hurt or heavily outmatched — Run if movement
- * gives a real chance to escape, Surrender (guaranteed, costs an item)
- * if it doesn't.
+ * Context bag for in-combat AI. Prefer this over a long positional arg
+ * list so callers can pass only what they know (exit distance, etc.)
+ * without breaking older call sites mid-migration.
+ */
+export interface CombatAiContext {
+	/** Live HP for this side. */
+	currentHp: number;
+	/** Opponent stats when known — used for power / run checks. */
+	opponentStats?: MercenaryStats;
+	/** False when this side cannot legally Attack (e.g. ranged lock). */
+	canAttack?: boolean;
+	/** Opponent is a monster — soft bias, not a hard ban on surrender. */
+	againstMonster?: boolean;
+	/**
+	 * This side initiated the fight / spent Attack AP to open it.
+	 * Blocks free surrender on the opening exchange so AI does not
+	 * walk in and immediately fold.
+	 */
+	committed?: boolean;
+	/** Holding the match target item. */
+	carryingRelic?: boolean;
+	/** Manhattan (or approx) distance to revealed Exit; null if none. */
+	exitDistance?: number | null;
+	/** Distance to the current relic carrier if someone else holds it. */
+	carrierDistance?: number | null;
+	/** Filled inventory slots — surrender costs a real item when > 0. */
+	itemCount?: number;
+}
+
+/**
+ * Pick the strongest hand card matching the wanted colors for an action.
+ */
+function bestCardFor(
+	hand: CardData[],
+	colors: CardData["color"][],
+): CardData | undefined {
+	const candidates = hand.filter((c) => colors.includes(c.color));
+	if (candidates.length === 0) return undefined;
+	return candidates.reduce((a, b) =>
+		cardStrength(b) > cardStrength(a) ? b : a,
+	);
+}
+
+/**
+ * In-combat action selection with scored options.
+ *
+ * Design:
+ * - Surrender is a *tool* (escape / random teleport), not a panic default
+ *   and not banned. Prefer Run when speed works; Attack/Defend when the
+ *   matchup is fine.
+ * - Favored or even power + decent HP → stay in the fight.
+ * - Committed initiators do not free-surrender on the opening exchange.
+ * - Optional tactical warp: losing locally while an objective is far can
+ *   raise surrender as a reposition gamble (aggressive cross-map case).
+ * - againstMonster softens surrender (no loot for them) but still allows
+ *   it when critically stuck so the teleport remains available.
+ *
+ * @param hand - this side's cards
+ * @param stats - this side's stats (also stamped onto the returned choice)
+ * @param archetype - aggressive | treasure | balanced
+ * @param ctx - HP, opponent, commitment, objective distances, etc.
+ * @author ShaAnder
  */
 export function chooseCombatAction(
 	hand: CardData[],
 	stats: MercenaryStats,
-	archetype: AiArchetype = "balanced",
-	currentHp?: number,
-	opponentStats?: MercenaryStats,
-	canAttack: boolean = true,
+	archetype: AiArchetype,
+	ctx: CombatAiContext,
 ): CombatChoice {
-	if (currentHp !== undefined) {
-		const hpRatio = currentHp / Math.max(1, stats.maxHp);
+	const currentHp = ctx.currentHp;
+	const opponentStats = ctx.opponentStats;
+	const canAttack = ctx.canAttack !== false;
+	const againstMonster = ctx.againstMonster === true;
+	const committed = ctx.committed === true;
+	const itemCount = ctx.itemCount ?? 0;
+	const exitDistance = ctx.exitDistance ?? null;
+	const carrierDistance = ctx.carrierDistance ?? null;
 
-		let fleeThreshold = 0.3;
-		if (archetype === "aggressive") fleeThreshold = 0.15;
-		if (archetype === "treasure") fleeThreshold = 0.45;
+	const hpRatio = currentHp / Math.max(1, stats.maxHp);
+	const ownPower = stats.attack + stats.defense + stats.movement;
+	const oppPower = opponentStats
+		? opponentStats.attack + opponentStats.defense + opponentStats.movement
+		: ownPower;
+	const powerRatio = ownPower / Math.max(1, oppPower);
 
-		let shouldFlee = hpRatio < fleeThreshold;
+	const canLikelyEscape =
+		!opponentStats || stats.movement > opponentStats.movement * 0.75;
 
-		if (opponentStats) {
-			const ownPower = stats.attack + stats.defense + stats.movement;
-			const oppPower =
-				opponentStats.attack + opponentStats.defense + opponentStats.movement;
-			if (oppPower > ownPower * 1.5) shouldFlee = true;
-		}
+	let fleeThreshold = 0.25;
+	if (archetype === "aggressive") fleeThreshold = 0.12;
+	if (archetype === "treasure") fleeThreshold = 0.4;
 
-		if (shouldFlee) {
-			// Run's catch-chance worsens sharply once the runner's movement
-			// falls meaningfully below the opponent's — at that point a
-			// contested escape is more likely to fail than a guaranteed
-			// Surrender is to cost more than one item.
-			const canLikelyEscape =
-				!opponentStats || stats.movement > opponentStats.movement * 0.75;
+	const criticallyLow = hpRatio < fleeThreshold;
+	const badlyOutmatched = powerRatio < 0.55;
+	const favoredOrEven = powerRatio >= 0.9 && hpRatio >= 0.25;
 
-			if (!canLikelyEscape) {
-				return { action: "surrender", stats };
-			}
+	// Score each legal action; pick the highest. Small random jitter
+	// breaks ties so two equal options do not always resolve the same way.
+	const scores: { action: CombatAction; score: number }[] = [];
 
-			const blueCards = hand.filter((c) => c.color === "blue");
-			const card = blueCards.length
-				? blueCards.reduce((a, b) =>
-						cardStrength(b) > cardStrength(a) ? b : a,
-					)
-				: undefined;
-			return { action: "run", stats, card };
+	// --- Attack / Defend (stay in the fight) ---
+	let attackBase = 50;
+	let defendBase = 50;
+	if (archetype === "aggressive") {
+		attackBase = 70;
+		defendBase = 35;
+	} else if (archetype === "treasure") {
+		attackBase = 35;
+		defendBase = 60;
+	}
+	if (favoredOrEven) {
+		attackBase += 20;
+		defendBase += 10;
+	}
+	if (badlyOutmatched) {
+		attackBase -= 25;
+		defendBase -= 5;
+	}
+	if (criticallyLow) {
+		attackBase -= 30;
+		defendBase -= 10;
+	}
+	if (!canAttack) {
+		attackBase = -Infinity;
+	}
+
+	scores.push({ action: "attack", score: attackBase });
+	scores.push({ action: "defend", score: defendBase });
+
+	// --- Run ---
+	let runScore = -20;
+	if (canLikelyEscape) {
+		runScore = 40;
+		if (criticallyLow) runScore += 30;
+		if (badlyOutmatched) runScore += 20;
+		if (archetype === "treasure") runScore += 10;
+		if (archetype === "aggressive") runScore -= 10;
+	} else {
+		// Unlikely escape — still slightly better than nothing when dying
+		if (criticallyLow) runScore = 10;
+	}
+	scores.push({ action: "run", score: runScore });
+
+	// --- Surrender (tool: guaranteed leave + teleport, costs an item) ---
+	let surrenderScore = -40;
+	if (!favoredOrEven) {
+		if (criticallyLow && !canLikelyEscape) surrenderScore = 55;
+		else if (badlyOutmatched && !canLikelyEscape) surrenderScore = 45;
+		else if (criticallyLow) surrenderScore = 25;
+	}
+	// Opening exchange you walked into — do not free-fold.
+	if (committed) surrenderScore -= 50;
+	// Soft bias vs monsters (no loot transfer); still allow when critical.
+	if (againstMonster && !criticallyLow) surrenderScore -= 25;
+	// Paying an item hurts treasure more.
+	if (itemCount > 0 && archetype === "treasure") surrenderScore -= 10;
+	// Tactical warp: objective far, local fight is a dead end.
+	const objectiveFar =
+		(exitDistance !== null && exitDistance > 10) ||
+		(carrierDistance !== null && carrierDistance > 10);
+	if (objectiveFar && !canLikelyEscape && powerRatio < 0.7) {
+		surrenderScore += 20;
+		if (archetype === "aggressive") surrenderScore += 10;
+	}
+	scores.push({ action: "surrender", score: surrenderScore });
+
+	// Jitter + pick
+	let bestAction: CombatAction = "defend";
+	let bestScore = -Infinity;
+	for (const row of scores) {
+		if (row.score === -Infinity) continue;
+		const jittered = row.score + Math.random() * 4;
+		if (jittered > bestScore) {
+			bestScore = jittered;
+			bestAction = row.action;
 		}
 	}
 
-	let attackChance = 0.5;
-	if (archetype === "aggressive") attackChance = 0.75;
-	if (archetype === "treasure") attackChance = 0.35;
-
-	const action: CombatAction =
-		canAttack && Math.random() < attackChance ? "attack" : "defend";
-	const wantedColor = action === "attack" ? "red" : "yellow";
-
-	const candidates = hand.filter((c) => c.color === wantedColor);
-	const best = candidates.length
-		? candidates.reduce((a, b) => (cardStrength(b) > cardStrength(a) ? b : a))
-		: undefined;
-
-	return { action, stats, card: best };
+	if (bestAction === "attack") {
+		return {
+			action: "attack",
+			stats,
+			card: bestCardFor(hand, ["red"]),
+		};
+	}
+	if (bestAction === "defend") {
+		return {
+			action: "defend",
+			stats,
+			card: bestCardFor(hand, ["yellow"]),
+		};
+	}
+	if (bestAction === "run") {
+		return {
+			action: "run",
+			stats,
+			card: bestCardFor(hand, ["blue", "yellow"]),
+		};
+	}
+	return { action: "surrender", stats };
 }
 
 /**

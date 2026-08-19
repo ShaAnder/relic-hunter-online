@@ -33,3 +33,13 @@ A rework of the Move action's UX has been discussed and designed but not built: 
 The shared deck still doesn't reset between separate matches, which is a confirmed, real bug rather than something that's actually been addressed. The HP bar still treats a knocked-out hunter's reduced ceiling as their full bar rather than showing the true reduction. AI hunters can still Rest more than feels ideal, most likely because the amount restored per Rest is small relative to the threshold that triggers resting rather than because the threshold logic itself is wrong. And discarding the win-condition relic is still fully allowed with no rule or warning attached to it either way.
 
 See `docs/known-issues-and-suggestions.md` for the complete list, including things that were considered and explicitly turned down.
+
+## Session update (2026-08-19)
+
+**Combat AI context system landed.** `chooseCombatAction` now takes a `CombatAiContext` bag (HP, opponent stats, commitment, against-monster, optional exit/carrier distance, item count) and scores Attack / Defend / Run / Surrender instead of cascading unconditional surrender. Favored matchups stay in the fight; Run is preferred when escape is realistic; Surrender is a tool (teleport) used when stuck or for a later tactical-warp case — not a panic default. Initiators get a commitment penalty so they do not walk in and free-fold. BattleOverlay auto-fight and human-vs-AI branches pass the context object.
+
+**Also in recent local work (verify against your tree):** exit-on-relic-find, chest spread, AI extract sticky intent, HP ceiling visual on CharacterPanel / HunterSummary / BattleOverlay, Escape blocked while `BattleOverlay.blocksEscape` is set, monsters blocked from receiving defeat/surrender loot.
+
+**Still open for next bug pass:** defeated-hunter inventory / loot softlock (if Escape lock did not fully clear it), click-target bias, multi-monitor layout.
+
+**Deferred combat polish:** pass real `exitDistance` / `carrierDistance` / `carryingRelic` from MapScene into BattleOverlay so tactical-warp scoring is live; sequential combat resolution rework when designed.

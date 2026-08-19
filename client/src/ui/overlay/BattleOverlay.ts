@@ -225,9 +225,15 @@ export class BattleOverlay implements Overlay {
 					this.attackerState.hand,
 					this.attackerState.stats,
 					this.attackerArchetype,
-					this.attackerState.currentHp,
-					this.defenderState.stats,
-					true,
+					{
+						currentHp: this.attackerState.currentHp,
+						opponentStats: this.defenderState.stats,
+						canAttack: true,
+						againstMonster: this.isDefenderMonster,
+						committed: true,
+						itemCount: this.attackerState.items.filter((i) => i !== null)
+							.length,
+					},
 				);
 		const defenderChoice = this.isDefenderMonster
 			? monsterCombatChoice(this.defenderState.stats, !this.isRangedInitiated)
@@ -235,9 +241,15 @@ export class BattleOverlay implements Overlay {
 					this.defenderState.hand,
 					this.defenderState.stats,
 					this.defenderArchetype,
-					this.defenderState.currentHp,
-					this.attackerState.stats,
-					!this.isRangedInitiated,
+					{
+						currentHp: this.defenderState.currentHp,
+						opponentStats: this.attackerState.stats,
+						canAttack: !this.isRangedInitiated,
+						againstMonster: this.isAttackerMonster,
+						committed: false,
+						itemCount: this.defenderState.items.filter((i) => i !== null)
+							.length,
+					},
 				);
 		void this.resolveRound(attackerChoice, defenderChoice);
 	}
@@ -822,14 +834,18 @@ export class BattleOverlay implements Overlay {
 					otherState.stats,
 					this.localHumanRole === "defender" ? true : !this.isRangedInitiated,
 				)
-			: chooseCombatAction(
-					otherState.hand,
-					otherState.stats,
-					otherArchetype,
-					otherState.currentHp,
-					localChoice.stats,
-					this.localHumanRole === "defender" ? true : !this.isRangedInitiated,
-				);
+			: chooseCombatAction(otherState.hand, otherState.stats, otherArchetype, {
+					currentHp: otherState.currentHp,
+					opponentStats: localChoice.stats,
+					canAttack:
+						this.localHumanRole === "defender" ? true : !this.isRangedInitiated,
+					againstMonster:
+						this.localHumanRole === "attacker"
+							? this.isAttackerMonster
+							: this.isDefenderMonster,
+					committed: this.localHumanRole === "defender",
+					itemCount: otherState.items.filter((i) => i !== null).length,
+				});
 
 		const attackerChoice =
 			this.localHumanRole === "attacker" ? localChoice : otherChoice;

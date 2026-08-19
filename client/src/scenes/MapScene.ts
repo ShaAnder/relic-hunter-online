@@ -1915,7 +1915,9 @@ export class MapScene implements Scene {
 	/** [Esc] cancel/pause toggle · [E] end turn · [R] regen · arrows+Enter for hand nav. */
 	private handleKeyDown = (event: KeyboardEvent): void => {
 		if (this.game.overlays.isOpen) {
-			if (event.key === "Escape") this.game.overlays.hide();
+			if (event.key === "Escape" && !this.game.overlays.active?.blocksEscape) {
+				this.game.overlays.hide();
+			}
 			return;
 		}
 

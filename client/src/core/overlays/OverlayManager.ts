@@ -27,6 +27,11 @@ export class OverlayManager {
 		return this.current !== null;
 	}
 
+	/** Current overlay, if any — scenes use this for Escape policy. */
+	get active(): Overlay | null {
+		return this.current;
+	}
+
 	/**
 	 * Show an overlay on top of the stage. Replaces any overlay already
 	 * showing.

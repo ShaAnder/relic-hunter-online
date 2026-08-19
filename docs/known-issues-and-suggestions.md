@@ -83,3 +83,9 @@ Two separate playtesters ran matches this round, one focused on finding breakage
 **Items should carry passive value even for a "loot goblin," non-confrontational playstyle** — not just exist to eventually satisfy the win condition. Raised as a general design direction rather than a specific item proposal.
 
 **A clearer UI signal for who currently holds the relic.** More than one point of confusion in the sango session traced back to not knowing whether "target found" meant _they_ were holding it — worth a dedicated, always-visible indicator rather than relying on the feedback-toast message alone.
+
+## Fixed (2026-08-19 combat AI pass)
+
+**AI unconditional combat surrender.** Hunters could fold fights they were winning or even-matched because a soft power gap (1.5×) and HP threshold forced flee → surrender. Replaced with scored Attack/Defend/Run/Surrender via `CombatAiContext`. Surrender remains available as an escape/teleport tool when actually stuck; committed initiators are heavily penalized from free-folding on the opening exchange.
+
+**Related battle hygiene (pair with this pass if not already in tree):** block Escape dismissing `BattleOverlay` mid-fight (`blocksEscape`); do not run loot/surrender-give sequences when the receiver is a monster.
