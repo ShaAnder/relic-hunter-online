@@ -24,30 +24,39 @@ interface MoveControllerOptions {
 	) => void;
 }
 
+/** Move aiming phases — drag later only edits pending, never a second pipeline. */
+export type MovePhase = "idle" | "aiming" | "previewLocked";
+
+export interface PathIntent {
+	target: GridCoord;
+	/** Steps after the unit's current tile (getPathTo shape). */
+	path: GridCoord[];
+	/** Future: player-forced detours. Empty in this draft. */
+	waypoints: GridCoord[];
+}
+
 /**
- * Owns the "Move Mode" state machine: entering/exiting, movement range,
- * path preview with clamping, the bright destination glow, and committing
- * the move. BattleScene decides when to enter/exit and reacts to commits.
+ * Move mode state machine.
  *
- * The camera lock lifecycle is driven by the scene's update() since it
- * knows about the move animation — enter() only does the initial lock so
- * aiming starts centered.
+ * idle → aiming (enter): hover previews path
+ * aiming → previewLocked (primary on legal tile): path frozen
+ * previewLocked → commit (primary again / confirm) or aiming (cancel)
  *
- * Added pendingEnter + requestEnter for card-play UX safety (see 05-turn-ap-system-design.md).
+ * Drag (later) only rebuilds pending while aiming / locked — same commit path.
+ *
+ * @author ShaAnder
  */
 export class MoveController {
 	readonly view = new Container();
 
-	// Render layers, bottom to top
 	private rangeContainer = new Container();
 	private pathContainer = new Container();
 	private highlightContainer = new Container();
 
-	// Aiming state
-	private isActive = false;
+	private phase: MovePhase = "idle";
 	private movementRange: Map<string, MovementRangeEntry> | null = null;
+	private pending: PathIntent | null = null;
 
-	// UX safety: slight delay after card play so range tiles don't overlap clicks
 	private pendingEnterTimeout: number | null = null;
 	private readonly ENTER_DELAY_MS = 180;
 
@@ -59,18 +68,16 @@ export class MoveController {
 		this.view.addChild(this.highlightContainer);
 	}
 
-	/** Whether move mode is currently engaged. */
 	get active(): boolean {
-		return this.isActive;
+		return this.phase !== "idle";
 	}
 
-	/**
-	 * Request move mode (non-blocking). Applies a short delay to avoid
-	 * accidental clicks immediately after card selection. Scene still
-	 * spends AP instantly for confirmation feel.
-	 */
+	get movePhase(): MovePhase {
+		return this.phase;
+	}
+
 	requestEnter(): void {
-		if (this.pendingEnterTimeout !== null) return; // already pending
+		if (this.pendingEnterTimeout !== null) return;
 
 		this.pendingEnterTimeout = window.setTimeout(() => {
 			this.pendingEnterTimeout = null;
@@ -78,25 +85,20 @@ export class MoveController {
 		}, this.ENTER_DELAY_MS);
 	}
 
-	/**
-	 * Engage move mode immediately (bypasses delay for direct calls, e.g. keyboard).
-	 * Refuses while animating or with no movement budget. The turn gate
-	 * (AP, press count, lockout) is the scene's job via beginMovement —
-	 * this controller only owns the aiming state machine.
-	 */
 	enter(budgetOverride?: number, ignoresZoc: boolean = false): void {
 		if (this.pendingEnterTimeout !== null) {
 			window.clearTimeout(this.pendingEnterTimeout);
 			this.pendingEnterTimeout = null;
 		}
-		if (this.isActive) return;
-		if (this.options.mercenary.isAnimating) return;
 
-		const budget = budgetOverride ?? this.options.getMovementRemaining();
-		if (budget <= 0) return;
-
-		this.isActive = true;
 		this.currentIgnoresZoc = ignoresZoc;
+		this.phase = "aiming";
+		this.pending = null;
+
+		const budget =
+			budgetOverride !== undefined
+				? budgetOverride
+				: this.options.getMovementRemaining();
 
 		this.options.camera.lockTo(gridToScreen(this.options.getMercenaryCoord()));
 
@@ -109,35 +111,100 @@ export class MoveController {
 			blocked,
 		);
 
+		this.clearPreview();
 		this.renderRange();
 	}
 
-	/** Cancel move mode and clear all aiming visuals. */
 	exit(): void {
 		if (this.pendingEnterTimeout !== null) {
 			window.clearTimeout(this.pendingEnterTimeout);
 			this.pendingEnterTimeout = null;
 		}
-		if (!this.isActive) return;
+		if (this.phase === "idle") return;
 
-		this.isActive = false;
+		this.phase = "idle";
 		this.movementRange = null;
+		this.pending = null;
 
 		this.rangeContainer.removeChildren();
 		this.pathContainer.removeChildren();
 		this.highlightContainer.removeChildren();
 
-		// Covers plain cancels; on a commit the scene re-locks next frame
-		// because the mercenary is animating.
 		this.options.camera.unlock();
 	}
 
 	/**
-	 * Update the path preview for the hovered tile.
-	 * Hovers outside the range clamp to the nearest reachable tile.
+	 * Hover preview — only while aiming. Locked preview stays put.
 	 */
 	onHover(hovered: GridCoord): void {
-		if (!this.isActive || !this.movementRange) return;
+		if (this.phase !== "aiming" || !this.movementRange) return;
+
+		const intent = this.buildIntentToward(hovered);
+		if (!intent) {
+			this.clearPreview();
+			return;
+		}
+
+		this.pending = intent;
+		this.renderPathPreview(this.options.getMercenaryCoord(), intent.path);
+	}
+
+	/**
+	 * Primary click (left).
+	 * aiming + legal → lock preview
+	 * previewLocked + click → confirm commit
+	 */
+	onPrimary(clickedTile: GridCoord): boolean {
+		if (this.phase === "idle") return false;
+		if (this.options.mercenary.isAnimating) return false;
+		if (!this.movementRange) return false;
+
+		if (this.phase === "aiming") {
+			const intent = this.buildIntentToward(clickedTile);
+			if (!intent || intent.path.length === 0) return false;
+
+			this.pending = intent;
+			this.phase = "previewLocked";
+			this.renderPathPreview(this.options.getMercenaryCoord(), intent.path);
+			return true;
+		}
+
+		// previewLocked — second click confirms current pending path
+		return this.commitPending();
+	}
+
+	/**
+	 * Cancel locked preview back to aiming (right-click).
+	 * Returns true if it handled the cancel.
+	 */
+	onCancel(): boolean {
+		if (this.phase === "previewLocked") {
+			this.phase = "aiming";
+			this.pending = null;
+			this.clearPreview();
+			return true;
+		}
+		if (this.phase === "aiming") {
+			this.exit();
+			return true;
+		}
+		return false;
+	}
+
+	/** Explicit confirm (Enter) while preview is locked. */
+	confirm(): boolean {
+		return this.commitPending();
+	}
+
+	/** @deprecated use onPrimary — kept so old MapScene call sites compile briefly */
+	tryCommit(clickedTile: GridCoord): boolean {
+		return this.onPrimary(clickedTile);
+	}
+
+	// ---------- internals ----------
+
+	private buildIntentToward(hovered: GridCoord): PathIntent | null {
+		if (!this.movementRange) return null;
 
 		const blocked = new Set(this.options.getBlockedCoords().map(coordKey));
 
@@ -150,31 +217,25 @@ export class MoveController {
 					blocked,
 				);
 
-		if (!target) {
-			this.clearPreview();
-			return;
-		}
+		if (!target) return null;
 
 		const path = getPathTo(this.movementRange, target) ?? [];
-		this.renderPathPreview(this.options.getMercenaryCoord(), path);
+		if (path.length === 0) return null;
+
+		return { target, path, waypoints: [] };
 	}
 
-	/** Commit the previewed move; returns false if nothing valid to commit. */
-	tryCommit(clickedTile: GridCoord): boolean {
-		if (!this.isActive) return false;
+	private commitPending(): boolean {
+		if (this.phase !== "previewLocked" || !this.pending) return false;
+		if (this.pending.path.length === 0) return false;
 		if (this.options.mercenary.isAnimating) return false;
-		if (!this.movementRange?.has(coordKey(clickedTile))) return false;
 
-		const path = getPathTo(this.movementRange, clickedTile) ?? [];
-		if (path.length === 0) return false;
-
-		this.options.onMoveCommitted(clickedTile, path, this.currentIgnoresZoc);
+		const { target, path } = this.pending;
+		this.options.onMoveCommitted(target, path, this.currentIgnoresZoc);
+		this.exit();
 		return true;
 	}
 
-	// ---------- private rendering ----------
-
-	/** Fill every reachable tile with the range tint. */
 	private renderRange(): void {
 		this.rangeContainer.removeChildren();
 		if (!this.movementRange) return;
@@ -201,30 +262,28 @@ export class MoveController {
 		}
 	}
 
-	/** Draw the path line, joints, and the destination glow. */
 	private renderPathPreview(from: GridCoord, path: GridCoord[]): void {
 		this.pathContainer.removeChildren();
 		this.highlightContainer.removeChildren();
+
 		if (path.length === 0) return;
 
 		const points = [from, ...path].map(gridToScreen);
 
-		// Path line
 		const line = new Graphics();
 		line.moveTo(points[0].x, points[0].y);
 		for (let i = 1; i < points.length; i++) {
 			line.lineTo(points[i].x, points[i].y);
 		}
 		line.stroke({
-			width: 4,
-			color: 0x000000,
+			width: 3,
+			color: this.phase === "previewLocked" ? 0xffd700 : 0x000000,
 			alpha: 0.85,
 			cap: "round",
 			join: "round",
 		});
 		this.pathContainer.addChild(line);
 
-		// Joints along the path, larger white dot on the destination
 		for (let i = 1; i < points.length; i++) {
 			const isDest = i === points.length - 1;
 			const joint = new Graphics();
@@ -236,8 +295,6 @@ export class MoveController {
 			this.pathContainer.addChild(joint);
 		}
 
-		// Destination glow — matters most when the hover is clamped, since
-		// this tile (not the cursor) is where the hunter will land
 		const dest = points[points.length - 1];
 		const glow = new Graphics();
 		glow.poly([
@@ -250,14 +307,16 @@ export class MoveController {
 			-TILE_WIDTH / 2,
 			0,
 		]);
-		glow.fill({ color: 0x7ec8ff, alpha: 0.65 });
+		glow.fill({
+			color: this.phase === "previewLocked" ? 0xffd700 : 0x7ec8ff,
+			alpha: 0.65,
+		});
 		glow.stroke({ width: 2, color: 0xffffff, alpha: 0.9 });
 		glow.x = dest.x;
 		glow.y = dest.y;
 		this.highlightContainer.addChild(glow);
 	}
 
-	/** Clear the preview visuals without leaving move mode. */
 	private clearPreview(): void {
 		this.pathContainer.removeChildren();
 		this.highlightContainer.removeChildren();

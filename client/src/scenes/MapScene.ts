@@ -328,6 +328,10 @@ export class MapScene implements Scene {
 		window.addEventListener("keydown", this.handleKeyDown);
 		this.game.app.canvas.addEventListener("click", this.handleClick);
 		this.game.app.canvas.addEventListener("mousemove", this.handleMouseMove);
+		this.game.app.canvas.addEventListener(
+			"contextmenu",
+			this.handleContextMenu,
+		);
 	}
 
 	/** Tear down visuals and input listeners. */
@@ -1950,7 +1954,29 @@ export class MapScene implements Scene {
 				break;
 			case "Enter":
 			case " ":
+				if (this.moveController.movePhase === "previewLocked") {
+					this.moveController.confirm();
+					break;
+				}
 				if (this.hand.isSelecting) this.hand.confirmHighlighted();
+				break;
+			case "Escape":
+				if (this.targetingActive) {
+					this.exitTargetingMode();
+				} else if (this.moveController.active) {
+					if (!this.moveController.onCancel()) {
+						this.moveController.exit();
+					}
+					if (!this.moveController.active) {
+						this.hand.exitSelectionMode();
+						this.buttonBar.setMoveActive(false);
+						this.buttonBar.closeMenu();
+					}
+				} else if (this.hand.isSelecting) {
+					// ... existing
+				} else {
+					this.openPauseMenu();
+				}
 				break;
 		}
 	};
@@ -2013,7 +2039,7 @@ export class MapScene implements Scene {
 			case null:
 				if (this.handleTargetClick(screenX, screenY)) break;
 				if (this.moveController.active) {
-					this.moveController.tryCommit(
+					this.moveController.onPrimary(
 						this.screenPointToGrid(screenX, screenY),
 					);
 				}
@@ -2034,6 +2060,17 @@ export class MapScene implements Scene {
 		if (!this.moveController.active) return;
 		if (this.isPointOverUiSurface(screenX, screenY)) return;
 		this.moveController.onHover(this.screenPointToGrid(screenX, screenY));
+	};
+
+	private handleContextMenu = (event: MouseEvent): void => {
+		if (this.game.overlays.isOpen) return;
+		if (!this.moveController.active) return;
+		event.preventDefault();
+		if (this.moveController.onCancel()) {
+			if (!this.moveController.active) {
+				this.buttonBar.setMoveActive(false);
+			}
+		}
 	};
 
 	// ---------- UI ----------
@@ -2400,10 +2437,13 @@ export class MapScene implements Scene {
 
 	/** Convert a mouse event to canvas-local screen coordinates. */
 	private getScreenPoint(event: MouseEvent) {
-		const rect = this.game.app.canvas.getBoundingClientRect();
+		const canvas = this.game.app.canvas;
+		const rect = canvas.getBoundingClientRect();
+		const scaleX = canvas.width / Math.max(1, rect.width);
+		const scaleY = canvas.height / Math.max(1, rect.height);
 		return {
-			screenX: event.clientX - rect.left,
-			screenY: event.clientY - rect.top,
+			screenX: (event.clientX - rect.left) * scaleX,
+			screenY: (event.clientY - rect.top) * scaleY,
 		};
 	}
 
