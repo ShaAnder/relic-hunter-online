@@ -94,6 +94,9 @@ export class MapScene implements Scene {
 	private targetReticle = new Graphics();
 	private attackRangeContainer = new Container();
 
+	private movePointerDragging = false;
+	private suppressNextClick = false;
+
 	// Which AI unit is mid-fight, so onBattleComplete knows who to update
 	private activeCombatUnit: PilotedMercenary | null = null;
 	// Guards End Turn from re-firing while enemies are mid-move/mid-fight
@@ -329,6 +332,19 @@ export class MapScene implements Scene {
 		this.game.app.canvas.addEventListener("click", this.handleClick);
 		this.game.app.canvas.addEventListener("mousemove", this.handleMouseMove);
 		this.game.app.canvas.addEventListener(
+			"pointerdown",
+			this.handlePointerDown,
+		);
+		this.game.app.canvas.addEventListener(
+			"pointermove",
+			this.handlePointerMove,
+		);
+		this.game.app.canvas.addEventListener("pointerup", this.handlePointerUp);
+		this.game.app.canvas.addEventListener(
+			"pointercancel",
+			this.handlePointerUp,
+		);
+		this.game.app.canvas.addEventListener(
 			"contextmenu",
 			this.handleContextMenu,
 		);
@@ -343,6 +359,23 @@ export class MapScene implements Scene {
 		window.removeEventListener("keydown", this.handleKeyDown);
 		this.game.app.canvas.removeEventListener("click", this.handleClick);
 		this.game.app.canvas.removeEventListener("mousemove", this.handleMouseMove);
+		this.game.app.canvas.removeEventListener(
+			"pointerdown",
+			this.handlePointerDown,
+		);
+		this.game.app.canvas.removeEventListener(
+			"pointermove",
+			this.handlePointerMove,
+		);
+		this.game.app.canvas.removeEventListener("pointerup", this.handlePointerUp);
+		this.game.app.canvas.removeEventListener(
+			"pointercancel",
+			this.handlePointerUp,
+		);
+		this.game.app.canvas.removeEventListener(
+			"contextmenu",
+			this.handleContextMenu,
+		);
 	}
 
 	/** Per-frame tick: camera, animation, camera follow, stats. */
@@ -571,6 +604,12 @@ export class MapScene implements Scene {
 			this.buttonBar.setMoveActive(false);
 			return;
 		}
+
+		// if movement was already started this action just reshow range
+		if (this.localUnit.turnManager.movementRemaining > 0) {
+			this.moveController.enter(this.localUnit.turnManager.movementRemaining);
+		}
+
 		if (this.hand.isSelecting) {
 			this.hand.exitSelectionMode();
 			this.buttonBar.setMoveActive(false);
@@ -586,6 +625,67 @@ export class MapScene implements Scene {
 		this.buttonBar.setMoveActive(true);
 		this.buttonBar.closeMenu();
 	}
+
+	private handlePointerDown = (event: PointerEvent): void => {
+		if (this.game.overlays.isOpen) return;
+		if (this.processingEnemyTurns) return;
+		if (event.button !== 0) return;
+		if (!this.moveController.active) return;
+
+		const { screenX, screenY } = this.getScreenPoint(event);
+		if (this.isPointOverUiSurface(screenX, screenY)) return;
+
+		const tile = this.screenPointToGrid(screenX, screenY);
+
+		// Locked + press dest commits inside onPointerDown
+		if (this.moveController.isPreviewLocked) {
+			const before = this.moveController.active;
+			this.moveController.onPointerDown(tile);
+			if (before && !this.moveController.active) {
+				this.buttonBar.setMoveActive(false);
+			}
+			// If still active, they re-pathed / started a new drag
+			if (this.moveController.isDragging) {
+				this.movePointerDragging = true;
+			}
+			return;
+		}
+
+		this.movePointerDragging = true;
+		this.moveController.onPointerDown(tile);
+	};
+
+	private handlePointerMove = (event: PointerEvent): void => {
+		if (this.game.overlays.isOpen) return;
+
+		const { screenX, screenY } = this.getScreenPoint(event);
+
+		const nearHand =
+			screenX < 420 && screenY > this.game.app.screen.height - 160;
+		this.hand.setHovered(nearHand);
+
+		if (!this.moveController.active) return;
+		if (this.isPointOverUiSurface(screenX, screenY)) return;
+
+		const tile = this.screenPointToGrid(screenX, screenY);
+		if (this.moveController.isDragging) {
+			this.moveController.onPointerMove(tile);
+		}
+	};
+
+	private handlePointerUp = (_event: PointerEvent): void => {
+		if (!this.movePointerDragging) return;
+		this.movePointerDragging = false;
+		if (!this.moveController.active) return;
+		this.moveController.onPointerUp();
+		this.suppressNextClick = true;
+	};
+
+	private handleContextMenu = (event: MouseEvent): void => {
+		if (!this.moveController.active) return;
+		event.preventDefault();
+		this.moveController.onCancel();
+	};
 
 	/** Commit a move: update position, deduct tiles, animate, check chest/win. */
 	private async onMoveCommitted(
@@ -1929,8 +2029,9 @@ export class MapScene implements Scene {
 			case "Escape":
 				if (this.targetingActive) {
 					this.exitTargetingMode();
-				} else if (this.moveController.active || this.hand.isSelecting) {
-					this.moveController.exit();
+				} else if (this.moveController.active) {
+					this.buttonBar.setMoveActive(false);
+				} else if (this.hand.isSelecting) {
 					this.hand.exitSelectionMode();
 					this.buttonBar.setMoveActive(false);
 					this.buttonBar.closeMenu();
@@ -1954,29 +2055,16 @@ export class MapScene implements Scene {
 				break;
 			case "Enter":
 			case " ":
-				if (this.moveController.movePhase === "previewLocked") {
-					this.moveController.confirm();
+				if (this.moveController.isPreviewLocked) {
+					if (this.moveController.confirm()) {
+						this.buttonBar.setMoveActive(false);
+					}
 					break;
 				}
 				if (this.hand.isSelecting) this.hand.confirmHighlighted();
 				break;
-			case "Escape":
-				if (this.targetingActive) {
-					this.exitTargetingMode();
-				} else if (this.moveController.active) {
-					if (!this.moveController.onCancel()) {
-						this.moveController.exit();
-					}
-					if (!this.moveController.active) {
-						this.hand.exitSelectionMode();
-						this.buttonBar.setMoveActive(false);
-						this.buttonBar.closeMenu();
-					}
-				} else if (this.hand.isSelecting) {
-					// ... existing
-				} else {
-					this.openPauseMenu();
-				}
+			case " ":
+				if (this.hand.isSelecting) this.hand.confirmHighlighted();
 				break;
 		}
 	};
@@ -1988,6 +2076,10 @@ export class MapScene implements Scene {
 
 	/** Delegate all click routing to ButtonBar, then switch on the returned action. */
 	private handleClick = (event: MouseEvent): void => {
+		if (this.suppressNextClick) {
+			this.suppressNextClick = false;
+			return;
+		}
 		if (this.game.overlays.isOpen) return;
 		if (this.processingEnemyTurns) return;
 
@@ -2038,10 +2130,11 @@ export class MapScene implements Scene {
 				break;
 			case null:
 				if (this.handleTargetClick(screenX, screenY)) break;
-				if (this.moveController.active) {
-					this.moveController.onPrimary(
-						this.screenPointToGrid(screenX, screenY),
-					);
+				if (this.moveController.isPreviewLocked) {
+					const tile = this.screenPointToGrid(screenX, screenY);
+					if (this.moveController.onPrimary(tile)) {
+						this.buttonBar.setMoveActive(false);
+					}
 				}
 				break;
 		}
@@ -2050,27 +2143,10 @@ export class MapScene implements Scene {
 	/** Feed hovered tiles to the path preview while aiming; hand-reveal check always runs. */
 	private handleMouseMove = (event: MouseEvent): void => {
 		if (this.game.overlays.isOpen) return;
-
 		const { screenX, screenY } = this.getScreenPoint(event);
-
 		const nearHand =
 			screenX < 420 && screenY > this.game.app.screen.height - 160;
 		this.hand.setHovered(nearHand);
-
-		if (!this.moveController.active) return;
-		if (this.isPointOverUiSurface(screenX, screenY)) return;
-		this.moveController.onHover(this.screenPointToGrid(screenX, screenY));
-	};
-
-	private handleContextMenu = (event: MouseEvent): void => {
-		if (this.game.overlays.isOpen) return;
-		if (!this.moveController.active) return;
-		event.preventDefault();
-		if (this.moveController.onCancel()) {
-			if (!this.moveController.active) {
-				this.buttonBar.setMoveActive(false);
-			}
-		}
 	};
 
 	// ---------- UI ----------

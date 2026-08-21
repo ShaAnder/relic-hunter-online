@@ -1,11 +1,6 @@
 import { Container, Graphics } from "pixi.js";
 import type { Grid, GridCoord, MovementRangeEntry } from "@relic-hunter/shared";
-import {
-	computeMovementRange,
-	getPathTo,
-	findNearestReachableTile,
-	coordKey,
-} from "@relic-hunter/shared";
+import { computeMovementRange, coordKey } from "@relic-hunter/shared";
 import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
 import type { Camera } from "@/core/cameras/Camera";
 import type { Mercenary } from "@/entities/Mercenary";
@@ -24,25 +19,20 @@ interface MoveControllerOptions {
 	) => void;
 }
 
-/** Move aiming phases — drag later only edits pending, never a second pipeline. */
-export type MovePhase = "idle" | "aiming" | "previewLocked";
-
-export interface PathIntent {
-	target: GridCoord;
-	/** Steps after the unit's current tile (getPathTo shape). */
-	path: GridCoord[];
-	/** Future: player-forced detours. Empty in this draft. */
-	waypoints: GridCoord[];
-}
+/**
+ * idle → aiming (enter)
+ * aiming → dragging (pointer down) | lock via click-seed
+ * dragging → previewLocked on pointer up (if path non-empty)
+ * previewLocked → commit only when primary hits path[path.length - 1]
+ *               → replace path when primary hits another in-range tile
+ *               → drag again replaces path
+ * right-click → clear to aiming (never full exit)
+ */
+export type MovePhase = "idle" | "aiming" | "dragging" | "previewLocked";
 
 /**
- * Move mode state machine.
- *
- * idle → aiming (enter): hover previews path
- * aiming → previewLocked (primary on legal tile): path frozen
- * previewLocked → commit (primary again / confirm) or aiming (cancel)
- *
- * Drag (later) only rebuilds pending while aiming / locked — same commit path.
+ * Drag-or-click to author a path; walk only when the locked destination
+ * tile is clicked again.
  *
  * @author ShaAnder
  */
@@ -55,11 +45,13 @@ export class MoveController {
 
 	private phase: MovePhase = "idle";
 	private movementRange: Map<string, MovementRangeEntry> | null = null;
-	private pending: PathIntent | null = null;
+	/** Steps after the unit's current tile. Dest = path[path.length - 1]. */
+	private path: GridCoord[] = [];
+	private budget = 0;
+	private blocked = new Set<string>();
 
 	private pendingEnterTimeout: number | null = null;
 	private readonly ENTER_DELAY_MS = 180;
-
 	private currentIgnoresZoc = false;
 
 	constructor(private options: MoveControllerOptions) {
@@ -76,9 +68,22 @@ export class MoveController {
 		return this.phase;
 	}
 
+	get isDragging(): boolean {
+		return this.phase === "dragging";
+	}
+
+	get isPreviewLocked(): boolean {
+		return this.phase === "previewLocked";
+	}
+
+	/** Locked destination, or null. */
+	get lockedDest(): GridCoord | null {
+		if (this.path.length === 0) return null;
+		return this.path[this.path.length - 1];
+	}
+
 	requestEnter(): void {
 		if (this.pendingEnterTimeout !== null) return;
-
 		this.pendingEnterTimeout = window.setTimeout(() => {
 			this.pendingEnterTimeout = null;
 			this.enter();
@@ -93,26 +98,17 @@ export class MoveController {
 
 		this.currentIgnoresZoc = ignoresZoc;
 		this.phase = "aiming";
-		this.pending = null;
-
-		const budget =
+		this.path = [];
+		this.budget =
 			budgetOverride !== undefined
 				? budgetOverride
 				: this.options.getMovementRemaining();
 
 		this.options.camera.lockTo(gridToScreen(this.options.getMercenaryCoord()));
 
-		const blocked = new Set(this.options.getBlockedCoords().map(coordKey));
-
-		this.movementRange = computeMovementRange(
-			this.options.grid,
-			this.options.getMercenaryCoord(),
-			budget,
-			blocked,
-		);
-
+		this.blocked = new Set(this.options.getBlockedCoords().map(coordKey));
+		this.rebuildRangeFromUnit();
 		this.clearPreview();
-		this.renderRange();
 	}
 
 	exit(): void {
@@ -124,116 +120,230 @@ export class MoveController {
 
 		this.phase = "idle";
 		this.movementRange = null;
-		this.pending = null;
-
+		this.path = [];
 		this.rangeContainer.removeChildren();
 		this.pathContainer.removeChildren();
 		this.highlightContainer.removeChildren();
-
 		this.options.camera.unlock();
 	}
 
 	/**
-	 * Hover preview — only while aiming. Locked preview stays put.
+	 * Pointer down:
+	 * - previewLocked + click dest → commit
+	 * - previewLocked + other in-range → replace lock
+	 * - aiming + unit/in-range → start drag (or seed lock on simple click via up)
 	 */
-	onHover(hovered: GridCoord): void {
-		if (this.phase !== "aiming" || !this.movementRange) return;
+	onPointerDown(tile: GridCoord): void {
+		if (this.options.mercenary.isAnimating) return;
+		if (!this.movementRange) return;
 
-		const intent = this.buildIntentToward(hovered);
-		if (!intent) {
+		// --- locked: confirm only on destination ---
+		if (this.phase === "previewLocked") {
+			const dest = this.lockedDest;
+			if (dest && tile.x === dest.x && tile.y === dest.y) {
+				this.commitPending();
+				return;
+			}
+			// Other in-range tile → start a new path from here (seed + drag)
+			if (this.isInFullRange(tile)) {
+				this.seedPathTo(tile);
+				this.phase = "dragging";
+				this.refreshRangeFromTip();
+				this.renderPathPreview();
+			}
+			return;
+		}
+
+		if (this.phase !== "aiming") return;
+
+		const start = this.options.getMercenaryCoord();
+		this.path = [];
+
+		if (tile.x === start.x && tile.y === start.y) {
+			this.phase = "dragging";
 			this.clearPreview();
 			return;
 		}
 
-		this.pending = intent;
-		this.renderPathPreview(this.options.getMercenaryCoord(), intent.path);
+		if (!this.isInFullRange(tile)) return;
+		this.seedPathTo(tile);
+		this.phase = "dragging";
+		this.refreshRangeFromTip();
+		this.renderPathPreview();
+	}
+
+	onPointerMove(tile: GridCoord): void {
+		if (this.phase !== "dragging") return;
+
+		const start = this.options.getMercenaryCoord();
+		const last = this.path.length > 0 ? this.path[this.path.length - 1] : start;
+
+		if (tile.x === last.x && tile.y === last.y) return;
+
+		if (tile.x === start.x && tile.y === start.y) {
+			this.path = [];
+			this.refreshRangeFromTip();
+			this.renderPathPreview();
+			return;
+		}
+
+		const existing = this.path.findIndex(
+			(c) => c.x === tile.x && c.y === tile.y,
+		);
+		if (existing !== -1) {
+			this.path = this.path.slice(0, existing + 1);
+			this.refreshRangeFromTip();
+			this.renderPathPreview();
+			return;
+		}
+
+		if (!this.isCardinalAdjacent(last, tile)) return;
+		if (!this.options.grid.isWalkable(tile)) return;
+		if (this.blocked.has(coordKey(tile))) return;
+		if (this.path.length >= this.budget) return;
+		// Allow step if reachable from tip with remaining budget
+		if (this.movementRange && !this.movementRange.has(coordKey(tile))) {
+			// Still allow if within original full budget footprint
+			if (!this.isInFullRange(tile)) return;
+		}
+
+		this.path.push(tile);
+		this.refreshRangeFromTip();
+		this.renderPathPreview();
 	}
 
 	/**
-	 * Primary click (left).
-	 * aiming + legal → lock preview
-	 * previewLocked + click → confirm commit
+	 * Release: lock path if non-empty. Does not walk.
 	 */
-	onPrimary(clickedTile: GridCoord): boolean {
-		if (this.phase === "idle") return false;
-		if (this.options.mercenary.isAnimating) return false;
-		if (!this.movementRange) return false;
+	onPointerUp(): boolean {
+		if (this.phase !== "dragging") return false;
 
-		if (this.phase === "aiming") {
-			const intent = this.buildIntentToward(clickedTile);
-			if (!intent || intent.path.length === 0) return false;
-
-			this.pending = intent;
-			this.phase = "previewLocked";
-			this.renderPathPreview(this.options.getMercenaryCoord(), intent.path);
-			return true;
+		if (this.path.length === 0) {
+			this.phase = "aiming";
+			this.rebuildRangeFromUnit();
+			this.clearPreview();
+			return false;
 		}
 
-		// previewLocked — second click confirms current pending path
+		this.phase = "previewLocked";
+		this.refreshRangeFromTip();
+		this.renderPathPreview();
+		return true;
+	}
+
+	/**
+	 * Left-click confirm helper (MapScene click path).
+	 * Only commits when tile is the locked destination.
+	 */
+	onPrimary(tile: GridCoord): boolean {
+		if (this.phase !== "previewLocked") return false;
+		const dest = this.lockedDest;
+		if (!dest || tile.x !== dest.x || tile.y !== dest.y) return false;
+		return this.commitPending();
+	}
+
+	confirm(): boolean {
 		return this.commitPending();
 	}
 
 	/**
-	 * Cancel locked preview back to aiming (right-click).
-	 * Returns true if it handled the cancel.
+	 * Right-click: clear path, stay aiming. Never full exit.
 	 */
 	onCancel(): boolean {
-		if (this.phase === "previewLocked") {
+		if (this.phase === "previewLocked" || this.phase === "dragging") {
 			this.phase = "aiming";
-			this.pending = null;
+			this.path = [];
+			this.rebuildRangeFromUnit();
 			this.clearPreview();
-			return true;
-		}
-		if (this.phase === "aiming") {
-			this.exit();
 			return true;
 		}
 		return false;
 	}
 
-	/** Explicit confirm (Enter) while preview is locked. */
-	confirm(): boolean {
-		return this.commitPending();
-	}
+	onHover(_hovered: GridCoord): void {}
 
-	/** @deprecated use onPrimary — kept so old MapScene call sites compile briefly */
-	tryCommit(clickedTile: GridCoord): boolean {
-		return this.onPrimary(clickedTile);
+	tryCommit(tile: GridCoord): boolean {
+		return this.onPrimary(tile);
 	}
 
 	// ---------- internals ----------
 
-	private buildIntentToward(hovered: GridCoord): PathIntent | null {
-		if (!this.movementRange) return null;
-
-		const blocked = new Set(this.options.getBlockedCoords().map(coordKey));
-
-		const target = this.movementRange.has(coordKey(hovered))
-			? hovered
-			: findNearestReachableTile(
-					this.options.grid,
-					this.movementRange,
-					hovered,
-					blocked,
-				);
-
-		if (!target) return null;
-
-		const path = getPathTo(this.movementRange, target) ?? [];
-		if (path.length === 0) return null;
-
-		return { target, path, waypoints: [] };
-	}
-
 	private commitPending(): boolean {
-		if (this.phase !== "previewLocked" || !this.pending) return false;
-		if (this.pending.path.length === 0) return false;
+		if (this.phase !== "previewLocked" || this.path.length === 0) return false;
 		if (this.options.mercenary.isAnimating) return false;
 
-		const { target, path } = this.pending;
+		const path = [...this.path];
+		const target = path[path.length - 1];
 		this.options.onMoveCommitted(target, path, this.currentIgnoresZoc);
 		this.exit();
 		return true;
+	}
+
+	private seedPathTo(tile: GridCoord): void {
+		// Prefer path through current tip range; fall back to unit-origin range
+		const fromUnit = computeMovementRange(
+			this.options.grid,
+			this.options.getMercenaryCoord(),
+			this.budget,
+			this.blocked,
+		);
+		const seeded = this.pathFromRangeMap(fromUnit, tile);
+		this.path = seeded ?? [];
+	}
+
+	/** True if tile is reachable from unit with full budget (original footprint). */
+	private isInFullRange(tile: GridCoord): boolean {
+		const start = this.options.getMercenaryCoord();
+		if (tile.x === start.x && tile.y === start.y) return true;
+		const full = computeMovementRange(
+			this.options.grid,
+			start,
+			this.budget,
+			this.blocked,
+		);
+		return full.has(coordKey(tile));
+	}
+
+	private rebuildRangeFromUnit(): void {
+		this.movementRange = computeMovementRange(
+			this.options.grid,
+			this.options.getMercenaryCoord(),
+			this.budget,
+			this.blocked,
+		);
+		this.renderRange();
+	}
+
+	private refreshRangeFromTip(): void {
+		const start = this.options.getMercenaryCoord();
+		const tip = this.path.length > 0 ? this.path[this.path.length - 1] : start;
+		const remaining = Math.max(0, this.budget - this.path.length);
+		this.movementRange = computeMovementRange(
+			this.options.grid,
+			tip,
+			remaining,
+			this.blocked,
+		);
+		this.renderRange();
+	}
+
+	private isCardinalAdjacent(a: GridCoord, b: GridCoord): boolean {
+		return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) === 1;
+	}
+
+	private pathFromRangeMap(
+		range: Map<string, MovementRangeEntry>,
+		destination: GridCoord,
+	): GridCoord[] | null {
+		const destEntry = range.get(coordKey(destination));
+		if (!destEntry) return null;
+		const path: GridCoord[] = [];
+		let current: MovementRangeEntry | undefined = destEntry;
+		while (current && current.cameFrom !== null) {
+			path.push(current.coord);
+			current = range.get(coordKey(current.cameFrom));
+		}
+		return path.reverse();
 	}
 
 	private renderRange(): void {
@@ -242,7 +352,6 @@ export class MoveController {
 
 		for (const entry of this.movementRange.values()) {
 			if (entry.distance === 0) continue;
-
 			const pos = gridToScreen(entry.coord);
 			const g = new Graphics();
 			g.poly([
@@ -262,13 +371,15 @@ export class MoveController {
 		}
 	}
 
-	private renderPathPreview(from: GridCoord, path: GridCoord[]): void {
+	private renderPathPreview(): void {
 		this.pathContainer.removeChildren();
 		this.highlightContainer.removeChildren();
 
-		if (path.length === 0) return;
+		const from = this.options.getMercenaryCoord();
+		if (this.path.length === 0) return;
 
-		const points = [from, ...path].map(gridToScreen);
+		const points = [from, ...this.path].map(gridToScreen);
+		const locked = this.phase === "previewLocked";
 
 		const line = new Graphics();
 		line.moveTo(points[0].x, points[0].y);
@@ -276,9 +387,9 @@ export class MoveController {
 			line.lineTo(points[i].x, points[i].y);
 		}
 		line.stroke({
-			width: 3,
-			color: this.phase === "previewLocked" ? 0xffd700 : 0x000000,
-			alpha: 0.85,
+			width: locked ? 5 : 4,
+			color: locked ? 0xffd700 : 0xf39c12,
+			alpha: 0.9,
 			cap: "round",
 			join: "round",
 		});
@@ -287,7 +398,7 @@ export class MoveController {
 		for (let i = 1; i < points.length; i++) {
 			const isDest = i === points.length - 1;
 			const joint = new Graphics();
-			joint.circle(0, 0, isDest ? 6 : 4);
+			joint.circle(0, 0, isDest ? 7 : 4);
 			joint.fill(isDest ? 0xffffff : 0x000000);
 			if (isDest) joint.stroke({ width: 2, color: 0x000000 });
 			joint.x = points[i].x;
@@ -307,10 +418,7 @@ export class MoveController {
 			-TILE_WIDTH / 2,
 			0,
 		]);
-		glow.fill({
-			color: this.phase === "previewLocked" ? 0xffd700 : 0x7ec8ff,
-			alpha: 0.65,
-		});
+		glow.fill({ color: 0xffd700, alpha: locked ? 0.7 : 0.45 });
 		glow.stroke({ width: 2, color: 0xffffff, alpha: 0.9 });
 		glow.x = dest.x;
 		glow.y = dest.y;
