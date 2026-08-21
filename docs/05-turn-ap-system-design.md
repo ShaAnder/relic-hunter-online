@@ -1,5 +1,7 @@
 # Turn & AP System
 
+**A third action category, Special, is designed but not yet built — see `14-combat-rework-design.md`.** Everything below describes the current, live two-action-category system (Attack/Rest) accurately as of today; it doesn't yet reflect the planned rework.
+
 Every unit capable of acting on the map — the player, and every individual AI-controlled hunter — owns a genuine, independent `TurnManager` instance. This is worth stating plainly because it would have been easy, and much less work, to give AI hunters a lighter, simplified version of turn logic that just approximates what the player experiences. That's explicitly not what happens here: an AI hunter that runs out of AP mid-turn is exactly as stuck as the player would be in the same situation. There's no privileged path for AI to bypass the resource system the player is bound by.
 
 ## The base rules, and why they landed where they did

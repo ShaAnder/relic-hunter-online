@@ -1,50 +1,41 @@
 # Current Progress
 
-Phase 1, single-player core loop. Checked directly against the live repo rather than written from memory, since earlier versions of this document made a couple of claims that turned out not to hold up once actually verified — worth knowing this has been double-checked, not just restated.
+Phase 1, single-player core loop. Fully reconciled 2026-08-21 — every claim below checked directly against the live repo in this pass, replacing an earlier version of this document that had gone stale enough to contradict its own most recent update section.
 
 ## What's working
 
-Combat resolves as a single simultaneous round rather than a back-and-forth exchange — both sides commit to an action blind, and the round plays out in one pass. Surrender always takes priority regardless of what the other side chose, by design, since a surrender that could be overridden by the opponent's own action wouldn't actually be reliable. Only Red cards boost attack; an earlier version of the combat math let a Blue card played during an attack contribute to both a speed hedge and bonus damage at once, which has been fixed. Both defeat and surrender correctly move items between the right sides for player and AI hunters alike.
+Combat resolves as a single simultaneous round — both sides commit to an action blind, and the round plays out in one pass. Surrender always takes priority regardless of what the other side chose. Both defeat and surrender correctly move items between the right sides, and monsters are explicitly blocked from ever receiving items either way — checked in both directions.
 
-Zones of control are melee-only and wall-aware, meaning they're computed with genuine line-of-sight rather than raw tile distance, so a wall between a melee hunter and a nearby tile correctly blocks that tile from being threatened. Crossing into a threatened tile triggers a reaction strike right at the point of crossing — the movement animation genuinely pauses there — and then the path continues rather than being blocked outright. A single move only takes one charge per distinct enemy zone it passes through, regardless of how much of that zone it actually crosses. Disengage is a real, repeatable two-AP movement option that's fully immune to zones of control, meant specifically as the deliberate way to leave a threatened area without paying the reaction-strike cost.
+Zones of control are melee-only and wall-aware. Crossing into a threatened tile triggers a reaction strike right at the crossing point, then the path continues. A single move only costs one charge per distinct zone crossed, however much of it is actually traversed. Disengage remains a repeatable, fully ZoC-immune movement option. **This whole system is scoped to change significantly in the upcoming combat rework** — see `14-combat-rework-design.md` — narrowing from all melee classes to Brawler specifically, with Tank getting a separate defensive special later.
 
-Attack ranges differ by class rather than following one universal rule. Melee is adjacent-only and is the only category that projects a zone of control. Ranged requires strict cardinal line-of-sight with zero tolerance for obstruction. Caster reaches in a full omnidirectional diamond and tolerates one obstruction along the way, at reduced damage rather than being blocked outright.
+Attack ranges differ by class — Melee adjacent-only (the only category that projects a zone of control), Ranged strict cardinal line-of-sight, Caster an omnidirectional diamond tolerating one obstruction at reduced damage. **Also scoped to change in the rework** — ranged is planned to move away from being a direct damage source entirely, toward debuff/setup abilities instead.
 
-AI hunters run on the exact same `TurnManager` the player uses, spending real AP and playing real cards from a real hand rather than acting through any simplified AI-only path. Three archetypes — Aggressive, Treasure, and Balanced — differ in their movement goals, how readily they're willing to engage a fight, and how they behave once a fight is happening. All three pick the smallest Blue card that actually closes the real distance to their target rather than reflexively burning the largest card in hand regardless of need.
+AI hunters run on the same `TurnManager` the player uses, spending real AP and playing real cards. Three archetypes — Aggressive, Treasure, Balanced — differ in movement goals and engagement willingness. AI now has genuine extraction behavior — a sticky `extracting` flag in AI memory — and combat choices are scored through `CombatAiContext` (Attack/Defend/Run/Surrender weighed with a small randomizing jitter), rather than simple fixed rules. Objective-aware context (exit distance, carrier distance, whether the AI itself is carrying the relic) is defined in the scoring system but not yet fed real values from the map — see Known Issues.
 
-Monsters are a fully separate entity type rather than a reskinned hunter. They have fixed stats determined by tier, no hand, no inventory, and always attack — there's no archetype system governing them the way there is for hunters, and that's intentional rather than an oversight. They spawn at a fifteen percent chance rolled after every individual mercenary's turn, hunter and player alike, capped at five alive on the map at once, and as a group they always act after every hunter has finished their turn for that round regardless of when during the round they actually spawned.
+Monsters are a fully separate entity type — fixed stats by tier, no hand, no inventory, always attack, no archetype system. Spawn at 15% between individual turns, capped at five, always act after every hunter in the round.
 
-A handful of smaller systems are also genuinely built and working: a persistent, scrollable match log; a hunter-inspection panel showing every hunter's portrait, HP, and public inventory as compact individual cards; a character creation screen with the diminishing-returns stat system and class identity that's now purely mechanical rather than stat-based; a camera that correctly locks during AI and monster turns; real sourced icons on all six nodes of the radial action wheel; and a help scene that, as of right now, is still just a static text page rather than anything interactive.
+Player movement is a genuine drag-authored path system, not click-to-target. Drag traces a legal route within budget (cardinal, walkable, in-range); releasing locks the path; committing only happens by clicking the locked destination tile again. Remaining movement range recalculates dynamically from the path's current tip as it's being drawn. Right-click clears the in-progress path without exiting move mode or losing the spent action — a direct fix for an earlier Escape-key softlock in the old click-to-target system, which no longer exists as a control scheme.
+
+The exit tile doesn't exist anywhere on the map until the relic is actually found — not hidden, genuinely absent from the grid data (`TileType.Floor` until converted). Once found, it spawns dynamically, deliberately far from wherever the relic was picked up (`pickExitFarFrom`, with a real fallback if no sufficiently-far tile exists), rather than reappearing at a fixed pre-generated location. Chest placement uses the same spread-aware logic (`pickSpreadWalkableTile`) rather than pure random placement, directly addressing the earlier playtest finding of trivially-easy wins from relic-near-spawn seeds.
+
+The shared card deck resets fully at the start of every match. HP bars across all three UI surfaces (character panel, hunter summary, battle overlay) correctly show a knocked-out hunter's true original maximum, not their reduced post-knockout ceiling. AI hunters rest at a genuinely tuned threshold (0.25 HP ratio) rather than the earlier, too-generous 0.5. The relic cannot be dropped from inventory — currently enforced by disabling the drop button outright for that specific item, with a clearer active confirm-popup version designed but not yet applied.
+
+The battle/loot overlay's Escape-key dismissal is correctly blocked mid-fight (`blocksEscape`), and the earlier softlock where a pending loot confirmation could leave the game stuck is fixed — closing the overlay for any reason now correctly resolves whatever loot decision was pending rather than leaving it hanging.
+
+Camera handling is substantially hardened this session: the camera-catapult bug (right-click stealing keyboard focus, causing a key to appear permanently held) is fully fixed, including a resurgence that needed a second pass to close a gap where the fix only covered right-clicks inside the game canvas specifically. Free panning is now bounded to the map's actual diamond-shaped isometric extent, computed in tile space rather than a naive axis-aligned box. Multi-monitor/DPI resize handling has a confirmed root cause and fix identified — not yet applied, see Known Issues.
+
+A handful of smaller systems remain genuinely built and working: a persistent scrollable match log, a hunter-inspection panel, character creation with diminishing-returns stat costs, real sourced icons on the radial action wheel, and a Help scene that is, honestly, still just a static text page.
 
 ## Designed but not built
 
-Hiding the exit until the relic has actually been found is still the single strongest lever identified for stopping a fast, evasive build from simply planning an optimal route across both objectives from the very start of a match and winning without ever engaging anyone. It's fully designed and explained in more depth in the development roadmap, but no part of it — the hidden state, the reveal trigger, the UI moment when it happens — has actually been built yet.
+Monster frenzy — monsters becoming measurably more dangerous once the relic is found — remains fully unwired. `relicFound` is set correctly when the relic is found, but nothing in monster AI logic reads it anywhere; the mechanic has zero observable effect in play.
 
-Monster frenzy, where monsters are meant to become measurably more dangerous once the relic has been found, is designed but not wired into actual gameplay. The flag it depends on exists on the session object, but nothing in the map logic currently sets it when the relic is found or reads it when computing monster movement, so the mechanic has no observable effect in play right now despite existing in the data model.
+A deck-exhaustion boss hasn't been designed in real detail yet.
 
-A deck-exhaustion boss — some kind of significant threat tied to what happens when the shared deck runs dry — hasn't been designed in real detail yet, let alone built.
+The interactive tutorial remains just an idea.
 
-The interactive tutorial remains just an idea; the Help scene is still the static page it's always been.
-
-A rework of the Move action's UX has been discussed and designed but not built: entering aim mode immediately using the hunter's base movement stat, with a card becoming an optional way to extend that range afterward rather than a mandatory screen standing in front of aiming at all. This was meant to directly answer a specific playtester complaint about too many steps standing between deciding to move and actually being able to aim.
+The full combat rework — 3-round sequential resolution, a new AP-costed Special action category (separate from Attack/Rest, doesn't trigger the Move-lock), ranged classes becoming debuff/setup tools instead of direct damage, zones of control narrowing to Brawler with Tank getting its own future defensive special — is fully designed in `docs/14-combat-rework-design.md`. This is the next major scheduled pass.
 
 ## Known pain points
 
-The shared deck still doesn't reset between separate matches, which is a confirmed, real bug rather than something that's actually been addressed. The HP bar still treats a knocked-out hunter's reduced ceiling as their full bar rather than showing the true reduction. AI hunters can still Rest more than feels ideal, most likely because the amount restored per Rest is small relative to the threshold that triggers resting rather than because the threshold logic itself is wrong. And discarding the win-condition relic is still fully allowed with no rule or warning attached to it either way.
-
-See `docs/known-issues-and-suggestions.md` for the complete list, including things that were considered and explicitly turned down.
-
-## Session update (2026-08-21)
-
-### Movement
-Player move is drag-authored within budget, with blue range updating from the path tip. Release locks the path; movement commits only when the locked destination tile is clicked again. Other tiles replace the path. Right-click clears the path without the old Esc softlock / re-enter issues. Click-bias is no longer a tracked blocker.
-
-### Combat / battle / map
-CombatAiContext scored actions in place. HP ceiling UI, loot softlock, monster-no-loot, exit-on-relic, chest spread, shared deck reset — done.
-
-### Remaining before combat rebuild
-1. Multi-monitor resize (if still observed)
-2. Pass real exit/carrier/relic context into combat AI
-3. Dual-defend tuning if playtests still show turtles
-
-Combat system rebuild is the next major pass.
+See `docs/known-issues-and-suggestions.md` for the complete, currently-accurate list. Highlights: the multi-monitor resize bug has a confirmed root cause and fix, not yet applied. The relic-discard block works but via a less clear mechanism than intended. Trap hazard rolls never actually receive a card even though the underlying function supports one. The surrender item-picker still shows the wrong icon. Combat AI's objective-awareness fields exist but are never fed real data — deliberately left unresolved pending the combat rework, which is likely to restructure the system that would consume them anyway.

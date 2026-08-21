@@ -1,5 +1,7 @@
 # Zones of Control
 
+**Scope is planned to narrow from "all melee classes" to Brawler specifically, with Tank getting a separate future defensive special — see `14-combat-rework-design.md`.** Everything below describes the current, live rule accurately as of today; it doesn't yet reflect the planned rework.
+
 Only melee hunters project a zone of control around themselves — ranged and caster classes never threaten the tiles around them the way a melee hunter does, which is a direct extension of their identity as classes built around keeping distance rather than controlling adjacent space. This is currently a fixed rule rather than something that scales with any stat, though it's a natural candidate for future expansion if non-melee classes ever need their own version of area denial.
 
 The zones themselves are computed with genuine wall-awareness rather than raw tile distance — a wall standing between a melee hunter and a nearby tile correctly blocks that tile from being threatened at all, using actual line-of-sight math rather than just measuring how many tiles apart two points are. This matters a lot for how the zones feel in an actual dungeon layout with real geometry, since a naive distance-only version would threaten tiles right through solid walls, which reads as obviously wrong the moment a player encounters it.

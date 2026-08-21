@@ -47,7 +47,7 @@ export class Game {
 		});
 
 		// handle browser window resizing
-		window.addEventListener("resize", () => this.handleResize());
+		this.app.renderer.on("resize", () => this.handleResize());
 	}
 
 	/**
