@@ -1,91 +1,43 @@
 # Known Issues & Suggestions
 
+Last reconciled: 2026-08-21 (post movement drag+confirm; cancel/re-enter paths simplified).
+
 ## Still open
 
-The shared deck doesn't reset when a new match starts after a previous one has finished, which means a fresh game can begin with a deck that's already partially depleted from whatever match came before it rather than the fully intact deck a new match is supposed to have. This is confirmed and unfixed — nothing in the current match-start or reset flow actually clears or rebuilds `sharedDeck`, so the old one just carries over silently.
+### Multi-monitor / resize layout
+HUD is corner-anchored from `app.screen` width/height. If panels drift after dragging the window between monitors, defer layout one frame in `Game.handleResize` (`requestAnimationFrame`) so Pixi has updated `screen` before `layoutHud` runs.
 
-The HP bar doesn't correctly represent a hunter who's been knocked out and revived at reduced strength. The bar calculates its own "full" reference point from the hunter's current HP ceiling, but that ceiling is exactly the number that shrinks after a knockout — so a hunter revived at half their original maximum shows a completely full bar, because the bar is measuring itself against the new, smaller number rather than the hunter's true original max HP. This is fully understood and just needs the fix applied: the bar's ratio calculation needs to use the hunter's real original maximum as its reference, while the ceiling still correctly caps how high their actual current HP can climb.
+### Combat AI — objective context not wired
+`CombatAiContext` already supports `exitDistance`, `carrierDistance`, and `carryingRelic` for tactical surrender / extract scoring. BattleOverlay may still omit real values from MapScene. Core scored Attack/Defend/Run/Surrender works; warp/objective bias is incomplete until those fields are passed.
 
-AI hunters seem to Rest more than feels right. The likely explanation, after checking the actual logic, is a tuning gap rather than a broken rule — the rest-triggering threshold is genuinely percentage-based (a hunter rests if their HP ratio drops below 0.5, not some flat number), but the amount of HP a single Rest actually restores may just be small relative to that threshold, meaning a badly hurt hunter needs several consecutive rests to climb back over the line. That would look identical to "won't stop resting" from the outside without the threshold itself being wrong. This needs the actual heal-per-rest value checked against the threshold directly, and it's worth also confirming there isn't a second, different rest-triggering path elsewhere that hasn't been found yet.
+### Dual-defend tuning (soft)
+Healthy-hunter attack bias was raised to reduce AI-vs-AI mutual Defend. If playtests still show frequent turtle trades (especially balanced/treasure), nudge `attackBase` upward again — tuning, not a logic bug.
 
-It's still possible to discard the item that's the actual win condition for the match, and nothing currently stops or warns about it. This needs an actual decision rather than a code fix — either discarding the relic specifically should be blocked outright, or it should be allowed and treated as a real consequence of the player's own choice. Both are defensible; neither has been decided yet.
+## Fixed this cycle (summary)
 
-The report that a defeated hunter's teleport-away feels delayed has a fairly clear likely explanation once you look at how it's implemented: the actual teleport is an instant, synchronous repositioning with no animation or delay built into it at all, which strongly suggests the "delay" being observed isn't the teleport itself lagging — it's more likely that the camera simply isn't looking at that hunter at the moment it happens, so the player doesn't actually see the change until the camera happens to focus on them again, which naturally tends to line up with their next turn. That's a reasonable theory based on how the code is structured, but it hasn't been directly traced and confirmed, so it stays open rather than closed.
+- Shared deck reset on match start
+- Exit on relic find + chest spread placement
+- HP ceiling visuals (CharacterPanel, HunterSummary, BattleOverlay)
+- AI rest threshold ~0.25; relic discard blocked
+- AI extract + sticky `extracting`; CombatAiContext scored combat actions
+- Battle `blocksEscape`; monsters do not receive loot
+- Surrender/defeat loot softlock (popup parenting, Take vs Give)
+- **Player movement:** drag-authored path, dynamic remaining range from tip, lock on release, **confirm only by clicking locked destination**; other in-range click/drag replaces path; right-click clears path without full exit spam issues
 
-## Fixed this session
+## Closed / no longer tracked
 
-Monsters could previously choose to Defend, Run, or Surrender in a fight despite there being a flag specifically meant to force them into always attacking — the flag existed as a parameter but was never actually checked anywhere the decision got made. It's genuinely wired in now, in both places a monster's combat choice gets decided.
+- **Move re-enter after Esc** — cancel/exit paths for move mode were simplified; this softlock path is not in the current control scheme.
+- **Click-target left bias** — deprioritized: drag-to-path means destination is authored along the route rather than single-tile click-to-commit. Revisit only if drag sampling itself feels offset.
 
-Defeated monsters used to go through the same knockout-and-revival sequence a hunter uses, ending up alive at reduced HP and teleported elsewhere instead of actually dying. They now die outright and get properly removed from the board — pulled from the active monster list, their visual token destroyed, not just left sitting at zero HP.
+## Suggestions (backlog)
 
-AI hunters used to sometimes take a zone-of-control hit while approaching a target, then immediately flee instead of attacking, because the damage taken mid-approach was being factored into the same-turn decision about whether the fight was worth having. The engagement decision now specifically uses the hunter's HP from before it moved, so a ZoC tick taken on the way in can't retroactively cancel the fight it was risked for.
+- Wire live exit/carrier distances into combat AI context
+- Combat system rebuild (sequential resolution, etc.) — next major pass
+- Always-visible relic holder indicator
+- Passive item value; fake/decoy exit; interactive tutorial
+- Equal-cost path alternates for AI (player already authors path by drag)
 
-Hunters and monsters used to be able to walk straight through each other on the map, which is fixed — every relevant movement calculation now correctly treats a living monster's tile as blocked, the same as a hunter's.
+## Explicitly not bugs
 
-Clicking on an open UI panel — inventory, match log, hunter inspection — while in the middle of aiming a move used to be able to commit a move to wherever the cursor happened to be. Fixed with two separate layers: hovering over an open panel no longer lets a move preview even form underneath it, and committing a move independently re-validates that the actual clicked tile is a genuinely legal destination regardless.
-
-Camera input — pan and especially zoom — used to be able to leak through during AI and monster turns, including a real timing gap in the brief pause between individual units acting where the camera's lock would briefly release entirely. Input is now blocked at the source for the whole AI-and-monster phase, and the lock state itself no longer has that gap.
-
-The camera didn't used to track monster turns at all, only hunter turns, so it would just sit still while monsters acted somewhere off-screen. It now follows monster turns using the same mechanism it already used for hunters.
-
-## Ideas explicitly rejected
-
-A few ideas came up during the kiting and movement-balance discussion and were turned down for real reasons — recorded here so they don't get quietly re-proposed later without anyone remembering why they didn't survive scrutiny the first time.
-
-A flat power penalty for carrying the relic was rejected because it creates a "hot potato" incentive — players avoiding the objective outright, or hovering nearby waiting to snipe it from whoever's brave enough to actually pick it up — which works directly against the "grab it and run" identity the objective is supposed to have.
-
-A forced delay at the exit, requiring a carrier to stand still and exposed for several turns before actually winning, was rejected because it punishes a legitimately-built evasion character at the exact moment their whole strategy was supposed to pay off, regardless of how well they played to get there. It was also flagged as inconsistent with the reasoning behind rejecting a hard stat cap elsewhere — both ideas tell a player "no" outright rather than just making something harder.
-
-Making the relic carrier more "visible" as a way to help enemies find them was dropped once it was pointed out that the camera already follows whoever's currently acting on their turn — visibility was never actually a scarce resource in the first place, so a mechanic built around adding more of it wasn't solving anything real.
-
-## Ideas worth doing eventually, not scheduled
-
-An interactive tutorial to replace the current static Help page is still just an idea — nothing beyond the existing text page exists yet.
-
-A "bind" or "lock" combat card that would force a longer, multi-round engagement instead of the current single simultaneous exchange has come up as a suggestion, inspired by similar lock-in mechanics in other games, meant to occasionally prevent a fight from just being over in one exchange.
-
-A rare item that expands hand size or otherwise alters the shared deck's composition has been floated as flavor — explicitly meant to create weird, non-obviously-optimal interactions rather than a clean, obviously-correct pickup.
-
-Switching combat from its current simultaneous-resolution model to a sequential one — attacker resolves before defender — is fully designed but deliberately unbuilt. The consequence is understood and real: surrender still always wins outright regardless of order, and most action pairings don't actually change since they were never order-dependent in the first place, but a mutual double-attack changes meaningfully, since the attacker would always land their hit first, and a defender who'd be killed by that hit would never get the chance to land their own — mutual destruction becomes impossible where it's currently possible. That's a genuine balance shift, not just a mechanical rearrangement, and it needs its own dedicated pass where that consequence can be confirmed as actually wanted, rather than being folded into an unrelated change.
-
-An icon pass on cards, inventory slots, and the row of header buttons is still outstanding. The radial action wheel is the one place this is actually finished — all six of its nodes use real sourced icons through the texture-loading pipeline built this session. Everything else still uses hand-drawn placeholder shapes.
-
-## First real external playtest feedback — two sessions, bugs and balance both
-
-Two separate playtesters ran matches this round, one focused on finding breakage, one focused more on balance and pacing. Splitting what actually came out of it below by category, since a raw chat log isn't reusable as a task list.
-
-### Confirmed bugs
-
-**A genuinely severe camera bug — the camera can catapult itself off-screen and get stuck, uncontrollably, with the refocus button unable to fix it.** The reported trigger was right-clicking while actively panning the map. Once it started, the camera flew toward the bottom-left corner and kept moving — pressing the refocus button briefly snapped it back, then it immediately resumed flying away on its own. Holding a WASD key paused the runaway motion, but releasing the key let it resume immediately, which points at some kind of stuck or phantom input state feeding a continuous pan force, not a one-time miscalculation. It eventually cleared on its own after the player "button mashed while spamming right click," and separately, stepping on the exit tile (triggering the new teleport-away consequence) also incidentally cleared it. Video and screenshots of this exist and should be reviewed directly rather than working from the text description alone — this is a serious, high-priority bug, not cosmetic.
-
-**Input appears to get fully stuck in the same play session** — the same player later reported being completely unable to attack or take any action at all, describing it as "stuck." Worth investigating whether this is the _same_ underlying stuck-input state as the camera bug above, surfacing a second way, or a genuinely separate lockup.
-
-**Viewing a defeated enemy's inventory can softlock the screen.** After winning a fight, the player tried to inspect the defeated hunter's inventory to check for the relic, and the screen wouldn't leave that view. Worth checking specifically whether this is the loot-sequence panel from the just-finished battle failing to close correctly, versus the separate hunter-inspection panel being used against a unit in a state it wasn't built to handle.
-
-**Moving the game window to a different monitor breaks the UI layout** — controls visibly shift position after the window moves to a different screen. Likely a resize/DPI handling gap rather than anything content-related.
-
-**Click-targeting appears biased toward the left side of a tile.** A player reported needing to aim noticeably right-of-center on a tile for a click to register correctly, describing it as consistent and directional rather than random misses. Their own guess was the isometric projection angle skewing the hit area — worth checking `screenToGrid`/`gridToScreen` for a systematic, not just occasional, offset.
-
-### Real balance findings, not bugs
-
-**Chest and relic placement can produce trivially easy wins.** One player reported a seed where they spawned ten tiles from the exit with the relic in the very first, closest chest — an effectively free win with no real engagement. Relic/chest placement currently has no minimum distance or spread requirement relative to spawn or exit; this is a real gap, not a rare fluke, since it happened across multiple matches for the same player.
-
-**High-mobility ranged classes may be significantly overtuned against the current AI.** A player specifically described Hunter as able to engage from max range, then use Disengage to kite indefinitely, with an Aggressive-archetype AI unable to ever close the distance. This is worth weighing directly against tonight's `isRangedInitiated` fix — that change makes a defender caught at range _less_ able to fight back, which could make an already-strong kiting class stronger still if AI pursuit doesn't improve alongside it.
-
-**AI doesn't appear to specifically re-prioritize the relic carrier once the relic is actually found.** A player noted that after grabbing the objective, AI hunters didn't seem to shift focus onto them at all, and since AI mobility is currently low relative to a fast build, this made it trivial to just outrun pursuit and win. This lines up directly with "AI priority" already being an informally planned next step — worth formalizing here so it doesn't stay only a chat mention.
-
-**Pathfinding always resolves to the same single shortest route, even when multiple equidistant paths exist**, consistently favoring one side. Flagged by the player as more a missing feature than a bug — worth deciding whether the AI-facing weighted pathfinding system (or a lighter, player-facing version of the same idea) should ever offer a genuine choice between equally-good routes, rather than always silently picking one.
-
-### Suggestions raised directly by playtesters
-
-**A "fake exit" as an alternative or companion to the hidden-exit design.** Rather than (or alongside) hiding the real exit entirely until the relic is found, a decoy exit tile could exist for non-carriers — reaching it without the relic triggers a stall consequence ("the walls crumble," a skill or damage check to actually get through, tile resets on failure) rather than doing nothing. Framed explicitly as a way to slow down a fast, non-confrontational build without an outright hard block.
-
-**Items should carry passive value even for a "loot goblin," non-confrontational playstyle** — not just exist to eventually satisfy the win condition. Raised as a general design direction rather than a specific item proposal.
-
-**A clearer UI signal for who currently holds the relic.** More than one point of confusion in the sango session traced back to not knowing whether "target found" meant _they_ were holding it — worth a dedicated, always-visible indicator rather than relying on the feedback-toast message alone.
-
-## Fixed (2026-08-19 combat AI pass)
-
-**AI unconditional combat surrender.** Hunters could fold fights they were winning or even-matched because a soft power gap (1.5×) and HP threshold forced flee → surrender. Replaced with scored Attack/Defend/Run/Surrender via `CombatAiContext`. Surrender remains available as an escape/teleport tool when actually stuck; committed initiators are heavily penalized from free-folding on the opening exchange.
-
-**Related battle hygiene (pair with this pass if not already in tree):** block Escape dismissing `BattleOverlay` mid-fight (`blocksEscape`); do not run loot/surrender-give sequences when the receiver is a monster.
+- Random teleport on surrender/knockout (by design)
+- AI using pathfinding helpers while player uses drag-authored paths

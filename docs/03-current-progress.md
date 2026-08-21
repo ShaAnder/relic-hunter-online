@@ -34,12 +34,17 @@ The shared deck still doesn't reset between separate matches, which is a confirm
 
 See `docs/known-issues-and-suggestions.md` for the complete list, including things that were considered and explicitly turned down.
 
-## Session update (2026-08-19)
+## Session update (2026-08-21)
 
-**Combat AI context system landed.** `chooseCombatAction` now takes a `CombatAiContext` bag (HP, opponent stats, commitment, against-monster, optional exit/carrier distance, item count) and scores Attack / Defend / Run / Surrender instead of cascading unconditional surrender. Favored matchups stay in the fight; Run is preferred when escape is realistic; Surrender is a tool (teleport) used when stuck or for a later tactical-warp case — not a panic default. Initiators get a commitment penalty so they do not walk in and free-fold. BattleOverlay auto-fight and human-vs-AI branches pass the context object.
+### Movement
+Player move is drag-authored within budget, with blue range updating from the path tip. Release locks the path; movement commits only when the locked destination tile is clicked again. Other tiles replace the path. Right-click clears the path without the old Esc softlock / re-enter issues. Click-bias is no longer a tracked blocker.
 
-**Also in recent local work (verify against your tree):** exit-on-relic-find, chest spread, AI extract sticky intent, HP ceiling visual on CharacterPanel / HunterSummary / BattleOverlay, Escape blocked while `BattleOverlay.blocksEscape` is set, monsters blocked from receiving defeat/surrender loot.
+### Combat / battle / map
+CombatAiContext scored actions in place. HP ceiling UI, loot softlock, monster-no-loot, exit-on-relic, chest spread, shared deck reset — done.
 
-**Still open for next bug pass:** defeated-hunter inventory / loot softlock (if Escape lock did not fully clear it), click-target bias, multi-monitor layout.
+### Remaining before combat rebuild
+1. Multi-monitor resize (if still observed)
+2. Pass real exit/carrier/relic context into combat AI
+3. Dual-defend tuning if playtests still show turtles
 
-**Deferred combat polish:** pass real `exitDistance` / `carrierDistance` / `carryingRelic` from MapScene into BattleOverlay so tactical-warp scoring is live; sequential combat resolution rework when designed.
+Combat system rebuild is the next major pass.
