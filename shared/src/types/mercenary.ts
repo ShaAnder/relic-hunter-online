@@ -6,8 +6,10 @@ import {
 	type HasCharacterClass,
 	type HasName,
 	type HasMatchScore,
+	type HasSpecial,
 	HasStatus,
 	HasTemporaryStatBonus,
+	HasStatusEffects,
 } from "./entity";
 
 /** Starting card use budget for efficeincy score */
@@ -41,6 +43,8 @@ export type MercenaryState = EntityCore &
 	HasName &
 	HasMatchScore &
 	HasStatus &
+	HasSpecial &
+	HasStatusEffects &
 	HasTemporaryStatBonus;
 
 export function createMercenary(
@@ -70,5 +74,7 @@ export function createMercenary(
 		},
 		stunnedTurnsRemaining: 0,
 		temporaryStatBonus: { attack: 0, defense: 0, movement: 0 },
+		special: null,
+		statusEffects: [],
 	};
 }

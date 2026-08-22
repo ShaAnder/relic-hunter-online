@@ -66,6 +66,51 @@ export interface HasTemporaryStatBonus {
 	temporaryStatBonus: TemporaryStatBonus;
 }
 
+export interface HasSpecial {
+	special: string | null;
+}
+
+export interface HasSpecial {
+	special: string | null;
+}
+
+export interface StatusEffect {
+	id: string;
+	turnsRemaining: number;
+}
+
+export interface HasStatusEffects {
+	statusEffects: StatusEffect[];
+}
+
+/**
+ * Adds or refreshes a status effect — takes the longer of the two
+ * durations if it's already present, rather than stacking or resetting blindly.
+ */
+export function applyStatusEffect(
+	target: HasStatusEffects,
+	id: string,
+	turns: number,
+): void {
+	const existing = target.statusEffects.find((e) => e.id === id);
+	if (existing) {
+		existing.turnsRemaining = Math.max(existing.turnsRemaining, turns);
+	} else {
+		target.statusEffects.push({ id, turnsRemaining: turns });
+	}
+}
+
+/**
+ * Ticks every active effect down by one turn, removing anything that's expired.
+ * Called at the affected unit's own turn boundary — independent of whoever inflicted it.
+ */
+export function tickStatusEffects(target: HasStatusEffects): void {
+	target.statusEffects = target.statusEffects
+		.map((e) => ({ ...e, turnsRemaining: e.turnsRemaining - 1 }))
+		.filter((e) => e.turnsRemaining > 0);
+}
+
+/** Entity items */
 export function hasName(entity: EntityCore): entity is EntityCore & HasName {
 	return "name" in entity;
 }

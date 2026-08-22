@@ -5,6 +5,7 @@ import type {
 	HasHand,
 	HasItems,
 	HasTemporaryStatBonus,
+	HasSpecial,
 } from "@relic-hunter/shared";
 import { drawCardsInto, applyRestHeal } from "@relic-hunter/shared";
 
@@ -18,14 +19,18 @@ const STARTING_HAND_SIZE = 4;
  * and items (Rest heals toward hpCeiling). Not every entity has both — monsters deliberately don't,
  * and never get a TurnManager.
  */
-type ManagedEntity = EntityCore & HasHand & HasItems & HasTemporaryStatBonus;
+type ManagedEntity = EntityCore &
+	HasHand &
+	HasItems &
+	HasTemporaryStatBonus &
+	HasSpecial;
 
 /**
  * Manages the AP-based turn cycle for a single match. Generic over any
  * entity with a hand and items
  *
  * Each turn the entity has a base AP pool spent across Move and
- * Action (Attack / Rest / Disengage), in any order.
+ * Action (Attack / Rest / Disengage / Special), in any order.
  *
  * Also owns the draw side of the hand economy: 1 card at the start of
  * every turn, and up to 2 more from Rest. Both draw from the ONE shared
@@ -40,6 +45,7 @@ export class TurnManager<T extends ManagedEntity = MercenaryState> {
 
 	private _hasAttackedThisTurn = false;
 	private _hasRestedThisTurn = false;
+	private _hasUsedSpecialThisTurn = false;
 
 	private onChanged: () => void;
 
@@ -82,6 +88,14 @@ export class TurnManager<T extends ManagedEntity = MercenaryState> {
 		return this._apRemaining >= 2;
 	}
 
+	canSpecial(apCost: number): boolean {
+		return !this._hasUsedSpecialThisTurn && this._apRemaining >= apCost;
+	}
+
+	get hasUsedSpecialThisTurn(): boolean {
+		return this._hasUsedSpecialThisTurn;
+	}
+
 	get hasMovedThisTurn(): boolean {
 		return this._hasMovedThisTurn;
 	}
@@ -101,7 +115,11 @@ export class TurnManager<T extends ManagedEntity = MercenaryState> {
 	get isTurnComplete(): boolean {
 		return (
 			this.apRemaining <= 0 ||
-			(!this.canMove && !this.canAttack && !this.canRest && !this.canDisengage)
+			(!this.canMove &&
+				!this.canAttack &&
+				!this.canRest &&
+				!this.canDisengage &&
+				!this.canSpecial(1))
 		);
 	}
 
@@ -118,10 +136,11 @@ export class TurnManager<T extends ManagedEntity = MercenaryState> {
 	/**
 	 * Begin the turn's single Move. A blue card may be played on it
 	 * unconditionally now — there's no "first press" concept left to
-	 * gate it.
+	 * gate it. Cancels any active special, same as every other action.
 	 */
 	beginMovement(cardType: string, cardValue: number): boolean {
 		if (!this.canMove) return false;
+		this.clearSpecial();
 
 		let budget = this.getEntity().stats.movement;
 		if (cardType === "blue") {
@@ -143,9 +162,10 @@ export class TurnManager<T extends ManagedEntity = MercenaryState> {
 
 	// ---------- ACTIONS ----------
 
-	/** Spend 2 AP on Attack. No longer touches Move at all. */
+	/** Spend 2 AP on Attack. No longer touches Move at all. Cancels any active special. */
 	spendAttack(): boolean {
 		if (!this.canAttack) return false;
+		this.clearSpecial();
 		this._apRemaining -= 2;
 		this._hasAttackedThisTurn = true;
 		this.onChanged();
@@ -153,9 +173,10 @@ export class TurnManager<T extends ManagedEntity = MercenaryState> {
 	}
 
 	/** Spend 1 AP on Rest, heal toward the current HP ceiling,
-	 * draw up to 2 cards. No longer touches Move at all. */
+	 * draw up to 2 cards. No longer touches Move at all. Cancels any active special. */
 	spendRest(): boolean {
 		if (!this.canRest) return false;
+		this.clearSpecial();
 		this._apRemaining -= 1;
 		this._hasRestedThisTurn = true;
 		this.drawCards(2);
@@ -164,12 +185,33 @@ export class TurnManager<T extends ManagedEntity = MercenaryState> {
 		return true;
 	}
 
-	/** Spend 2 AP to Disengage — a full alternative movement, ZoC-immune. */
+	/** Spend 2 AP to Disengage — a full alternative movement, ZoC-immune. Cancels any active special. */
 	beginDisengage(): boolean {
 		if (!this.canDisengage) return false;
+		this.clearSpecial();
 		this._apRemaining -= 2;
 		this.onChanged();
 		return true;
+	}
+
+	/**
+	 * Activates any class special. Whether it's a one-shot (caller clears
+	 * it right after applying the effect) or a persistent stance (caller
+	 * leaves it set) is entirely up to whatever calls this — TurnManager
+	 * doesn't need to know or care which kind it is.
+	 */
+	useSpecial(apCost: number, specialId: string): boolean {
+		if (!this.canSpecial(apCost)) return false;
+		this._apRemaining -= apCost;
+		this._hasUsedSpecialThisTurn = true;
+		this.getEntity().special = specialId;
+		this.onChanged();
+		return true;
+	}
+
+	clearSpecial(): void {
+		const entity = this.getEntity();
+		if (entity.special !== null) entity.special = null;
 	}
 
 	// ---------- TURN LIFECYCLE ----------
@@ -180,6 +222,7 @@ export class TurnManager<T extends ManagedEntity = MercenaryState> {
 		this._movementRemaining = 0;
 		this._hasAttackedThisTurn = false;
 		this._hasRestedThisTurn = false;
+		this._hasUsedSpecialThisTurn = false;
 		this.getEntity().temporaryStatBonus = {
 			attack: 0,
 			defense: 0,

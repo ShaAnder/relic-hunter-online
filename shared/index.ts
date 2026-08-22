@@ -11,6 +11,7 @@ export * from "./src/entities/character";
 export * from "./src/entities/names";
 export * from "./src/entities/chest";
 export * from "./src/entities/monsterSpawning";
+export * from "./src/entities/classSpecials";
 export * from "./src/entities/traps";
 export * from "./src/items/item";
 export * from "./src/math/dice";

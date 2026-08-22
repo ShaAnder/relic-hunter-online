@@ -7,6 +7,7 @@ import endTurnSvgUrl from "@/assets/icons/endTurn.svg";
 import attackSvgUrl from "@/assets/icons/attack.svg";
 import restSvgUrl from "@/assets/icons/rest.svg";
 import engageSvgUrl from "@/assets/icons/engage.svg";
+import zocSvgUrl from "@/assets/icons/zoc.svg";
 import { pointInCircle } from "@/rendering/HitTest";
 
 export type ButtonAction =
@@ -15,6 +16,7 @@ export type ButtonAction =
 	| "rest"
 	| "disengage"
 	| "endTurn"
+	| "special"
 	| null;
 
 const HUB_RADIUS = 25;
@@ -34,9 +36,10 @@ const INNER_ANGLES = {
 	endTurn: 190 * DEG,
 };
 const OUTER_ANGLES = {
-	disengage: 260 * DEG,
-	rest: 230 * DEG,
-	attack: 200 * DEG,
+	disengage: 270 * DEG,
+	rest: 245 * DEG,
+	attack: 220 * DEG,
+	special: 195 * DEG,
 };
 
 interface InnerNode {
@@ -122,11 +125,15 @@ export class RadialActionWheel {
 		}
 	}
 
-	sync(tm: TurnManager): void {
+	sync(tm: TurnManager, specialAvailable: { apCost: number } | null): void {
 		this.setNodeEnabled("move", tm.canMove);
 		this.setNodeEnabled("attack", tm.canAttack);
 		this.setNodeEnabled("rest", tm.canRest);
 		this.setNodeEnabled("disengage", tm.canDisengage);
+		this.setNodeEnabled(
+			"special",
+			specialAvailable !== null && tm.canSpecial(specialAvailable.apCost),
+		);
 	}
 
 	/** Collapses the outer ring only — matches the old ActionButton.closeMenu() role. */
@@ -291,6 +298,9 @@ export class RadialActionWheel {
 		this.outerNodes.push(
 			this.makeOuterNode("attack", "attack", OUTER_ANGLES.attack, () => {}),
 		);
+		this.outerNodes.push(
+			this.makeOuterNode("special", "special", OUTER_ANGLES.special, () => {}),
+		);
 
 		for (const node of this.outerNodes) {
 			this.view.addChild(node.container);
@@ -302,6 +312,7 @@ export class RadialActionWheel {
 		this.attachSvgIcon(this.outerNodes[0].container, engageSvgUrl);
 		this.attachSvgIcon(this.outerNodes[1].container, restSvgUrl);
 		this.attachSvgIcon(this.outerNodes[2].container, attackSvgUrl);
+		this.attachSvgIcon(this.outerNodes[3].container, zocSvgUrl);
 	}
 
 	/**

@@ -787,7 +787,7 @@ export class MapScene implements Scene {
 				(u) =>
 					u.state.id !== excludeId &&
 					u.state.currentHp > 0 &&
-					RH.isMeleeClass(u.state.characterClass),
+					u.state.special === "overwatch",
 			)
 			.map((u) => ({ id: u.state.id, coord: u.state.coord, zocRadius: 2 }));
 	}
@@ -798,7 +798,7 @@ export class MapScene implements Scene {
 				(u) =>
 					u.state.id !== excludeId &&
 					u.state.currentHp > 0 &&
-					RH.isMeleeClass(u.state.characterClass),
+					u.state.special === "overwatch",
 			)
 			.map((u) => ({
 				id: u.state.id,
@@ -2142,6 +2142,17 @@ export class MapScene implements Scene {
 		this.buttonBar.closeMenu();
 	}
 
+	private handleSpecialPressed(): void {
+		this.resetActionState();
+		const def = RH.getClassSpecial(this.localUnit.state.characterClass);
+		if (!def) return;
+		if (!this.localUnit.turnManager.useSpecial(def.apCost, def.id)) return;
+		if (def.isStance) {
+			this.showFeedback(`✨ ${def.name} active`);
+		}
+		this.syncUI();
+	}
+
 	// ---------- End Turn ----------
 
 	/** End turn — shared by [E] key and End Turn button. No-ops mid-animation. */
@@ -2272,6 +2283,9 @@ export class MapScene implements Scene {
 			case "disengage":
 				this.handleDisengagePressed();
 				break;
+			case "special":
+				this.handleSpecialPressed();
+				break;
 			case "endTurn":
 				this.handleEndTurn();
 				break;
@@ -2314,7 +2328,10 @@ export class MapScene implements Scene {
 	private syncUI(): void {
 		if (!this.buttonBar || this.units.length === 0) return;
 		const local = this.localUnit;
-		this.buttonBar.sync(local.turnManager);
+		this.buttonBar.sync(
+			local.turnManager,
+			RH.getClassSpecial(local.state.characterClass),
+		);
 		this.hand.syncFromHand(local.state.hand);
 		this.deckTracker.sync(local.turnManager);
 		this.inventoryPanel.sync(local.state.items);
