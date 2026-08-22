@@ -1033,40 +1033,40 @@ export class MapScene implements Scene {
 		this.camera.setInputLocked(true);
 		this.setPlayerControlsVisible(false);
 
-		const BETWEEN_AI_MS = 600;
+		try {
+			const BETWEEN_AI_MS = 600;
 
-		let isFirst = true;
-		for (const unit of this.aiUnits) {
-			if (unit.state.currentHp <= 0) {
-				if (!isFirst) await this.delay(BETWEEN_AI_MS);
+			let isFirst = true;
+			for (const unit of this.aiUnits) {
+				if (unit.state.currentHp <= 0) {
+					if (!isFirst) await this.delay(BETWEEN_AI_MS);
+					isFirst = false;
+					await this.processRecoveryTurn(unit);
+					continue;
+				}
+
+				if (!isFirst) {
+					await this.delay(BETWEEN_AI_MS);
+				}
 				isFirst = false;
-				await this.processRecoveryTurn(unit);
-				continue;
+				unit.turnManager.endTurn();
+				await this.processOneEnemyTurn(unit);
+				this.trySpawnMonster();
 			}
 
-			if (!isFirst) {
-				await this.delay(BETWEEN_AI_MS);
+			await this.checkDeckExhaustion();
+			await this.processMonsterTurns();
+
+			if (this.boss && this.boss.state.currentHp > 0) {
+				await this.delay(400);
+				await this.processOneMonsterTurn(this.boss);
 			}
-			isFirst = false;
-			unit.turnManager.endTurn();
-			await this.processOneEnemyTurn(unit);
-			this.trySpawnMonster();
+		} finally {
+			this.processingEnemyTurns = false;
+			this.camera.setInputLocked(false);
+			this.beginPlayerTurn();
+			this.syncUI();
 		}
-
-		await this.checkDeckExhaustion();
-		await this.processMonsterTurns();
-
-		if (this.boss && this.boss.state.currentHp > 0) {
-			await this.delay(400);
-			await this.processOneMonsterTurn(this.boss);
-		}
-
-		this.processingEnemyTurns = false;
-		this.processingEnemyTurns = false;
-		this.camera.setInputLocked(false);
-		this.beginPlayerTurn();
-
-		this.syncUI();
 	}
 
 	private async processOneEnemyTurn(unit: PilotedMercenary): Promise<void> {
