@@ -56,6 +56,16 @@ export interface HasMatchScore {
 	matchScore: MatchScore;
 }
 
+export interface TemporaryStatBonus {
+	attack: number | "A" | "C";
+	defense: number | "A" | "C";
+	movement: number;
+}
+
+export interface HasTemporaryStatBonus {
+	temporaryStatBonus: TemporaryStatBonus;
+}
+
 export function hasName(entity: EntityCore): entity is EntityCore & HasName {
 	return "name" in entity;
 }

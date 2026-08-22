@@ -4,6 +4,7 @@ import type {
 	EntityCore,
 	HasHand,
 	HasItems,
+	HasTemporaryStatBonus,
 } from "@relic-hunter/shared";
 import { drawCardsInto, applyRestHeal } from "@relic-hunter/shared";
 
@@ -17,7 +18,7 @@ const STARTING_HAND_SIZE = 4;
  * and items (Rest heals toward hpCeiling). Not every entity has both — monsters deliberately don't,
  * and never get a TurnManager.
  */
-type ManagedEntity = EntityCore & HasHand & HasItems;
+type ManagedEntity = EntityCore & HasHand & HasItems & HasTemporaryStatBonus;
 
 /**
  * Manages the AP-based turn cycle for a single match. Generic over any
@@ -179,6 +180,11 @@ export class TurnManager<T extends ManagedEntity = MercenaryState> {
 		this._movementRemaining = 0;
 		this._hasAttackedThisTurn = false;
 		this._hasRestedThisTurn = false;
+		this.getEntity().temporaryStatBonus = {
+			attack: 0,
+			defense: 0,
+			movement: 0,
+		};
 		this.drawCards(1);
 		this.onChanged();
 	}

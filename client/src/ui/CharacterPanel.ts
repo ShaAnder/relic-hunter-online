@@ -24,7 +24,13 @@ export class CharacterPanel {
 	private hpBarLost = new Graphics();
 	private hpText: Text;
 	private nameText: Text;
-	private statsText: Text;
+	private movLabel: Text;
+	private movNumber: Text;
+	private atkLabel: Text;
+	private atkNumber: Text;
+	private defLabel: Text;
+	private defNumber: Text;
+	private apText: Text;
 	private infoBlock = new Container();
 
 	constructor() {
@@ -67,13 +73,48 @@ export class CharacterPanel {
 		this.hpText.y = this.portrait.y + 38;
 		this.infoBlock.addChild(this.hpText);
 
-		this.statsText = new Text({
-			text: "",
-			style: { fill: 0x88ccff, fontSize: 13 },
-		});
-		this.statsText.x = CONTENT_X;
-		this.statsText.y = this.portrait.y + 54;
-		this.infoBlock.addChild(this.statsText);
+		const statY = this.portrait.y + 54;
+		const makeStatText = (fill = 0xffffff): Text =>
+			new Text({ text: "", style: { fill, fontSize: 13 } });
+
+		this.movLabel = makeStatText();
+		this.movNumber = makeStatText();
+		this.atkLabel = makeStatText();
+		this.atkNumber = makeStatText();
+		this.defLabel = makeStatText();
+		this.defNumber = makeStatText();
+		this.apText = makeStatText();
+
+		// Each slot's label starts at a fixed offset; its number sits
+		// right after the label's own width. Labels never change their
+		// own text, so this never reflows — only the number's content
+		// (and color) ever changes on refresh.
+		this.movLabel.text = "Mov ";
+		this.movLabel.x = CONTENT_X;
+		this.movNumber.x = this.movLabel.x + this.movLabel.width;
+
+		this.atkLabel.text = "Atk ";
+		this.atkLabel.x = CONTENT_X + 50;
+		this.atkNumber.x = this.atkLabel.x + this.atkLabel.width;
+
+		this.defLabel.text = "Def ";
+		this.defLabel.x = CONTENT_X + 100;
+		this.defNumber.x = this.defLabel.x + this.defLabel.width;
+
+		this.apText.x = CONTENT_X + 150;
+
+		for (const t of [
+			this.movLabel,
+			this.movNumber,
+			this.atkLabel,
+			this.atkNumber,
+			this.defLabel,
+			this.defNumber,
+			this.apText,
+		]) {
+			t.y = statY;
+			this.infoBlock.addChild(t);
+		}
 
 		this.view.addChild(this.infoBlock);
 	}
@@ -93,16 +134,27 @@ export class CharacterPanel {
 	): void {
 		if (!character || !state) {
 			this.nameText.text = "???";
-			this.statsText.text = "";
+			this.movNumber.text = "";
+			this.atkNumber.text = "";
+			this.defNumber.text = "";
+			this.apText.text = "";
 			this.hpText.text = "";
 			this.hpBarFill.clear();
 			this.hpBarLost.clear();
 			return;
 		}
 		this.nameText.text = `${character.name}  ·  ${this.capitalize(character.characterClass)}`;
-		this.statsText.text =
-			`Mov ${state.stats.movement}   Atk ${state.stats.attack}   ` +
-			`Def ${state.stats.defense}   AP ${apRemaining}/${baseAP}`;
+
+		this.setMovementStatText(
+			state.stats.movement,
+			state.temporaryStatBonus.movement,
+		);
+		this.setAttackStatText(state.stats.attack, state.temporaryStatBonus.attack);
+		this.setDefenseStatText(
+			state.stats.defense,
+			state.temporaryStatBonus.defense,
+		);
+		this.apText.text = `AP ${apRemaining}/${baseAP}`;
 
 		const trueMaxHp = state.stats.maxHp;
 		const ceiling = Math.max(1, state.hpCeiling);
@@ -126,6 +178,47 @@ export class CharacterPanel {
 			this.hpBarLost.roundRect(lostX, 0, lostW, 14, 3);
 			this.hpBarLost.fill({ color: 0x000000, alpha: 0.55 });
 		}
+	}
+
+	/** Movement has no A/C special-card concept — always a plain numeric bonus. */
+	private setMovementStatText(base: number, bonus: number): void {
+		this.movNumber.text = `${base + bonus}`;
+		this.movNumber.style.fill =
+			bonus > 0 ? 0x4a9eff : bonus < 0 ? 0xe74c3c : 0xffffff;
+	}
+
+	/** "A" here means a flat 2x multiplier, "C" means 1.5x — matches computeAttackValue exactly. Different meaning from defense's "A"/"C" despite the same letters. */
+	private setAttackStatText(base: number, bonus: number | "A" | "C"): void {
+		if (bonus === "A") {
+			this.atkNumber.text = `${base * 2}`;
+			this.atkNumber.style.fill = 0x4a9eff;
+			return;
+		}
+		if (bonus === "C") {
+			this.atkNumber.text = `${Math.round(base * 1.5)}`;
+			this.atkNumber.style.fill = 0x4a9eff;
+			return;
+		}
+		this.atkNumber.text = `${base + bonus}`;
+		this.atkNumber.style.fill =
+			bonus > 0 ? 0x4a9eff : bonus < 0 ? 0xe74c3c : 0xffffff;
+	}
+
+	/** "A" here means full immunity, "C" means a 1.5x defense ceiling — matches resolveHazardRoll's own handling of these cards. */
+	private setDefenseStatText(base: number, bonus: number | "A" | "C"): void {
+		if (bonus === "A") {
+			this.defNumber.text = "IMM";
+			this.defNumber.style.fill = 0x4a9eff;
+			return;
+		}
+		if (bonus === "C") {
+			this.defNumber.text = `${Math.round(base * 1.5)}`;
+			this.defNumber.style.fill = 0x4a9eff;
+			return;
+		}
+		this.defNumber.text = `${base + bonus}`;
+		this.defNumber.style.fill =
+			bonus > 0 ? 0x4a9eff : bonus < 0 ? 0xe74c3c : 0xffffff;
 	}
 
 	/** Top-left corner, small margin. */

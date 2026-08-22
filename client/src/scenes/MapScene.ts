@@ -798,9 +798,25 @@ export class MapScene implements Scene {
 				(u) => u.state.id === crossing.owner.id,
 			);
 			if (ownerUnit) {
+				const bonus =
+					"temporaryStatBonus" in entity.state
+						? (entity.state as RH.MercenaryState).temporaryStatBonus.defense
+						: 0;
+				const syntheticCard: RH.CardData | undefined =
+					bonus !== 0
+						? {
+								id: "__temp_defense__",
+								color: "yellow",
+								name: "Defense",
+								value: bonus,
+								description: "",
+								actionType: "defense",
+							}
+						: undefined;
 				const strike = RH.resolveReactionStrike(
 					ownerUnit.state.stats,
 					entity.state.stats,
+					syntheticCard,
 				);
 				entity.state.currentHp -= strike.damage;
 				this.showFeedback(
@@ -1102,6 +1118,15 @@ export class MapScene implements Scene {
 					if (moveCard) {
 						const idx = unit.state.hand.findIndex((c) => c.id === moveCard.id);
 						if (idx !== -1) unit.state.hand.splice(idx, 1);
+					}
+
+					if (moveCard?.actionType === "defense") {
+						const v = moveCard.value;
+						if (typeof v === "number" || v === "A" || v === "C") {
+							unit.state.temporaryStatBonus.defense = v;
+						}
+					} else {
+						unit.state.temporaryStatBonus.movement = cardBonus;
 					}
 
 					const { truncatedPath, hazardHit } = this.resolveTrapsAlongPath(
@@ -2063,9 +2088,6 @@ export class MapScene implements Scene {
 				}
 				if (this.hand.isSelecting) this.hand.confirmHighlighted();
 				break;
-			case " ":
-				if (this.hand.isSelecting) this.hand.confirmHighlighted();
-				break;
 		}
 	};
 
@@ -2203,14 +2225,20 @@ export class MapScene implements Scene {
 			return;
 		}
 
+		if (card.actionType === "defense") {
+			const v = card.value;
+			if (typeof v === "number" || v === "A" || v === "C") {
+				local.state.temporaryStatBonus.defense = v;
+			}
+		} else {
+			local.state.temporaryStatBonus.movement = numericValue;
+		}
+		this.syncUI();
+
 		this.moveController.requestEnter();
 		this.buttonBar.setMoveActive(this.moveController.active);
 
-		if (card.actionType === "defense") {
-			this.showFeedback(
-				`🛡️ Defense ${card.value} active this turn (effect coming soon)`,
-			);
-		} else if (card.actionType === "stun") {
+		if (card.actionType === "stun") {
 			// TEMPORARY: routed through the Move flow because there's no
 			// dedicated RH.Trap action yet — every class, Trapper included
 			// once it exists, shares this path for now.
@@ -2289,7 +2317,20 @@ export class MapScene implements Scene {
 
 			this.traps.splice(index, 1);
 
-			const result = RH.resolveHazardRoll(unit.state.stats);
+			const bonus = unit.state.temporaryStatBonus.defense;
+			const syntheticCard: RH.CardData | undefined =
+				bonus !== 0
+					? {
+							id: "__temp_defense__",
+							color: "yellow",
+							name: "Defense",
+							value: bonus,
+							description: "",
+							actionType: "defense",
+						}
+					: undefined;
+			const result = RH.resolveHazardRoll(unit.state.stats, syntheticCard);
+
 			if (!result.landed) {
 				this.showFeedback(
 					`🪤 ${this.getUnitLabel(unit)} resisted a hazard (${result.hazardRoll} vs ${result.victimRoll})`,

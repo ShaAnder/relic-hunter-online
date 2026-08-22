@@ -49,6 +49,15 @@ export class InventoryPanel {
 	);
 	private selectedIndex: number | null = null;
 	private targetItemId: string | null = null;
+
+	// drop confirmation
+	private dropConfirmPopup = new Container();
+	private dropConfirmBg = new Graphics();
+	private dropConfirmText!: Text;
+	private dropConfirmYesBtn = new Graphics();
+	private dropConfirmCancelBtn = new Graphics();
+	private pendingDropIndex: number | null = null;
+
 	private actionButtons: ActionButton[] = [];
 	private readonly hiddenY = PANEL_H;
 	private readonly shownY = PANEL_H + ACTION_ROW_Y_GAP;
@@ -131,6 +140,7 @@ export class InventoryPanel {
 
 		this.buildActionButtons();
 		this.buildInspectPopup();
+		this.buildDropConfirmPopup();
 
 		this.view.visible = false;
 	}
@@ -171,7 +181,7 @@ export class InventoryPanel {
 		}
 	}
 
-	/** "own" = normal inventory (Inspect/Drop, Swap stays disabled per existing placeholder). "lootable" = viewing someone else's items — Swap hidden entirely, the third slot becomes Take instead of Drop. */
+	/** "own" = normal inventory (Inspect/Drop, Swap stays disabled per existing placeholder).*/
 	setMode(mode: PanelMode): void {
 		this.mode = mode;
 		const swapBtn = this.actionButtons.find((b) => b.key === "swap");
@@ -181,6 +191,7 @@ export class InventoryPanel {
 		if (thirdBtn) {
 			thirdBtn.icon.clear();
 			if (mode === "lootable") this.drawTakeIcon(thirdBtn.icon);
+			else if (mode === "surrendering") this.drawTakeIcon(thirdBtn.icon);
 			else this.drawDropIcon(thirdBtn.icon);
 		}
 	}
@@ -328,19 +339,6 @@ export class InventoryPanel {
 		for (const btn of this.actionButtons) {
 			btn.targetY = shown ? this.shownY : this.hiddenY;
 		}
-
-		const dropBtn = this.actionButtons.find((b) => b.key === "drop");
-		if (dropBtn) {
-			const selectedItem =
-				this.selectedIndex !== null
-					? this.currentItems[this.selectedIndex]
-					: null;
-			const isBlockedRelicDrop =
-				this.mode === "own" && selectedItem?.id === this.targetItemId;
-			dropBtn.bg.alpha = isBlockedRelicDrop ? 0.4 : 1;
-			dropBtn.icon.alpha = isBlockedRelicDrop ? 0.4 : 1;
-			dropBtn.container.eventMode = isBlockedRelicDrop ? "none" : "static";
-		}
 	}
 
 	private handleActionClick(key: ActionKey): void {
@@ -361,13 +359,13 @@ export class InventoryPanel {
 			} else if (this.mode === "surrendering") {
 				this.onGive?.(index);
 			} else {
-				// The relic can be surrendered or looted by another hunter
-				// (a legitimate transfer — the match still resolves normally
-				// for whoever ends up holding it) but never permanently
-				// dropped out of play entirely.
-				if (item.id === this.targetItemId) return;
-				this.onDrop?.(index);
-				this.deselect();
+				this.pendingDropIndex = index;
+				const isRelic = item.id === this.targetItemId;
+				this.dropConfirmText.text = isRelic
+					? "You cannot drop the target relic."
+					: "Drop this item?";
+				this.dropConfirmYesBtn.visible = !isRelic;
+				this.dropConfirmPopup.visible = true;
 			}
 		} else if (key === "swap") {
 			this.onSwapRequested?.(index);
@@ -442,6 +440,54 @@ export class InventoryPanel {
 		this.inspectName.text = item.name;
 		this.inspectDesc.text = item.description ?? "No description.";
 		this.inspectPopup.visible = true;
+	}
+
+	private buildDropConfirmPopup(): void {
+		this.dropConfirmBg.roundRect(0, 0, 200, 100, 8);
+		this.dropConfirmBg.fill({ color: 0x111111, alpha: 0.96 });
+		this.dropConfirmBg.stroke({ width: 1, color: 0x666666 });
+		this.dropConfirmPopup.addChild(this.dropConfirmBg);
+
+		this.dropConfirmText = new Text({
+			text: "",
+			style: {
+				fill: 0xffffff,
+				fontSize: 13,
+				wordWrap: true,
+				wordWrapWidth: 180,
+			},
+		});
+		this.dropConfirmText.x = 10;
+		this.dropConfirmText.y = 10;
+		this.dropConfirmPopup.addChild(this.dropConfirmText);
+
+		this.dropConfirmYesBtn.roundRect(10, 60, 85, 28, 6);
+		this.dropConfirmYesBtn.fill(0x8b1e1e);
+		this.dropConfirmYesBtn.eventMode = "static";
+		this.dropConfirmYesBtn.on("pointerdown", () => this.confirmPendingDrop());
+		this.dropConfirmPopup.addChild(this.dropConfirmYesBtn);
+
+		this.dropConfirmCancelBtn.roundRect(105, 60, 85, 28, 6);
+		this.dropConfirmCancelBtn.fill(0x333333);
+		this.dropConfirmCancelBtn.eventMode = "static";
+		this.dropConfirmCancelBtn.on("pointerdown", () => this.cancelPendingDrop());
+		this.dropConfirmPopup.addChild(this.dropConfirmCancelBtn);
+
+		this.dropConfirmPopup.visible = false;
+		this.view.addChild(this.dropConfirmPopup);
+	}
+
+	private confirmPendingDrop(): void {
+		if (this.pendingDropIndex === null) return;
+		this.onDrop?.(this.pendingDropIndex);
+		this.dropConfirmPopup.visible = false;
+		this.pendingDropIndex = null;
+		this.deselect();
+	}
+
+	private cancelPendingDrop(): void {
+		this.dropConfirmPopup.visible = false;
+		this.pendingDropIndex = null;
 	}
 
 	// --- gear silhouettes ---

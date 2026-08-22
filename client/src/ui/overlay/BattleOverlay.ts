@@ -267,8 +267,7 @@ export class BattleOverlay implements Overlay {
 		this.view.addChild(this.lootConfirmPopup);
 		this.lootConfirmPopup.eventMode = "static";
 
-		this.localPlayZone.view.x = 0;
-		this.localPlayZone.view.y = 0;
+		this.view.addChild(this.localPlayZone.view);
 
 		if (this.localHumanRole === "none") {
 			this.buildAttackerIndicator();
@@ -639,19 +638,26 @@ export class BattleOverlay implements Overlay {
 
 	private onHandCardConfirmed(card: CardData): void {
 		if (!this.pendingAction) return;
-		const localStats =
+		const localState =
 			this.localHumanRole === "attacker"
-				? this.attackerState.stats
-				: this.defenderState.stats;
+				? this.attackerState
+				: this.defenderState;
 		const chosenCard = card.id === SKIP_CARD_ID ? undefined : card;
+
+		if (this.pendingAction === "attack" && chosenCard) {
+			const v = chosenCard.value;
+			if (typeof v === "number" || v === "A" || v === "C") {
+				localState.temporaryStatBonus.attack = v;
+			}
+		}
+
 		void this.resolveLocalChoice({
 			action: this.pendingAction,
-			stats: localStats,
+			stats: localState.stats,
 			card: chosenCard,
 		});
 		this.pendingAction = null;
 	}
-
 	/**
 	 * Defeat loot: winner takes from loser.
 	 * Human uses loserLootPanel + setOnTake. AI auto-picks.
