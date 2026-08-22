@@ -1054,6 +1054,7 @@ export class MapScene implements Scene {
 				this.trySpawnMonster();
 			}
 
+			this.deckTracker.sync(this.localUnit.turnManager);
 			await this.checkDeckExhaustion();
 			await this.processMonsterTurns();
 
@@ -1226,20 +1227,9 @@ export class MapScene implements Scene {
 
 		const selfAfter = this.toCombatant(unit.state);
 		const othersAfter = this.buildOtherCombatants(unit.state.id);
-		// Engagement decision uses pre-approach HP specifically — a ZoC
-		// tick taken reaching the target shouldn't retroactively cancel
-		// the fight it was risked for. Real post-move HP (selfAfter) is
-		// still what runFallbackBehavior uses below if no fight happens.
 		const selfForEngagement = { ...selfAfter, currentHp: preMoveHp };
-		const engagementRange = RH.getRangeForClass(unit.state.characterClass);
-		const engagementTiles = RH.computeAttackRange(
-			this.grid,
-			unit.state.coord,
-			unit.state.characterClass,
-			engagementRange,
-		);
 		const inRangeKeys = new Set(
-			engagementTiles.map((t) => `${t.coord.x},${t.coord.y}`),
+			this.adjacentTiles(unit.state.coord).map((c) => `${c.x},${c.y}`),
 		);
 
 		const victim = RH.pickEngagementTarget(
@@ -1802,6 +1792,16 @@ export class MapScene implements Scene {
 		return pool[Math.floor(Math.random() * pool.length)];
 	}
 
+	/** The four cardinal neighbor tiles of a coord — no walkability or line-of-sight filtering, just raw adjacency. */
+	private adjacentTiles(coord: RH.GridCoord): RH.GridCoord[] {
+		return [
+			{ x: coord.x + 1, y: coord.y },
+			{ x: coord.x - 1, y: coord.y },
+			{ x: coord.x, y: coord.y + 1 },
+			{ x: coord.x, y: coord.y - 1 },
+		];
+	}
+
 	/** Win check: standing on Exit with target held, via normal move only. PASS 4 TODO: local-only, revisit for multiplayer. */
 	private async checkWinCondition(unit: PilotedMercenary): Promise<void> {
 		const exitTile = RH.findExitTile(this.grid);
@@ -1899,16 +1899,9 @@ export class MapScene implements Scene {
 	private renderAttackRange(): void {
 		this.attackRangeContainer.removeChildren();
 		const local = this.localUnit.state;
-		const range = RH.getRangeForClass(local.characterClass);
-		const tiles = RH.computeAttackRange(
-			this.grid,
-			local.coord,
-			local.characterClass,
-			range,
-		);
 
-		for (const tile of tiles) {
-			const pos = gridToScreen(tile.coord);
+		for (const coord of this.adjacentTiles(local.coord)) {
+			const pos = gridToScreen(coord);
 			const g = new Graphics();
 			g.poly([
 				0,
@@ -1920,10 +1913,7 @@ export class MapScene implements Scene {
 				-TILE_WIDTH / 2,
 				0,
 			]);
-			g.fill({
-				color: tile.quality === "clear" ? 0xffd700 : 0xe74c3c,
-				alpha: 0.35,
-			});
+			g.fill({ color: 0xffd700, alpha: 0.35 });
 			g.x = pos.x;
 			g.y = pos.y;
 			this.attackRangeContainer.addChild(g);
@@ -1949,17 +1939,7 @@ export class MapScene implements Scene {
 		if (!unit || unit.state.currentHp <= 0) return;
 
 		const local = this.localUnit.state;
-		const range = RH.getRangeForClass(local.characterClass);
-		const inRangeTiles = RH.computeAttackRange(
-			this.grid,
-			local.coord,
-			local.characterClass,
-			range,
-		);
-		const inRange = inRangeTiles.some(
-			(t) =>
-				t.coord.x === unit.state.coord.x && t.coord.y === unit.state.coord.y,
-		);
+		const inRange = RH.isAdjacent(local.coord, unit.state.coord);
 
 		if (!inRange) {
 			this.showFeedback("⚔ Target out of range");
@@ -1992,18 +1972,7 @@ export class MapScene implements Scene {
 
 	private tryStartCombatVsMonster(monster: MonsterEntity): void {
 		const local = this.localUnit.state;
-		const range = RH.getRangeForClass(local.characterClass);
-		const inRangeTiles = RH.computeAttackRange(
-			this.grid,
-			local.coord,
-			local.characterClass,
-			range,
-		);
-		const inRange = inRangeTiles.some(
-			(t) =>
-				t.coord.x === monster.state.coord.x &&
-				t.coord.y === monster.state.coord.y,
-		);
+		const inRange = RH.isAdjacent(local.coord, monster.state.coord);
 		if (!inRange) {
 			this.showFeedback("⚔ Target out of range");
 			return;
@@ -2059,13 +2028,6 @@ export class MapScene implements Scene {
 			(screenY - this.boardContainer.y) / this.boardContainer.scale.y;
 
 		const local = this.localUnit.state;
-		const range = RH.getRangeForClass(local.characterClass);
-		const inRangeTiles = RH.computeAttackRange(
-			this.grid,
-			local.coord,
-			local.characterClass,
-			range,
-		);
 
 		const hit = this.aiUnits.find((u) => {
 			if (u.state.currentHp <= 0) return false;
@@ -2079,9 +2041,7 @@ export class MapScene implements Scene {
 				)
 			)
 				return false;
-			return inRangeTiles.some(
-				(t) => t.coord.x === u.state.coord.x && t.coord.y === u.state.coord.y,
-			);
+			return RH.isAdjacent(local.coord, u.state.coord);
 		});
 
 		if (hit) {
@@ -2092,9 +2052,7 @@ export class MapScene implements Scene {
 		const monsterHit = this.livingMonsters().find((m) => {
 			if (!pointInCircle(m.token.view.x, m.token.view.y, localX, localY, 20))
 				return false;
-			return inRangeTiles.some(
-				(t) => t.coord.x === m.state.coord.x && t.coord.y === m.state.coord.y,
-			);
+			return RH.isAdjacent(local.coord, m.state.coord);
 		});
 
 		if (monsterHit) this.tryStartCombatVsMonster(monsterHit);

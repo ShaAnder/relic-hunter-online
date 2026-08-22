@@ -34,8 +34,8 @@ function pushCopies(
 }
 
 /**
- * 20 Blue cards: 2× E (the hard cap — E is a gamble/reposition tool, not
- * something to spam) + 6 each of Move 1/2/3 (18, evenly split three ways).
+ * 26 Blue cards: 2× E (the hard cap — E is a gamble/reposition tool, not
+ * something to spam) + 8 each of Move 1/2/3 (24, evenly split three ways).
  */
 function buildBlueCards(): CardData[] {
 	const cards: CardData[] = [];
@@ -47,21 +47,21 @@ function buildBlueCards(): CardData[] {
 			"Teleport to exit — wins if carrying the target item, otherwise random teleport",
 		actionType: "move",
 	});
-	pushCopies(cards, 6, {
+	pushCopies(cards, 8, {
 		color: "blue",
 		name: "Move +1",
 		value: 1,
 		description: "+1 Movement",
 		actionType: "move",
 	});
-	pushCopies(cards, 6, {
+	pushCopies(cards, 8, {
 		color: "blue",
 		name: "Move +2",
 		value: 2,
 		description: "+2 Movement",
 		actionType: "move",
 	});
-	pushCopies(cards, 6, {
+	pushCopies(cards, 8, {
 		color: "blue",
 		name: "Move +3",
 		value: 3,
@@ -72,13 +72,12 @@ function buildBlueCards(): CardData[] {
 }
 
 /**
- * 25 Red cards: 3 each of Attack 1-6 (18) + 4× A + 3× C (7). Both specials
- * sit under the "no more than 5 of any special" cap.
+ * 33 Red cards: 4 each of Attack 1-6 (24) + 5× A + 4× C (9).
  */
 function buildRedCards(): CardData[] {
 	const cards: CardData[] = [];
 	for (let value = 1; value <= 6; value++) {
-		pushCopies(cards, 3, {
+		pushCopies(cards, 4, {
 			color: "red",
 			name: `Attack +${value}`,
 			value,
@@ -86,14 +85,14 @@ function buildRedCards(): CardData[] {
 			actionType: "attack",
 		});
 	}
-	pushCopies(cards, 4, {
+	pushCopies(cards, 5, {
 		color: "red",
 		name: "Double Dmg (A)",
 		value: "A",
 		description: "Attack stat ×2, applied before defense",
 		actionType: "attack",
 	});
-	pushCopies(cards, 3, {
+	pushCopies(cards, 4, {
 		color: "red",
 		name: "Critical (C)",
 		value: "C",
@@ -104,40 +103,40 @@ function buildRedCards(): CardData[] {
 }
 
 /**
- * 15 Yellow cards: Def 1/3 get 3 copies, Def 2/4 get 2 (10 total) + 3× A +
- * 2× C (5). Both specials under the cap of 5.
+ * 20 Yellow cards: Def 1/3 get 4 copies, Def 2/4 get 3 (14 total) + 4× A +
+ * 2× C (6).
  */
 function buildYellowCards(): CardData[] {
 	const cards: CardData[] = [];
-	pushCopies(cards, 3, {
+	pushCopies(cards, 4, {
 		color: "yellow",
 		name: "Def +1",
 		value: 1,
 		description: "+1 Defense",
 		actionType: "defense",
 	});
-	pushCopies(cards, 2, {
+	pushCopies(cards, 3, {
 		color: "yellow",
 		name: "Def +2",
 		value: 2,
 		description: "+2 Defense",
 		actionType: "defense",
 	});
-	pushCopies(cards, 3, {
+	pushCopies(cards, 4, {
 		color: "yellow",
 		name: "Def +3",
 		value: 3,
 		description: "+3 Defense",
 		actionType: "defense",
 	});
-	pushCopies(cards, 2, {
+	pushCopies(cards, 3, {
 		color: "yellow",
 		name: "Def +4",
 		value: 4,
 		description: "+4 Defense",
 		actionType: "defense",
 	});
-	pushCopies(cards, 3, {
+	pushCopies(cards, 4, {
 		color: "yellow",
 		name: "Nullify (A)",
 		value: "A",
@@ -156,11 +155,11 @@ function buildYellowCards(): CardData[] {
 }
 
 /**
- * 15 Green cards — all Stun, the only real Green card as of Phase 1.
+ * 21 Green cards — all Stun, the only real Green card as of Phase 1.
  */
 function buildGreenCards(): CardData[] {
 	const cards: CardData[] = [];
-	pushCopies(cards, 15, {
+	pushCopies(cards, 21, {
 		color: "green",
 		name: "Stun",
 		value: 1,
@@ -171,15 +170,11 @@ function buildGreenCards(): CardData[] {
 }
 
 /**
- * Build the ONE shared deck for the match — 75 cards total (20 Blue / 25
- * Red / 15 Yellow / 15 Green), shuffled once. This is not per-mercenary:
+ * Build the ONE shared deck for the match — 100 cards total (26 Blue / 33
+ * Red / 20 Yellow / 21 Green), shuffled once. This is not per-mercenary:
  * every hunter on the map draws from this same deck, turn by turn, until
- * it's exhausted
+ * it's exhausted.
  */
-// TEMPORARY — testing boss-spawn timing. Set to 0 (or delete this line
-// and the check below) to restore the real, full deck size.
-const DEBUG_DECK_SIZE_CAP = 10;
-
 export function buildSharedDeck(): CardData[] {
 	const deck = [
 		...buildBlueCards(),
@@ -187,11 +182,7 @@ export function buildSharedDeck(): CardData[] {
 		...buildYellowCards(),
 		...buildGreenCards(),
 	];
-	const shuffled = shuffle(deck);
-	if (DEBUG_DECK_SIZE_CAP > 0) {
-		return shuffled.slice(0, DEBUG_DECK_SIZE_CAP);
-	}
-	return shuffled;
+	return shuffle(deck);
 }
 
 /** Max cards any hunter can hold — player or AI. Single source of truth. */
