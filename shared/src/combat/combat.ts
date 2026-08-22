@@ -158,12 +158,27 @@ function resolveRoundWithRun(
 
 	const runner = aRuns ? a : b;
 	const other = aRuns ? b : a;
+
+	if (other.action !== "attack") {
+		const guaranteedOutcome: CombatSideOutcome = {
+			damageTaken: 0,
+			nullified: false,
+			escaped: true,
+		};
+		const otherOutcome: CombatSideOutcome = {
+			damageTaken: 0,
+			nullified: false,
+		};
+		return aRuns
+			? { a: guaranteedOutcome, b: otherOutcome }
+			: { a: otherOutcome, b: guaranteedOutcome };
+	}
+
 	const runResult = attemptRun(runner, other);
 
-	const runnerDamage =
-		!runResult.success && other.action === "attack"
-			? computeCaughtRunDamage(other, runner)
-			: 0;
+	const runnerDamage = !runResult.success
+		? computeCaughtRunDamage(other, runner)
+		: 0;
 
 	const runnerOutcome: CombatSideOutcome = {
 		damageTaken: runnerDamage,

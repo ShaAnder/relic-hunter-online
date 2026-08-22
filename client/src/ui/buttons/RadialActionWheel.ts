@@ -130,6 +130,13 @@ export class RadialActionWheel {
 		this.setNodeEnabled("attack", tm.canAttack);
 		this.setNodeEnabled("rest", tm.canRest);
 		this.setNodeEnabled("disengage", tm.canDisengage);
+
+		const specialNode = this.outerNodes.find((n) => n.key === "special");
+		if (specialNode) {
+			specialNode.container.visible =
+				specialAvailable !== null &&
+				(this.outerOpen || specialNode.currentAngle !== HIDDEN_ANGLE);
+		}
 		this.setNodeEnabled(
 			"special",
 			specialAvailable !== null && tm.canSpecial(specialAvailable.apCost),

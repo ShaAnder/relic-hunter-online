@@ -42,6 +42,13 @@ const ACTION_LABELS: Record<CombatAction, string> = {
 
 const RESULT_LINGER_MS = 2200;
 
+// Artificial pacing beats — placeholders standing in for real animation
+// timing later. Tuned for "feels deliberate,"
+const REVEAL_PAUSE_MS = 600;
+const SEQUENTIAL_HIT_GAP_MS = 900;
+const POST_DAMAGE_PAUSE_MS = 600;
+const BETWEEN_ROUNDS_MS = 800;
+
 const LANDSCAPE_COLS = 15;
 const LANDSCAPE_ROWS = 7;
 const PORTRAIT_COLS = 7;
@@ -94,7 +101,11 @@ export class BattleOverlay implements Overlay {
 	private localPlayZone = new PlayZone();
 	private pendingAction: CombatAction | null = null;
 
-	private resolved = false;
+	// combat resolution - rounds
+	private currentRound = 1;
+	private readonly maxRounds = 3;
+	private roundInProgress = false;
+	private roundCounterText!: Text;
 
 	private arenaCols: number;
 	private arenaRows: number;
@@ -219,6 +230,7 @@ export class BattleOverlay implements Overlay {
 
 	private async runAutoFight(): Promise<void> {
 		await this.delay(700);
+		if (this.roundInProgress) return;
 		const attackerChoice = this.isAttackerMonster
 			? monsterCombatChoice(this.attackerState.stats)
 			: chooseCombatAction(
@@ -293,6 +305,14 @@ export class BattleOverlay implements Overlay {
 		this.roundText.anchor.set(0.5);
 		this.roundText.y = -150;
 		this.arena.addChild(this.roundText);
+
+		this.roundCounterText = new Text({
+			text: `Round ${this.currentRound} / ${this.maxRounds}`,
+			style: { fill: 0xcccccc, fontSize: 14 },
+		});
+		this.roundCounterText.anchor.set(0.5);
+		this.roundCounterText.y = -180;
+		this.arena.addChild(this.roundCounterText);
 
 		this.syncHpDisplay();
 		this.syncStatDisplay();
@@ -887,8 +907,8 @@ export class BattleOverlay implements Overlay {
 		attackerChoice: CombatChoice,
 		defenderChoice: CombatChoice,
 	): Promise<void> {
-		if (this.resolved) return;
-		this.resolved = true;
+		if (this.roundInProgress) return;
+		this.roundInProgress = true;
 
 		if (attackerChoice.card) {
 			const idx = this.attackerState.hand.findIndex(
@@ -905,18 +925,51 @@ export class BattleOverlay implements Overlay {
 
 		const result = resolveCombatRound(attackerChoice, defenderChoice);
 
+		// Both sides get locked in blind, showing them is simultaneous since nothing left to hide
+		// and neither can change their mind
 		if (this.attackerIndicator) {
 			this.attackerIndicator.text = ACTION_LABELS[attackerChoice.action];
 		}
 		if (this.defenderIndicator) {
 			this.defenderIndicator.text = ACTION_LABELS[defenderChoice.action];
 		}
+		await this.delay(REVEAL_PAUSE_MS);
 
-		this.attackerState.currentHp -= result.a.damageTaken;
-		this.defenderState.currentHp -= result.b.damageTaken;
-		this.attackerState.matchScore.damageDealt += result.b.damageTaken;
-		this.defenderState.matchScore.damageDealt += result.a.damageTaken;
-		this.syncHpDisplay();
+		const applyAttackerDamage = () => {
+			this.attackerState.currentHp -= result.a.damageTaken;
+			this.attackerState.matchScore.damageDealt += result.b.damageTaken;
+			this.syncHpDisplay();
+		};
+		const applyDefenderDamage = () => {
+			this.defenderState.currentHp -= result.b.damageTaken;
+			this.defenderState.matchScore.damageDealt += result.a.damageTaken;
+			this.syncHpDisplay();
+		};
+
+		const bothAttacking =
+			attackerChoice.action === "attack" && defenderChoice.action === "attack";
+
+		if (bothAttacking) {
+			// this is our sequential combat case, two real hits, coin flip decides who goes first
+			const attackerFirst = Math.random() < 0.5;
+			if (attackerFirst) {
+				applyAttackerDamage();
+				await this.delay(SEQUENTIAL_HIT_GAP_MS);
+				applyDefenderDamage();
+			} else {
+				applyDefenderDamage();
+				await this.delay(SEQUENTIAL_HIT_GAP_MS);
+				applyAttackerDamage();
+			}
+		} else {
+			// Everything else — Attack/Defend, Defend/Defend, any Run
+			// combination — has at most one real hit (or none), so both
+			// sides' outcomes apply together in a single beat.
+			applyAttackerDamage();
+			applyDefenderDamage();
+		}
+
+		await this.delay(POST_DAMAGE_PAUSE_MS);
 
 		this.roundText.text = this.describeOutcome(
 			attackerChoice,
@@ -924,7 +977,42 @@ export class BattleOverlay implements Overlay {
 			result.b,
 		);
 
-		this.finishBattle(attackerChoice, defenderChoice);
+		const battleOver =
+			this.attackerState.currentHp <= 0 ||
+			this.defenderState.currentHp <= 0 ||
+			attackerChoice.action === "surrender" ||
+			defenderChoice.action === "surrender" ||
+			result.a.escaped === true ||
+			result.b.escaped === true ||
+			this.currentRound >= this.maxRounds;
+
+		if (battleOver) {
+			void this.finishBattle(attackerChoice, defenderChoice);
+			return;
+		}
+
+		await this.delay(BETWEEN_ROUNDS_MS);
+		this.advanceToNextRound();
+	}
+
+	/**
+	 * Resets round-local state and re-opens the same decision point for round N+1 —
+	 * human gets the selector back, AI-vs-AI spectator mode re-runs auto-fight.
+	 */
+	private advanceToNextRound(): void {
+		this.currentRound += 1;
+		this.roundCounterText.text = `Round ${this.currentRound} / ${this.maxRounds}`;
+		this.roundInProgress = false;
+
+		if (this.localHumanRole === "none") {
+			void this.runAutoFight();
+			return;
+		}
+
+		this.selectorContainer.visible = true;
+		this.selectorIndex = 0;
+		this.selectorLabel.text =
+			ACTION_LABELS[this.availableActions[this.selectorIndex]];
 	}
 
 	private describeOutcome(

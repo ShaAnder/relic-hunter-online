@@ -1034,7 +1034,7 @@ export class MapScene implements Scene {
 		this.setPlayerControlsVisible(false);
 
 		try {
-			const BETWEEN_AI_MS = 600;
+			const BETWEEN_AI_MS = 1200;
 
 			let isFirst = true;
 			for (const unit of this.aiUnits) {
@@ -1404,7 +1404,7 @@ export class MapScene implements Scene {
 	}
 
 	private async processMonsterTurns(): Promise<void> {
-		const MONSTER_DELAY_MS = 400;
+		const MONSTER_DELAY_MS = 1000;
 		let isFirst = true;
 
 		for (const monster of this.livingMonsters()) {
