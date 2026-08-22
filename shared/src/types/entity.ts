@@ -70,10 +70,6 @@ export interface HasSpecial {
 	special: string | null;
 }
 
-export interface HasSpecial {
-	special: string | null;
-}
-
 export interface StatusEffect {
 	id: string;
 	turnsRemaining: number;

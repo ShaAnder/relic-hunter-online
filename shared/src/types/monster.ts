@@ -74,5 +74,7 @@ export function monsterAsMercenaryState(monster: MonsterState): MercenaryState {
 		},
 		stunnedTurnsRemaining: 0,
 		temporaryStatBonus: { attack: 0, defense: 0, movement: 0 },
+		special: null,
+		statusEffects: [],
 	};
 }
