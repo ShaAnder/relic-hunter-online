@@ -176,6 +176,10 @@ function buildGreenCards(): CardData[] {
  * every hunter on the map draws from this same deck, turn by turn, until
  * it's exhausted
  */
+// TEMPORARY — testing boss-spawn timing. Set to 0 (or delete this line
+// and the check below) to restore the real, full deck size.
+const DEBUG_DECK_SIZE_CAP = 10;
+
 export function buildSharedDeck(): CardData[] {
 	const deck = [
 		...buildBlueCards(),
@@ -183,7 +187,11 @@ export function buildSharedDeck(): CardData[] {
 		...buildYellowCards(),
 		...buildGreenCards(),
 	];
-	return shuffle(deck);
+	const shuffled = shuffle(deck);
+	if (DEBUG_DECK_SIZE_CAP > 0) {
+		return shuffled.slice(0, DEBUG_DECK_SIZE_CAP);
+	}
+	return shuffled;
 }
 
 /** Max cards any hunter can hold — player or AI. Single source of truth. */

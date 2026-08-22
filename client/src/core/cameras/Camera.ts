@@ -111,6 +111,36 @@ export class Camera {
 	}
 
 	/**
+	 * Brief random jitter around the camera's current position, settling
+	 * back exactly where it started. Independent of pan/lock state —
+	 * doesn't fight either, just offsets on top of whatever's already
+	 * happening.
+	 */
+	shake(durationMs: number, intensity: number): Promise<void> {
+		return new Promise((resolve) => {
+			const baseX = this.target.x;
+			const baseY = this.target.y;
+			const startTime = performance.now();
+
+			const tick = (): void => {
+				const elapsedMs = performance.now() - startTime;
+				if (elapsedMs >= durationMs) {
+					this.target.x = baseX;
+					this.target.y = baseY;
+					Ticker.shared.remove(tick);
+					resolve();
+					return;
+				}
+				const falloff = 1 - elapsedMs / durationMs;
+				this.target.x = baseX + (Math.random() * 2 - 1) * intensity * falloff;
+				this.target.y = baseY + (Math.random() * 2 - 1) * intensity * falloff;
+			};
+
+			Ticker.shared.add(tick);
+		});
+	}
+
+	/**
 	 * Scripted cinematic pan from the camera's current center to a target
 	 * position, eased over durationMs.
 	 * *

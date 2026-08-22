@@ -75,6 +75,7 @@ export class MapScene implements Scene {
 
 	// Monster Entities
 	private monsters: MonsterEntity[] = [];
+	private boss: MonsterEntity | null = null;
 	private static readonly MONSTER_TIERS: RH.MonsterTier[] = [
 		"light",
 		"medium",
@@ -895,6 +896,7 @@ export class MapScene implements Scene {
 		const isLocal = state.id === this.localUnit.state.id;
 		if (placed.plan.isTarget) {
 			this.game.session.relicFound = true;
+			this.triggerFrenzy();
 			this.spawnExitFarFrom(coord);
 			this.renderMap();
 			this.showFeedback(
@@ -907,6 +909,26 @@ export class MapScene implements Scene {
 		}
 
 		if (isLocal) this.showItemPopup(placed.plan.item, placed.plan.isTarget);
+	}
+
+	/**
+	 * Every living regular monster gets a one-time, permanent stat bump
+	 * the moment the relic is found. Boss is explicitly exempt
+	 * it's already the endgame threat, frenzy doesn't apply on top of it.
+	 */
+	private triggerFrenzy(): void {
+		for (const m of this.monsters) {
+			if (m.state.currentHp <= 0) continue;
+			if (m.state.tier === "boss") continue;
+			if (m.state.frenzied) continue;
+
+			m.state.frenzied = true;
+			m.state.stats = {
+				...m.state.stats,
+				movement: m.state.stats.movement + RH.FRENZY_MOVEMENT_BONUS,
+				attack: m.state.stats.attack + RH.FRENZY_ATTACK_BONUS,
+			};
+		}
 	}
 
 	/**
@@ -994,8 +1016,15 @@ export class MapScene implements Scene {
 			this.trySpawnMonster();
 		}
 
+		this.checkDeckExhaustion();
 		await this.processMonsterTurns();
 
+		if (this.boss && this.boss.state.currentHp > 0) {
+			await this.delay(400);
+			await this.processOneMonsterTurn(this.boss);
+		}
+
+		this.processingEnemyTurns = false;
 		this.processingEnemyTurns = false;
 		this.camera.setInputLocked(false);
 		this.beginPlayerTurn();
@@ -1290,11 +1319,42 @@ export class MapScene implements Scene {
 		}
 	}
 
+	/**
+	 * Fires exactly once, the first round the shared deck genuinely
+	 * runs dry — warning, screen shake, then the boss spawns far from
+	 * every living hunter.
+	 */
+	private async checkDeckExhaustion(): Promise<void> {
+		if (this.game.session.bossSpawned) return;
+		if ((this.game.session.sharedDeck?.length ?? 1) > 0) return;
+
+		this.game.session.bossSpawned = true;
+		this.showFeedback(
+			"⚠️ The deck is exhausted — something massive has arrived.",
+		);
+		await this.camera.shake(500, 24);
+
+		const used = new Set<string>(
+			this.units.map((u) => RH.coordKey(u.state.coord)),
+		);
+		for (const m of this.monsters) used.add(RH.coordKey(m.state.coord));
+		const coord = this.pickEnemySpawnTile(used);
+		if (!coord) return;
+
+		const state = RH.createMonster(`boss_${Date.now()}`, "boss", coord);
+		const token = new MonsterToken(coord, "boss");
+		this.mercenaryContainer.addChild(token.view);
+
+		this.boss = { state, token };
+		this.monsters.push(this.boss);
+	}
+
 	private async processMonsterTurns(): Promise<void> {
 		const MONSTER_DELAY_MS = 400;
 		let isFirst = true;
 
 		for (const monster of this.livingMonsters()) {
+			if (monster === this.boss) continue;
 			if (!isFirst) await this.delay(MONSTER_DELAY_MS);
 			isFirst = false;
 			await this.processOneMonsterTurn(monster);
@@ -1651,6 +1711,7 @@ export class MapScene implements Scene {
 	private removeMonster(monster: MonsterEntity): void {
 		const index = this.monsters.indexOf(monster);
 		if (index !== -1) this.monsters.splice(index, 1);
+		if (monster === this.boss) this.boss = null;
 		this.mercenaryContainer.removeChild(monster.token.view);
 		monster.token.view.destroy({ children: true });
 	}

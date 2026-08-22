@@ -67,6 +67,7 @@ export class GameSession {
 	matchLog: MatchLogEntry[] | null = null;
 	mapSeed: number | null = null;
 	relicFound = false;
+	bossSpawned = false;
 
 	/** Item plan only — still useful for target lookup. */
 	chestPlan: { chests: ChestPlan[]; targetItem: ItemData } | null = null;

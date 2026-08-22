@@ -2,20 +2,34 @@ import type { GridCoord } from "../world/grid";
 import type { EntityCore } from "./entity";
 import type { MercenaryStats, MercenaryState } from "./mercenary";
 
-export type MonsterTier = "light" | "medium" | "heavy";
+export type MonsterTier = "light" | "medium" | "heavy" | "boss";
 
 /**
  * Non-hunter map entity — core only, plus tier. Has no hand,
  * no items, no character class — not faked, not present at all.
  */
-export type MonsterState = EntityCore & { tier: MonsterTier };
+export type MonsterState = EntityCore & {
+	tier: MonsterTier;
+	frenzied: boolean;
+};
 
 /** First-pass tier stats, each meaningfully stronger than the last. NOT TUNED */
 export const MONSTER_TIER_STATS: Record<MonsterTier, MercenaryStats> = {
 	light: { movement: 3, attack: 4, defense: 2, maxHp: 12, ap: 3 },
 	medium: { movement: 3, attack: 5, defense: 3, maxHp: 18, ap: 3 },
-	heavy: { movement: 3, attack: 7, defense: 4, maxHp: 26, ap: 3 },
+	heavy: {
+		movement: 3,
+		attack: 7,
+		defense: 4,
+		maxHp: 26,
+		ap: 3,
+	} /** Spawns once when the shared deck is exhausted. Unique, not part of the normal spawn roll. */,
+	boss: { movement: 6, attack: 8, defense: 4, maxHp: 30, ap: 3 },
 };
+
+/** How much frenzy adds once the relic is found — regular monsters only, never the boss. */
+export const FRENZY_MOVEMENT_BONUS = 1;
+export const FRENZY_ATTACK_BONUS = 1;
 
 export function createMonster(
 	id: string,
@@ -28,6 +42,7 @@ export function createMonster(
 		coord,
 		stats: MONSTER_TIER_STATS[tier],
 		currentHp: MONSTER_TIER_STATS[tier].maxHp,
+		frenzied: false,
 	};
 }
 
