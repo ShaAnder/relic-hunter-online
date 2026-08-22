@@ -40,6 +40,8 @@ import {
 import { MonsterToken } from "@/entities/Monster";
 import type { MonsterEntity } from "@/types/entities";
 import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
+import { AudioController } from "@/core/audio/audioController";
+import { Ticker } from "pixi.js";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -121,6 +123,7 @@ export class MapScene implements Scene {
 	private statsText: Text;
 	private feedbackText: Text;
 	private feedbackTimer = 0;
+	private bossAlertText!: Text;
 
 	// Item pickup popup — floats above the mercenary's head, placeholder
 	// icon until real item sprites exist
@@ -152,6 +155,8 @@ export class MapScene implements Scene {
 		[RH.TileType.Wall]: 0x1a1a1a,
 		[RH.TileType.Exit]: 0xd4af37,
 	};
+
+	private audio = new AudioController();
 
 	private fpsAccumulator = 0;
 
@@ -318,6 +323,14 @@ export class MapScene implements Scene {
 		});
 		this.feedbackText.visible = false;
 		this.view.addChild(this.feedbackText);
+
+		this.bossAlertText = new Text({
+			text: "⚠ ALERT ⚠",
+			style: { fill: 0xff2222, fontSize: 72, fontWeight: "bold" },
+		});
+		this.bossAlertText.anchor.set(0.5);
+		this.bossAlertText.visible = false;
+		this.view.addChild(this.bossAlertText);
 	}
 
 	/** Render the map, center the camera, and wire up input. */
@@ -591,6 +604,30 @@ export class MapScene implements Scene {
 		this.hand.resize(w, h);
 		this.game.app.stage.hitArea = this.game.app.screen;
 		this.playZone.layout(w / 2, h / 2);
+	}
+
+	/** Flashing red alert, centered on screen, for durationMs. Resolves once it's done and hidden again. */
+	private showBossAlert(durationMs: number): Promise<void> {
+		return new Promise((resolve) => {
+			this.bossAlertText.x = this.game.app.screen.width / 2;
+			this.bossAlertText.y = this.game.app.screen.height / 2;
+			this.bossAlertText.visible = true;
+			const startTime = performance.now();
+
+			const tick = (): void => {
+				const elapsedMs = performance.now() - startTime;
+				if (elapsedMs >= durationMs) {
+					this.bossAlertText.visible = false;
+					Ticker.shared.remove(tick);
+					resolve();
+					return;
+				}
+				this.bossAlertText.alpha =
+					0.4 + Math.abs(Math.sin(elapsedMs / 500)) * 0.6;
+			};
+
+			Ticker.shared.add(tick);
+		});
 	}
 
 	// ---------- Move ----------
@@ -1016,7 +1053,7 @@ export class MapScene implements Scene {
 			this.trySpawnMonster();
 		}
 
-		this.checkDeckExhaustion();
+		await this.checkDeckExhaustion();
 		await this.processMonsterTurns();
 
 		if (this.boss && this.boss.state.currentHp > 0) {
@@ -1329,10 +1366,23 @@ export class MapScene implements Scene {
 		if ((this.game.session.sharedDeck?.length ?? 1) > 0) return;
 
 		this.game.session.bossSpawned = true;
+
 		this.showFeedback(
 			"⚠️ The deck is exhausted — something massive has arrived.",
 		);
-		await this.camera.shake(500, 24);
+		this.audio.play("boss-theme", "/audio/boss-theme.mp3", {
+			loop: true,
+			volume: 0.6,
+		});
+
+		const SHAKE_MS = 5000;
+		await Promise.all([
+			this.showBossAlert(SHAKE_MS),
+			Promise.race([
+				this.camera.shake(SHAKE_MS, 24),
+				this.delay(SHAKE_MS + 500),
+			]),
+		]);
 
 		const used = new Set<string>(
 			this.units.map((u) => RH.coordKey(u.state.coord)),
@@ -1347,6 +1397,20 @@ export class MapScene implements Scene {
 
 		this.boss = { state, token };
 		this.monsters.push(this.boss);
+		this.showFeedback("👹 The boss has entered the map.");
+
+		const PAN_MS = 900;
+		await Promise.race([
+			this.camera.panTo(
+				{ x: token.view.x, y: token.view.y },
+				PAN_MS,
+				this.game.app.screen.width,
+				this.game.app.screen.height,
+			),
+			this.delay(PAN_MS + 500),
+		]);
+
+		await this.delay(1000);
 	}
 
 	private async processMonsterTurns(): Promise<void> {

@@ -7,13 +7,15 @@ import { easeInOutCubic } from "@/math/easeInOutCubic";
 const TIER_COLORS: Record<MonsterTier, number> = {
 	light: 0x7bbf6a,
 	medium: 0xd98c3a,
-	heavy: 0xa83c3c,
+	heavy: 0xd3333c,
+	boss: 0x7c3c3c,
 };
 
 const TIER_SIZE: Record<MonsterTier, { w: number; h: number }> = {
 	light: { w: 22, h: 32 },
 	medium: { w: 26, h: 38 },
 	heavy: { w: 30, h: 44 },
+	boss: { w: 38, h: 54 },
 };
 
 const MOVE_DURATION_PER_TILE_MS = 180;
