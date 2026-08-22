@@ -11,7 +11,6 @@ import type {
 	CombatChoice,
 	MercenaryState,
 	AiArchetype,
-	EntityCore,
 } from "@relic-hunter/shared";
 import {
 	resolveCombatRound,
@@ -83,6 +82,9 @@ export class BattleOverlay implements Overlay {
 	private roundText!: Text;
 	private attackerIndicator?: Text;
 	private defenderIndicator?: Text;
+
+	private attackerStatText!: Text;
+	private defenderStatText!: Text;
 
 	private selectorContainer = new Container();
 	private selectorIndex = 0;
@@ -293,6 +295,7 @@ export class BattleOverlay implements Overlay {
 		this.arena.addChild(this.roundText);
 
 		this.syncHpDisplay();
+		this.syncStatDisplay();
 
 		if (this.localHumanRole === "none") {
 			void this.runAutoFight();
@@ -434,7 +437,7 @@ export class BattleOverlay implements Overlay {
 			this.attackerPanel,
 			this.attackerHpBar,
 			this.attackerLabel,
-			this.attackerState,
+
 			this.attackerColor,
 			true,
 		);
@@ -442,7 +445,7 @@ export class BattleOverlay implements Overlay {
 			this.defenderPanel,
 			this.defenderHpBar,
 			this.defenderLabel,
-			this.defenderState,
+
 			this.defenderColor,
 			false,
 		);
@@ -454,7 +457,6 @@ export class BattleOverlay implements Overlay {
 		panel: Container,
 		hpBar: Graphics,
 		label: string,
-		state: EntityCore,
 		accent: number,
 		isAttackerSlot: boolean,
 	): void {
@@ -473,12 +475,14 @@ export class BattleOverlay implements Overlay {
 		panel.addChild(nameText);
 
 		const statText = new Text({
-			text: `Mv ${state.stats.movement}  At ${state.stats.attack}  Df ${state.stats.defense}`,
+			text: "",
 			style: { fill: 0xcccccc, fontSize: 12 },
 		});
 		statText.x = 10;
 		statText.y = 32;
 		panel.addChild(statText);
+		if (isAttackerSlot) this.attackerStatText = statText;
+		else this.defenderStatText = statText;
 
 		const hpText = new Text({
 			text: "",
@@ -508,6 +512,31 @@ export class BattleOverlay implements Overlay {
 			this.defenderState,
 			0x2ecc71,
 		);
+	}
+
+	private syncStatDisplay(): void {
+		this.syncOneStatText(this.attackerStatText, this.attackerState);
+		this.syncOneStatText(this.defenderStatText, this.defenderState);
+	}
+
+	private syncOneStatText(text: Text, state: MercenaryState): void {
+		const atk = state.temporaryStatBonus.attack;
+		const atkVal =
+			atk === "A"
+				? state.stats.attack * 2
+				: atk === "C"
+					? Math.round(state.stats.attack * 1.5)
+					: state.stats.attack + atk;
+
+		const def = state.temporaryStatBonus.defense;
+		const defVal =
+			def === "A"
+				? "I"
+				: def === "C"
+					? Math.round(state.stats.defense * 1.5)
+					: state.stats.defense + def;
+
+		text.text = `Mv ${state.stats.movement}  At ${atkVal}  Df ${defVal}`;
 	}
 
 	private syncOneHpBar(
@@ -650,6 +679,7 @@ export class BattleOverlay implements Overlay {
 				localState.temporaryStatBonus.attack = v;
 			}
 		}
+		this.syncStatDisplay();
 
 		void this.resolveLocalChoice({
 			action: this.pendingAction,
@@ -1030,5 +1060,7 @@ export class BattleOverlay implements Overlay {
 
 		this.localHand.resize(width, height);
 		this.localHand.view.x = width / 2 - 100;
+
+		this.localPlayZone.layout(width / 2, height / 2 - 30);
 	}
 }
