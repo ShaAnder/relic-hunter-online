@@ -18,6 +18,8 @@ Everything from the previous reconciliation (shared deck reset, dynamic exit spa
 
 **New this session, all confirmed directly against the live repo:**
 
+**`processEnemyTurns` is not actually guarded by `try/finally` yet.** Fixed added try handling
+
 The temporary stat bonus system — Movement and Defense cards apply a real, visible, overwrite-not-stack bonus for the rest of the turn, shown on the character panel by recoloring the affected stat's own number (white/blue/red) rather than a separate badge, correctly distinguishing "A"/"C" special cards' actual different meanings per stat (defense: immune/1.5x ceiling; attack: 2x/1.5x multiplier), and centrally wiped in `TurnManager.endTurn()` so every turn-ending call site is covered by one change. Feeds into both trap hazard rolls and zone-of-control reaction strikes correctly via a synthetic-card pattern, since both underlying functions (`resolveHazardRoll`, `resolveReactionStrike`) already had correct "A"/"C" handling built in — they just weren't being fed real data.
 
 The Battle Overlay's play zone (`localPlayZone`) is now genuinely added to the display tree and correctly positioned via its own `layout(x, y)` method — was previously either invisible entirely or stuck at the origin, depending on which point in tonight's fixes you were testing against. The battle panels' own stat readout is now a live, synced display (`syncStatDisplay`) instead of a one-time snapshot taken at panel-build time — it genuinely updates the instant a card is chosen, matching the same live behavior the overworld panel already had.
