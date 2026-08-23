@@ -4,6 +4,13 @@
 		<meta charset="UTF-8" />
 		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta
+			name="apple-mobile-web-app-status-bar-style"
+			content="black-translucent"
+		/>
+		<meta name="mobile-web-app-capable" content="yes" />
+		<link rel="manifest" href="/manifest.json" />
 		<title>client</title>
 	</head>
 	<body>
@@ -14,6 +21,10 @@
 				If rotating doesn't work, check that Auto-Rotate is enabled in your
 				device's quick settings.
 			</p>
+			<div id="home-screen-hint">
+				For the best experience, add this page to your Home Screen and launch it
+				from there instead of your browser. (Share -> add to home screen )
+			</div>
 		</div>
 		<button id="fullscreen-btn">Tap for Fullscreen</button>
 		<script type="module" src="/src/main.ts"></script>

@@ -12,22 +12,17 @@ function tryLockLandscape(): void {
 	});
 }
 
-/** Real fullscreen, unlike tryLockLandscape — but only fires from an actual tap, browsers block it otherwise. Not supported on iOS Safari at all; the button quietly does nothing there. */
-function setupFullscreenButton(): void {
-	const btn = document.getElementById("fullscreen-btn");
-	if (!btn) return;
+/** Same hint for every platform now — Android Chrome respects manifest.json's
+ * standalone display mode the same way iOS respects the apple-mobile-web-app meta tags. Already-launched-from-Home-Screen sessions see nothing. */
+function setupHomeScreenHint(): void {
+	const isStandalone =
+		window.matchMedia("(display-mode: standalone)").matches ||
+		(navigator as Navigator & { standalone?: boolean }).standalone === true;
 
-	btn.addEventListener("click", () => {
-		void document.documentElement.requestFullscreen?.().then(() => {
-			btn.style.display = "none";
-		});
-	});
+	if (isStandalone) return;
 
-	document.addEventListener("fullscreenchange", () => {
-		if (!document.fullscreenElement) {
-			btn.style.display = "";
-		}
-	});
+	const hint = document.getElementById("home-screen-hint");
+	if (hint) hint.style.display = "block";
 }
 
 async function bootStrap() {
@@ -37,7 +32,7 @@ async function bootStrap() {
 	}
 
 	tryLockLandscape();
-	setupFullscreenButton();
+	setupHomeScreenHint();
 
 	const game = await Game.create(container);
 	await game.start(new MainMenuScene(game));
