@@ -31,6 +31,10 @@ async function bootStrap() {
 		throw new Error("#app element not found in index.html");
 	}
 
+	if ("serviceWorker" in navigator) {
+		void navigator.serviceWorker.register("/sw.js");
+	}
+
 	tryLockLandscape();
 	setupHomeScreenHint();
 
