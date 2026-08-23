@@ -17,22 +17,16 @@ const CARET_GAP = 14;
 // eases 0→1, multiplying each card's normal cascade offset, rather than
 // the old vertical slide-reveal.
 const SPLAY_EASE_MS = 160;
-const HOLDER_RADIUS = 26;
+const HOLDER_WIDTH = CARD_WIDTH * 0.7;
 
 export const SKIP_CARD_ID = "__skip__";
 
 /**
  * Cascaded hand, folded behind a compact holder icon by default — press
  * and hold the holder (or hover it, on desktop) to splay the hand out
- * to the right; release to fold it back. Selection mode always keeps
- * it fully splayed regardless of hold state. Confirming a card (click,
- * Enter, or dragging it into the independent PlayZone) hands the card's
- * visual off to PlayZone for the grow-slam-vanish sequence. "No Card"
- * now lives as a button on PlayZone itself, not a draggable card here.
- * @param stage - screen-spanning interactive container, needed so a drag
- *   keeps tracking the pointer once it moves off the card itself
- * @param playZone - the independent entity plays get sent to; shown/hidden
- *   directly by this class around selection mode
+ * to the right; release to fold it back.
+ * @param stage - screen-spanning interactive container
+ * @param playZone - the independent entity plays get sent to
  * @param onCardConfirmed - fired once PlayZone's sequence finishes, or
  *   immediately for "No Card"
  * @author ShaAnder
@@ -85,7 +79,9 @@ export class Hand {
 		return this.selecting;
 	}
 
-	/** Called from the scene's own mousemove handler — proximity to the holder. Desktop convenience only; press-and-hold is the primary, touch-compatible trigger. */
+	/** Called from the scene's own mousemove handler —
+	 * proximity to the holder. Desktop convenience only;
+	 * press-and-hold is the primary, touch-compatible trigger. */
 	setHovered(isHovered: boolean): void {
 		this.isHovered = isHovered;
 	}
@@ -186,7 +182,7 @@ export class Hand {
 		void screenWidth;
 		this.view.x = 40;
 		this.view.y = screenHeight - 40;
-		this.fanContainer.x = HOLDER_RADIUS + 16;
+		this.fanContainer.x = HOLDER_WIDTH / 2 + 16;
 		this.layoutCards();
 	}
 
@@ -196,31 +192,38 @@ export class Hand {
 
 	// ---------- private ----------
 
-	/** Small, always-visible holder — press and hold to splay the hand, release to fold it back. Disabled during selection mode, where the hand is already forced open. */
+	/** Card-shaped, always-visible holder — press and hold to splay the hand,
+	 * release to fold it back. Disabled during selection mode, where the
+	 * hand is already forced open. Release is caught on the app-wide stage,
+	 * not just the holder itself, so a pointer that drifts off it mid-press
+	 * still correctly closes the hand. */
 	private buildHolder(): void {
-		this.holder.circle(0, 0, HOLDER_RADIUS);
+		const w = CARD_WIDTH * 0.7;
+		const h = CARD_HEIGHT * 0.7;
+		this.holder.roundRect(-w / 2, -h, w, h, 6);
 		this.holder.fill(0x2a2a2a);
 		this.holder.stroke({ width: 2, color: 0x666666 });
-		this.holder.moveTo(-9, 4);
-		this.holder.lineTo(0, -8);
-		this.holder.lineTo(9, 4);
-		this.holder.stroke({ width: 2, color: 0xcccccc });
+		// Simple card-back motif — a smaller inset rounded rect.
+		this.holder.roundRect(-w / 2 + 8, -h + 8, w - 16, h - 16, 4);
+		this.holder.stroke({ width: 1.5, color: 0x555555 });
 
 		this.holder.eventMode = "static";
 		this.holder.cursor = "pointer";
 		this.holder.on("pointerdown", () => this.handleHolderDown());
-		this.holder.on("pointerup", () => this.handleHolderUp());
-		this.holder.on("pointerupoutside", () => this.handleHolderUp());
 	}
 
 	private handleHolderDown(): void {
 		if (this.selecting) return;
 		this.isHeld = true;
+		this.stage.on("pointerup", this.onHolderRelease);
+		this.stage.on("pointerupoutside", this.onHolderRelease);
 	}
 
-	private handleHolderUp(): void {
+	private onHolderRelease = (): void => {
 		this.isHeld = false;
-	}
+		this.stage.off("pointerup", this.onHolderRelease);
+		this.stage.off("pointerupoutside", this.onHolderRelease);
+	};
 
 	private isSelectable(card: Card): boolean {
 		return this.selectableFilter(card.getData());
@@ -335,7 +338,9 @@ export class Hand {
 		this.layoutCards();
 	}
 
-	/** Cascaded layout — each card's normal offset scaled by splayProgress, so 0 = folded flat behind the holder, 1 = fully splayed. Highlighted card still lifts straight up on top of that. */
+	/** Cascaded layout — each card's normal offset scaled by splayProgress,
+	 * so 0 = folded flat behind the holder, 1 = fully splayed.
+	 * Highlighted card still lifts straight up on top of that. */
 	private layoutCards(): void {
 		this.cards.forEach((card, i) => {
 			if (card === this.draggingCard) return;

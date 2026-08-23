@@ -120,7 +120,6 @@ export class MapScene implements Scene {
 	private logPanel: LogPanel;
 	private inspectButton: InspectButton;
 	private hunterSummaryPanel: HunterSummaryPanel;
-	private statsText: Text;
 	private feedbackText: Text;
 	private feedbackTimer = 0;
 	private bossAlertText!: Text;
@@ -307,14 +306,6 @@ export class MapScene implements Scene {
 
 		this.refocusButton = new RefocusButton();
 		this.view.addChild(this.refocusButton.view);
-
-		this.statsText = new Text({
-			text: "",
-			style: { fill: 0xffffff, fontSize: 14, fontFamily: "monospace" },
-		});
-		this.statsText.x = 12;
-		this.statsText.y = 12;
-		this.view.addChild(this.statsText);
 
 		this.feedbackText = new Text({
 			text: "",
