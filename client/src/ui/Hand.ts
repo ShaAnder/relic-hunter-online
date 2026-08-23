@@ -196,7 +196,13 @@ export class Hand {
 	update(deltaTime: number): void {
 		const deltaMs = (deltaTime / 60) * 1000;
 
-		const splayTarget = this.isHovered || this.isHeld || this.selecting ? 1 : 0;
+		const splayTarget =
+			this.anchor === "center" ||
+			this.isHovered ||
+			this.isHeld ||
+			this.selecting
+				? 1
+				: 0;
 
 		const easeT = Math.min(1, deltaMs / SPLAY_EASE_MS);
 
@@ -230,6 +236,11 @@ export class Hand {
 		this.anchor = anchor;
 
 		this.view.scale.set(scale);
+
+		// Battle mode shows all cards directly, always — no holder,
+		// nothing to press or hold, the overworld's hold-to-reveal
+		// interaction doesn't apply here at all.
+		this.holder.visible = anchor !== "center";
 
 		const margin = 16 * scale;
 
@@ -411,7 +422,7 @@ export class Hand {
 		card.view.x = globalPos.x;
 		card.view.y = globalPos.y;
 
-		card.view.scale.set(1.08);
+		card.view.scale.set(this.view.scale.x * 1.08);
 		card.view.alpha = 0.95;
 
 		this.dragOffset = {
@@ -435,16 +446,27 @@ export class Hand {
 		this.draggingCard.view.y = event.global.y + this.dragOffset.y;
 
 		this.lastDragGlobal = {
-			x: event.global.x,
-			y: event.global.y,
+			x: this.draggingCard.view.x,
+			y: this.draggingCard.view.y,
 		};
 
+		// Test the card's own visual position, not the pointer's — the
+		// gap between where a finger grabs a card and the card's own
+		// center is a fixed number of pixels, which becomes a much
+		// larger fraction of a small, scaled-down zone than a full-size
+		// one, making the card look like it should be "in" while the
+		// pointer itself tests as outside.
 		const over = this.playZone.containsGlobalPoint(
-			event.global.x,
-			event.global.y,
+			this.draggingCard.view.x,
+			this.draggingCard.view.y,
 		);
 
-		this.draggingCard.view.scale.set(over ? 1.18 : 1.08);
+		// This runs every frame of the drag — must scale with the
+		// current UI scale like the initial pointerdown assignment does,
+		// or it immediately overwrites that fix the instant the pointer
+		// moves, leaving the card rendered at a fixed absolute size
+		// regardless of how small the rest of the UI currently is.
+		this.draggingCard.view.scale.set(this.view.scale.x * (over ? 1.18 : 1.08));
 	};
 
 	private onDragEnd = (): void => {
@@ -489,6 +511,20 @@ export class Hand {
 
 		card.setInteractive(false);
 
+		// Remove it from the hand's own array immediately, before handing
+		// off to PlayZone — not just clearing draggingCard. update() runs
+		// every frame via the game's own ticker regardless of this async
+		// function's progress, and layoutCards() only ever skipped this
+		// card by checking `card === this.draggingCard`. The instant that
+		// goes null (which happens in onDragEnd, well before this method
+		// even starts), the card re-enters normal cascade layout while
+		// PlayZone's ~860ms snap/hold/fade sequence is still actively
+		// tweening the same x/y properties on the same object — two
+		// systems fighting over one transform, in two different
+		// coordinate spaces, every single frame.
+		const idx = this.cards.indexOf(card);
+		if (idx !== -1) this.cards.splice(idx, 1);
+
 		await this.playZone.playCard(card, data);
 
 		this.onCardConfirmed?.(data);
@@ -523,7 +559,7 @@ export class Hand {
 	 */
 	private layoutCards(): void {
 		if (this.anchor === "center") {
-			this.layoutBattleFan();
+			this.layoutBattleRow();
 		} else {
 			this.layoutMapCascade();
 		}
@@ -561,107 +597,31 @@ export class Hand {
 	}
 
 	/**
-	 * Battle hand:
-	 *
-	 *             [C]
-	 *        [C]       [C]
-	 *     [C]             [C]
-	 *             HAND
-	 *
-	 * The holder remains at x=0. Cards are positioned
-	 * symmetrically around x=0 and rise into a shallow arc.
+	 * Battle hand — no holder, no fan, no hold-to-reveal. All cards sit
+	 * in a flat row at all times, each overlapping the next by 10% of a
+	 * card's width, centered on x=0. splayProgress still drives alpha
+	 * (used once, briefly, for the initial fade-in) but is always pinned
+	 * at 1 by update() in this mode, so it never folds.
 	 */
-	private layoutBattleFan(): void {
-		this.fanGuide.visible = this.splayProgress > 0.05;
+	private layoutBattleRow(): void {
+		this.fanGuide.visible = false;
 
 		const count = this.cards.length;
-
 		if (count === 0) return;
 
-		/*
-		 * Maximum angular spread.
-		 *
-		 * With many cards we don't want the hand to become
-		 * absurdly wide on mobile, so the outer cards are
-		 * constrained to roughly ±55 degrees.
-		 */
-		const maxAngle = Math.PI * 0.3;
-
-		/*
-		 * Radius controls the height of the fan.
-		 *
-		 * The card pivot is bottom-centre, so cards naturally
-		 * extend upward from these points.
-		 */
-		const radius = CARD_WIDTH * 1.55;
-
-		const maxWidth = CARD_WIDTH * 0.92;
+		const gap = CARD_WIDTH * 0.9;
+		const totalWidth = (count - 1) * gap;
+		const startX = -totalWidth / 2;
 
 		this.cards.forEach((card, i) => {
-			if (card === this.draggingCard) {
-				return;
-			}
+			if (card === this.draggingCard) return;
 
 			const isHighlighted = i === this.highlightedIndex && this.selecting;
 
-			/*
-			 * Normalized position:
-			 *
-			 * -1 = far left
-			 *  0 = centre
-			 * +1 = far right
-			 */
-			const normalized = count === 1 ? 0 : (i / (count - 1)) * 2 - 1;
-
-			/*
-			 * Angle is mirrored around the centre.
-			 */
-			const angle = normalized * maxAngle;
-
-			/*
-			 * x position around the circle.
-			 */
-			const targetX = Math.sin(angle) * radius;
-
-			/*
-			 * y position:
-			 *
-			 * centre cards are lowest,
-			 * outer cards rise.
-			 *
-			 * This creates the shallow
-			 * semicircular / fan appearance.
-			 */
-			const targetY = -Math.abs(normalized) * Math.abs(normalized) * maxWidth;
-
-			/*
-			 * Folded state:
-			 *
-			 * Every card converges toward
-			 * the holder's centre.
-			 */
-			card.view.x = targetX * this.splayProgress;
-
-			card.view.y = targetY * this.splayProgress;
-
-			/*
-			 * Rotate cards along the fan.
-			 *
-			 * Negative on the left,
-			 * positive on the right.
-			 */
-			card.view.rotation = -angle * 0.72 * this.splayProgress;
-
-			/*
-			 * Highlighted card gets a little extra lift
-			 * without breaking the fan.
-			 */
-			if (isHighlighted) {
-				card.view.y -= HIGHLIGHT_LIFT;
-			}
-
+			card.view.rotation = 0;
+			card.view.x = startX + i * gap;
+			card.view.y = isHighlighted ? -HIGHLIGHT_LIFT : 0;
 			card.view.alpha = this.splayProgress < 0.05 ? 0 : this.splayProgress;
-
 			card.view.scale.set(1);
 		});
 	}

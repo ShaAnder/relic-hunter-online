@@ -306,7 +306,7 @@ export class PlayZone {
 		 * ABOVE the PlayZone origin for the card itself to be centred.
 		 */
 		const endX = 0;
-		const endY = -CARD_HEIGHT / 2;
+		const endY = CARD_HEIGHT / 2; // Pivot is bottom-center — for the card to straddle y=0 evenly (top at -H/2, bottom at +H/2), the pivot itself has to sit at +H/2, not -H/2. The negative sign here was the actual bug: it put the card's bottom edge above the zone's center instead of below it, so the whole card rendered in the zone's upper half.
 
 		// ------------------------------------------------------------
 		// Snap animation

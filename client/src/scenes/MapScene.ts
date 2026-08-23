@@ -26,7 +26,7 @@ import { HunterScoreEntry, TEST_MAP_DIMENSIONS } from "@/core/game/GameSession";
 import { MatchResultScene } from "./MatchResultScene";
 import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
 import { BagButton } from "@/ui/buttons/BagButton";
-import { RadialActionWheel } from "@/ui/buttons/RadialActionWheel";
+import { ActionMenu } from "@/ui/buttons/ActionMenu";
 import { RefocusButton } from "@/ui/buttons/RefocusButton";
 import { PlayZone } from "@/ui/PlayZone";
 import type { PilotedMercenary, MovableToken } from "@/types/entities";
@@ -115,7 +115,7 @@ export class MapScene implements Scene {
 
 	// UI
 	private bagButton: BagButton;
-	private buttonBar: RadialActionWheel;
+	private buttonBar: ActionMenu;
 	private refocusButton: RefocusButton;
 	private logsButton: LogsButton;
 	private logPanel: LogPanel;
@@ -309,7 +309,7 @@ export class MapScene implements Scene {
 		// traps
 		this.boardContainer.addChild(this.trapMarkerContainer);
 
-		this.buttonBar = new RadialActionWheel();
+		this.buttonBar = new ActionMenu();
 		this.view.addChild(this.buttonBar.view);
 
 		this.refocusButton = new RefocusButton();
