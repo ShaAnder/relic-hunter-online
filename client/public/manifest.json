@@ -1,0 +1,16 @@
+{
+	"name": "Relic Hunter Online",
+	"short_name": "Relic Hunter",
+	"start_url": "/",
+	"display": "standalone",
+	"orientation": "landscape",
+	"background_color": "#16171d",
+	"theme_color": "#16171d",
+	"icons": [
+		{
+			"src": "./src/assets/icons/favicon.ico",
+			"sizes": "any",
+			"type": "image/svg+xml"
+		}
+	]
+}
