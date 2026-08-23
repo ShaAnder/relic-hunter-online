@@ -5,7 +5,7 @@ import { Button } from "@/ui/generics/Button";
 import { computeFitScale } from "@/math/fitScale";
 import { CharacterCreationScene } from "./CharacterCreationScene";
 import { LoadGameScene } from "./LoadGameScene";
-import { HelpScene } from "./HelpScene";
+import { TutorialsMenuScene } from "./TutorialScene";
 
 /**
  * Top-level menu after the eventual Landing "Press Start".
@@ -63,9 +63,11 @@ export class MainMenuScene implements Scene {
 				},
 			},
 			{
-				label: "Help / Tutorial",
+				label: "Tutorials",
 				action: () => {
-					void this.game.sceneManager.changeScene(new HelpScene(this.game));
+					void this.game.sceneManager.changeScene(
+						new TutorialsMenuScene(this.game),
+					);
 				},
 			},
 			{
@@ -80,9 +82,9 @@ export class MainMenuScene implements Scene {
 		for (const item of items) {
 			const btn = new Button({
 				text: item.label,
-				width: 240,
-				height: 52,
-				fontSize: 20,
+				width: 276,
+				height: 60,
+				fontSize: 23,
 				onClick: item.action,
 			});
 			this.buttons.push(btn);
@@ -98,8 +100,8 @@ export class MainMenuScene implements Scene {
 
 		const startY = this.DESIGN_HEIGHT * 0.4;
 		this.buttons.forEach((btn, i) => {
-			btn.view.x = this.DESIGN_WIDTH / 2 - 120;
-			btn.view.y = startY + i * 70;
+			btn.view.x = this.DESIGN_WIDTH / 2 - 138;
+			btn.view.y = startY + i * 78;
 		});
 
 		// One uniform scale for the whole menu, then center the scaled
