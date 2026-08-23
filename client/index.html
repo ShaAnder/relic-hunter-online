@@ -7,11 +7,13 @@
 		<title>client</title>
 	</head>
 	<body>
-		<p>Please rotate your device to landscape to play.</p>
-		<p style="font-size: 15px; opacity: 0.7; margin-top: 12px">
-			If rotating doesn't work, check that Auto-Rotate is enabled in your
-			device's quick settings.
-		</p>
+		<div id="rotate-prompt">
+			<p>Please rotate your device to landscape to play.</p>
+			<p style="font-size: 15px; opacity: 0.7; margin-top: 12px">
+				If rotating doesn't work, check that Auto-Rotate is enabled in your
+				device's quick settings.
+			</p>
+		</div>
 		<div id="app"></div>
 		<script type="module" src="/src/main.ts"></script>
 	</body>
