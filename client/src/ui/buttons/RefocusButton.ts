@@ -43,6 +43,7 @@ export class RefocusButton {
 	}
 
 	hitTest(screenX: number, screenY: number): boolean {
-		return pointInCircle(screenX, screenY, this.view.x, this.view.y, 20);
+		const s = this.view.scale.x || 1;
+		return pointInCircle(screenX, screenY, this.view.x, this.view.y, 20 * s);
 	}
 }

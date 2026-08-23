@@ -9,6 +9,7 @@ import restSvgUrl from "@/assets/icons/rest.svg";
 import engageSvgUrl from "@/assets/icons/engage.svg";
 import zocSvgUrl from "@/assets/icons/zoc.svg";
 import { pointInCircle } from "@/rendering/HitTest";
+import { computeUiScale } from "@/math/uiScale";
 
 export type ButtonAction =
 	| "move"
@@ -19,10 +20,10 @@ export type ButtonAction =
 	| "special"
 	| null;
 
-const HUB_RADIUS = 31;
-const NODE_RADIUS = 31;
-const INNER_RING_R = 125;
-const OUTER_RING_R = 211;
+const HUB_RADIUS = 27;
+const NODE_RADIUS = 28;
+const INNER_RING_R = 103;
+const OUTER_RING_R = 168;
 
 const INNER_EASE_SPEED = 1.0; // px per ms — fast/snappy, was miscalibrated ~100x too slow before
 const OUTER_ANGLE_EASE_SPEED = 0.018; // radians per ms — same fast feel, angular instead of linear
@@ -94,9 +95,13 @@ export class RadialActionWheel {
 		this.buildOuterRing();
 	}
 
-	layout(screenWidth: number, screenHeight: number): void {
-		this.view.x = screenWidth - 50;
-		this.view.y = screenHeight - 50;
+	layout(screenWidth: number, screenHeight: number, s?: number): void {
+		const base = s ?? computeUiScale(screenWidth, screenHeight);
+		// ~5% looser than previous tight pass on small screens
+		const scale = base < 0.99 ? base * 0.87 : base * 0.95;
+		this.view.scale.set(scale);
+		this.view.x = screenWidth - 44 * scale;
+		this.view.y = screenHeight - 44 * scale;
 	}
 
 	update(deltaTime: number): void {
@@ -155,8 +160,9 @@ export class RadialActionWheel {
 	}
 
 	handleClick(screenX: number, screenY: number): ButtonAction {
-		const localX = screenX - this.view.x;
-		const localY = screenY - this.view.y;
+		const s = this.view.scale.x || 1;
+		const localX = (screenX - this.view.x) / s;
+		const localY = (screenY - this.view.y) / s;
 
 		if (pointInCircle(localX, localY, 0, 0, HUB_RADIUS)) {
 			this.toggleInnerRing();

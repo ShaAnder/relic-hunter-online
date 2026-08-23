@@ -3,6 +3,7 @@ import type { Overlay } from "@/core/overlays/Overlay";
 import type { Game } from "@/core/game/Game";
 import { Hand, SKIP_CARD_ID } from "@/ui/Hand";
 import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
+import { computeUiScale, uiPx } from "@/math/uiScale";
 import { chooseCombatAction } from "@relic-hunter/shared";
 import type {
 	CardData,
@@ -1135,20 +1136,30 @@ export class BattleOverlay implements Overlay {
 		this.backdrop.rect(0, 0, width, height);
 		this.backdrop.fill({ color: 0x000000, alpha: 1 });
 
+		const s = computeUiScale(width, height);
+
+		this.arena.scale.set(s);
 		this.arena.x = width / 2;
-		this.arena.y = height / 2 - 30;
+		this.arena.y = height / 2 - uiPx(30, s);
 		this.arena.rotation = 0;
-		this.arena.scale.set(1, 1);
 
-		this.attackerPanel.x = 24;
-		this.attackerPanel.y = height - 124;
+		const panelW = uiPx(190, s);
+		const panelH = uiPx(100, s);
+		const margin = uiPx(16, s);
 
-		this.defenderPanel.x = width - 214;
-		this.defenderPanel.y = height - 124;
+		this.attackerPanel.scale.set(s);
+		this.defenderPanel.scale.set(s);
+		this.attackerPanel.x = margin;
+		this.attackerPanel.y = height - panelH - margin;
+		this.defenderPanel.x = width - panelW - margin;
+		this.defenderPanel.y = height - panelH - margin;
 
-		this.localHand.resize(width, height);
-		this.localHand.view.x = width / 2 - 100;
+		this.localHand.resize(width, height, s, "center");
+		this.localPlayZone.layout(width / 2, height / 2 - uiPx(30, s), s);
 
-		this.localPlayZone.layout(width / 2, height / 2 - 30);
+		this.winnerLootPanel.view.scale.set(s);
+		this.loserLootPanel.view.scale.set(s);
+		this.surrenderLootPanel.view.scale.set(s);
+		this.lootConfirmPopup.scale.set(s);
 	}
 }

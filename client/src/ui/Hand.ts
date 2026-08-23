@@ -2,13 +2,20 @@ import { Container, Graphics } from "pixi.js";
 import type { FederatedPointerEvent } from "pixi.js";
 import type { CardData } from "@relic-hunter/shared";
 import { Card, CARD_WIDTH, CARD_HEIGHT } from "@/entities/Card";
+import { computeUiScale } from "@/math/uiScale";
 import type { PlayZone } from "@/ui/PlayZone";
 
 const CARET_PULSE_SPEED = 0.006;
 const CARET_PULSE_RANGE = 6;
 
 // Cascade — cards overlap, most of each stays visible. No rotation/arc.
-const CARD_STEP = CARD_WIDTH * 0.75; // 25% overlap between adjacent cards
+const CARD_STEP = CARD_WIDTH * 0.82; // moderate splay spacing
+/**
+ * Distance from holder origin (x=0) to first card centre when fully open.
+ * Holder extends to +CARD_WIDTH/2; card left edge at SPLAY_GAP - CARD_WIDTH/2.
+ * Use CARD_WIDTH + 50 so there is ~50px clear air between the two.
+ */
+const SPLAY_GAP = CARD_WIDTH + 50;
 const HIGHLIGHT_LIFT = 22;
 const CARET_GAP = 14;
 
@@ -17,8 +24,6 @@ const CARET_GAP = 14;
 // eases 0→1, multiplying each card's normal cascade offset, rather than
 // the old vertical slide-reveal.
 const SPLAY_EASE_MS = 160;
-const HOLDER_WIDTH = CARD_WIDTH;
-
 export const SKIP_CARD_ID = "__skip__";
 
 /**
@@ -177,12 +182,28 @@ export class Hand {
 		}
 	}
 
-	/** Bottom-left of the screen — holder sits at a fixed spot, hand splays rightward from it. */
-	resize(screenWidth: number, screenHeight: number): void {
-		void screenWidth;
-		this.view.x = 40;
-		this.view.y = screenHeight - 40;
-		this.fanContainer.x = HOLDER_WIDTH / 2 + 50;
+	/**
+	 * @param anchor - map: left (holder bottom-left, splay right);
+	 *                 battle: center (hand middle-bottom)
+	 */
+	resize(
+		screenWidth: number,
+		screenHeight: number,
+		s?: number,
+		anchor: "left" | "center" = "left",
+	): void {
+		const scale = s ?? computeUiScale(screenWidth, screenHeight);
+		this.view.scale.set(scale);
+		const margin = 16 * scale;
+		if (anchor === "center") {
+			// Battle: centre the holder under the play zone
+			this.view.x = screenWidth / 2;
+			this.view.y = screenHeight - 16 * scale;
+		} else {
+			// Map: pin holder left edge to margin; splay goes right
+			this.view.x = margin + (CARD_WIDTH / 2) * scale;
+			this.view.y = screenHeight - 16 * scale;
+		}
 		this.layoutCards();
 	}
 
@@ -348,9 +369,10 @@ export class Hand {
 
 			const isHighlighted = i === this.highlightedIndex && this.selecting;
 			card.view.rotation = 0;
-			card.view.x = i * CARD_STEP * this.splayProgress;
+			// Gap pulls the cascade off the holder; step spreads cards further
+			card.view.x = (SPLAY_GAP + i * CARD_STEP) * this.splayProgress;
 			card.view.y = isHighlighted ? -HIGHLIGHT_LIFT : 0;
-			card.view.alpha = this.splayProgress;
+			card.view.alpha = this.splayProgress < 0.05 ? 0 : this.splayProgress;
 			card.view.scale.set(1);
 		});
 

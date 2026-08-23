@@ -17,7 +17,7 @@ import { LocalCharacterRepo } from "@/core/entities/CharacterRepo";
 import { LobbyScene } from "./LobbyScene";
 import { MainMenuScene } from "./MainMenuScene";
 
-/** Flavor-only for now — describes each class's intended identity, no underlying system implemented yet. */
+/** Flavor-only for now — describes each class's intended identity. */
 const CLASS_FLAVOR: Record<CharacterClass, string> = {
 	tank: "Takes half damage from ranged attacks.",
 	brawler: "Projects a powerful Zone of Control.",
@@ -27,21 +27,21 @@ const CLASS_FLAVOR: Record<CharacterClass, string> = {
 	summoner: "Can summon a monster to fight at their side.",
 };
 
-/** Short bullet-style rundown of why a player might pick each class — separate from the one-line mechanical flavor above. */
+/** Short bullet rundown of why a player might pick each class. */
 const CLASS_PURPOSE: Record<CharacterClass, string[]> = {
 	tank: [
-		"Absorbs hits meant for your team",
-		"Excels at holding chokepoints and doorways",
-		"Thrives against ranged-heavy enemies",
+		"Absorbs hheavy hits",
+		"Excels at holding ground",
+		"Thrives on the front line",
 	],
 	brawler: [
-		"Punishes anyone who gets close",
-		"Strong at controlling the space around itself",
-		"Rewards aggressive, front-line play",
+		"Punishes gap closers",
+		"Strong space controller",
+		"Rewards front-line play",
 	],
 	hunter: [
-		"Deals consistent damage from a safe distance",
-		"Rewards precise positioning and line-of-sight play",
+		"Keep trap detection",
+		"Rewards map awareness",
 		"Struggles up close — plan your angles",
 	],
 	scout: [
@@ -68,16 +68,21 @@ const STAT_KEYS: (keyof StatAllocation)[] = [
 	"hp",
 ];
 
-// One model shape per class now — index matches CLASSES directly, no
-// independent model-cycling state anymore.
 const MODEL_COUNT = CLASSES.length;
+
+/** Shared width for flavor + purpose block (left-aligned lines, centered block). */
+const LEFT_COPY_WIDTH = 280;
+
+/** Gap under flavor before the first bullet, and between bullets. */
+const PURPOSE_GAP_AFTER_FLAVOR = 16;
+const PURPOSE_GAP_BETWEEN = 12;
 
 /**
  * Character creation screen.
- * Left: silhouette + class name + flavor, arrows cycle class (model is
- * tied 1:1 to class, not independently selectable anymore).
+ * Left: silhouette + class name + flavor + purpose bullets.
  * Right: 12-point allocation table with escalating costs and live totals.
  * Confirm writes through CharacterRepository and GameSession → Lobby.
+ * @author ShaAnder
  */
 export class CharacterCreationScene implements Scene {
 	readonly view = new Container();
@@ -86,9 +91,8 @@ export class CharacterCreationScene implements Scene {
 	private readonly repo = new LocalCharacterRepo();
 
 	private readonly DESIGN_WIDTH = 1000;
-	private readonly DESIGN_HEIGHT = 700;
+	private readonly DESIGN_HEIGHT = 600;
 
-	// ---------- State ----------
 	private selectedClass: CharacterClass = "brawler";
 	private allocation: StatAllocation = {
 		movement: 0,
@@ -98,7 +102,6 @@ export class CharacterCreationScene implements Scene {
 	};
 	private name = "Hunter";
 
-	// ---------- Visual roots ----------
 	private modelContainer = new Container();
 	private modelGraphics = new Graphics();
 	private classNameText!: Text;
@@ -123,13 +126,14 @@ export class CharacterCreationScene implements Scene {
 	private backBtn!: Button;
 	private nameInput: HTMLInputElement | null = null;
 
-	// Design-space position for the HTML name input, and the current
-	// scale/offset applied to `content` — nameInput lives outside Pixi's
-	// container tree entirely, so its screen position has to be computed
-	// by hand using these instead of inheriting a container transform.
 	private nameInputDesignX = 0;
 	private nameInputDesignY = 0;
 	private currentScale = 1;
+
+	/** Design-space X for the left column centre — used when stacking purpose lines. */
+	private leftCenterX = 0;
+	/** Vertical midline for arrows + centered left stack. */
+	private leftMidY = 0;
 
 	constructor(private game: Game) {
 		this.content.addChild(this.modelContainer);
@@ -153,13 +157,9 @@ export class CharacterCreationScene implements Scene {
 		this.positionNameInput();
 	}
 
-	// ---------- Construction ----------
-
 	private buildUI(): void {
 		this.view.addChild(this.content);
 
-		// Class/model arrows — now cycle class directly, moved further out
-		// to leave room for the name + flavor text stacked beneath the icon.
 		this.leftArrow = new Button({
 			text: "◀",
 			width: 48,
@@ -179,7 +179,7 @@ export class CharacterCreationScene implements Scene {
 
 		this.classNameText = new Text({
 			text: "",
-			style: { fill: 0xffffff, fontSize: 20, fontWeight: "bold" },
+			style: { fill: 0xffffff, fontSize: 31, fontWeight: "bold" },
 		});
 		this.classNameText.anchor.set(0.5, 0);
 		this.content.addChild(this.classNameText);
@@ -188,90 +188,86 @@ export class CharacterCreationScene implements Scene {
 			text: "",
 			style: {
 				fill: 0x88ccff,
-				fontSize: 13,
+				fontSize: 24,
 				wordWrap: true,
-				wordWrapWidth: 260,
+				wordWrapWidth: LEFT_COPY_WIDTH,
 				align: "center",
+				lineHeight: 30,
 			},
 		});
 		this.classFlavorText.anchor.set(0.5, 0);
 		this.content.addChild(this.classFlavorText);
 
-		// One Text per bullet line, not one Text with embedded newlines —
-		// more reliable than depending on Pixi's wordWrap to respect
-
-		// same pattern LogPanel's rows already use successfully.
 		for (let i = 0; i < 3; i++) {
 			const line = new Text({
 				text: "",
 				style: {
-					fill: 0xaaaaaa,
-					fontSize: 12,
+					fill: 0xcccccc,
+					fontSize: 24,
 					wordWrap: true,
-					wordWrapWidth: 260,
+					wordWrapWidth: LEFT_COPY_WIDTH,
+					align: "left",
+					lineHeight: 30,
 				},
 			});
-			line.anchor.set(0.5, 0);
+			line.anchor.set(0, 0);
 			this.classPurposeTexts.push(line);
 			this.content.addChild(line);
 		}
 
-		// Points remaining
 		this.pointsRemainingText = new Text({
 			text: "",
-			style: { fill: 0xffffff, fontSize: 18, fontWeight: "bold" },
+			style: { fill: 0xffffff, fontSize: 22, fontWeight: "bold" },
 		});
 		this.content.addChild(this.pointsRemainingText);
 
-		// Table headers — no gridlines, just aligned column labels
 		const headerLabels = ["Stat", "", "Value", "", "Total", "Next Cost"];
 		for (const text of headerLabels) {
 			const t = new Text({
 				text,
-				style: { fill: 0x888888, fontSize: 12, fontWeight: "bold" },
+				style: { fill: 0x888888, fontSize: 15, fontWeight: "bold" },
 			});
 			this.tableHeaders.push(t);
 			this.content.addChild(t);
 		}
 
-		// Stat rows
 		for (const key of STAT_KEYS) {
 			const label = new Text({
 				text: this.statLabel(key),
-				style: { fill: 0xcccccc, fontSize: 16 },
+				style: { fill: 0xcccccc, fontSize: 20 },
 			});
 
 			const minus = new Button({
 				text: "▼",
-				width: 32,
-				height: 28,
-				fontSize: 14,
+				width: 40,
+				height: 34,
+				fontSize: 16,
 				onClick: () => this.adjustStat(key, -1),
 			});
 
 			const valueText = new Text({
 				text: "0",
-				style: { fill: 0xffffff, fontSize: 16, fontWeight: "bold" },
+				style: { fill: 0xffffff, fontSize: 20, fontWeight: "bold" },
 			});
 			valueText.anchor.set(0.5, 0);
 
 			const plus = new Button({
 				text: "▲",
-				width: 32,
-				height: 28,
-				fontSize: 14,
+				width: 40,
+				height: 34,
+				fontSize: 16,
 				onClick: () => this.adjustStat(key, 1),
 			});
 
 			const totalText = new Text({
 				text: "",
-				style: { fill: 0x88ccff, fontSize: 15, fontWeight: "bold" },
+				style: { fill: 0x88ccff, fontSize: 18, fontWeight: "bold" },
 			});
 			totalText.anchor.set(0.5, 0);
 
 			const nextCostText = new Text({
 				text: "",
-				style: { fill: 0xaaaaaa, fontSize: 13 },
+				style: { fill: 0xaaaaaa, fontSize: 16 },
 			});
 			nextCostText.anchor.set(0.5, 0);
 
@@ -293,24 +289,22 @@ export class CharacterCreationScene implements Scene {
 			});
 		}
 
-		// Back to main menu
 		this.backBtn = new Button({
 			text: "Back",
-			width: 120,
-			height: 40,
-			fontSize: 15,
+			width: 140,
+			height: 48,
+			fontSize: 18,
 			onClick: () => {
 				void this.game.sceneManager.changeScene(new MainMenuScene(this.game));
 			},
 		});
 		this.content.addChild(this.backBtn.view);
 
-		// Confirm
 		this.confirmBtn = new Button({
 			text: "Confirm",
-			width: 160,
-			height: 48,
-			fontSize: 18,
+			width: 180,
+			height: 56,
+			fontSize: 20,
 			bgColor: 0x2e7d32,
 			activeColor: 0x43a047,
 			onClick: () => this.onConfirm(),
@@ -321,27 +315,23 @@ export class CharacterCreationScene implements Scene {
 	}
 
 	private layout(width: number, height: number): void {
-		// ===== RIGHT SIDE computed FIRST — the left side anchors to its =====
-		// ===== real Attack-row position, not an independent estimate.  =====
 		const panelX = this.DESIGN_WIDTH * 0.55;
 		let y = this.DESIGN_HEIGHT * 0.18;
 
-		// Name input is positioned separately via HTML overlay
 		y += 50;
 		this.nameInputDesignX = panelX;
 		this.nameInputDesignY = this.DESIGN_HEIGHT * 0.12;
 
 		this.pointsRemainingText.x = panelX;
 		this.pointsRemainingText.y = y;
-		y += 36;
+		y += 42;
 
-		// Column x-offsets, shared by both the header row and every stat row
 		const COL_LABEL = 0;
-		const COL_MINUS = 130;
-		const COL_VALUE = 180;
-		const COL_PLUS = 220;
-		const COL_TOTAL = 285;
-		const COL_NEXT_COST = 360;
+		const COL_MINUS = 140;
+		const COL_VALUE = 200;
+		const COL_PLUS = 250;
+		const COL_TOTAL = 320;
+		const COL_NEXT_COST = 400;
 
 		const headerOffsets = [
 			COL_LABEL,
@@ -357,7 +347,7 @@ export class CharacterCreationScene implements Scene {
 		});
 		y += 24;
 
-		let attackRowY = y; // captured below, once we reach the actual Attack row
+		let attackRowY = y;
 
 		for (const row of this.statRows) {
 			row.label.x = panelX + COL_LABEL;
@@ -380,40 +370,27 @@ export class CharacterCreationScene implements Scene {
 
 			if (row.key === "attack") attackRowY = y;
 
-			y += 44;
+			y += 52;
 		}
 
 		this.confirmBtn.view.x = panelX;
-		this.confirmBtn.view.y = y + 24;
+		this.confirmBtn.view.y = y + 28;
 
-		this.backBtn.view.x = panelX + 180;
-		this.backBtn.view.y = y + 28;
+		this.backBtn.view.x = panelX + 200;
+		this.backBtn.view.y = y + 32;
 
-		// ===== LEFT SIDE: silhouette + class name + flavor + purpose =====
-		// Icon is vertically anchored to the real Attack row's Y, not an
-		// estimated block-center — matches wherever the table actually is.
-		const leftCenterX = this.DESIGN_WIDTH * 0.26;
+		this.leftCenterX = this.DESIGN_WIDTH * 0.26;
 		const PICKER_CONTAINER_HALF_WIDTH = 170;
-		const modelY = attackRowY;
+		// Arrows stay on the Attack-row midline — do not move with the stack
+		const arrowsY = attackRowY;
 
-		this.modelContainer.x = leftCenterX;
-		this.modelContainer.y = modelY;
+		this.leftArrow.view.x = this.leftCenterX - PICKER_CONTAINER_HALF_WIDTH - 48;
+		this.leftArrow.view.y = arrowsY - 24;
+		this.rightArrow.view.x = this.leftCenterX + PICKER_CONTAINER_HALF_WIDTH;
+		this.rightArrow.view.y = arrowsY - 24;
 
-		this.leftArrow.view.x = leftCenterX - PICKER_CONTAINER_HALF_WIDTH - 48;
-		this.leftArrow.view.y = modelY - 24;
-		this.rightArrow.view.x = leftCenterX + PICKER_CONTAINER_HALF_WIDTH;
-		this.rightArrow.view.y = modelY - 24;
-
-		this.classNameText.x = leftCenterX;
-		this.classNameText.y = modelY + 70;
-
-		this.classFlavorText.x = leftCenterX;
-		this.classFlavorText.y = modelY + 100;
-
-		this.classPurposeTexts.forEach((line, i) => {
-			line.x = leftCenterX;
-			line.y = modelY + 140 + i * 18;
-		});
+		// Arrows stay on attack-row midline; stack sits ~20% of design height lower
+		this.leftMidY = arrowsY + this.DESIGN_HEIGHT * 0.2;
 
 		this.currentScale = computeFitScale(
 			width,
@@ -424,11 +401,76 @@ export class CharacterCreationScene implements Scene {
 		this.content.scale.set(this.currentScale);
 		this.content.x = (width - this.DESIGN_WIDTH * this.currentScale) / 2;
 		this.content.y = (height - this.DESIGN_HEIGHT * this.currentScale) / 2;
+
+		// Icon + name + flavor + bullets centered on leftMidY (below arrows)
+		this.layoutLeftStack(this.leftMidY);
 	}
 
-	// ---------- Model silhouettes ----------
+	/**
+	 * Places silhouette, name, flavor, and purpose as one vertical stack
+	 * whose centre sits on midY. Arrows are positioned separately and
+	 * stay put when copy reflows.
+	 */
+	private layoutLeftStack(midY: number): void {
+		const MODEL_HALF = 48;
+		const nameGap = 16;
+		const flavorGap = 12;
 
-	/** Cycles class directly — model is derived 1:1 from class index now, no separate model state. */
+		// Provisional top: model centre will be shifted after we know total height
+		let modelCenterY = midY;
+		this.modelContainer.x = this.leftCenterX;
+		this.modelContainer.y = modelCenterY;
+
+		this.classNameText.x = this.leftCenterX;
+		this.classNameText.y = modelCenterY + MODEL_HALF + nameGap;
+
+		this.classFlavorText.x = this.leftCenterX;
+		this.classFlavorText.y =
+			this.classNameText.y + this.classNameText.height + flavorGap;
+
+		this.layoutPurposeBullets();
+
+		const stackTop = modelCenterY - MODEL_HALF;
+		let stackBottom = this.classFlavorText.y + this.classFlavorText.height;
+		for (const line of this.classPurposeTexts) {
+			if (!line.visible || line.text.length === 0) continue;
+			stackBottom = Math.max(stackBottom, line.y + line.height);
+		}
+
+		const stackCenter = (stackTop + stackBottom) / 2;
+		const dy = midY - stackCenter;
+
+		this.modelContainer.y += dy;
+		this.classNameText.y += dy;
+		this.classFlavorText.y += dy;
+		for (const line of this.classPurposeTexts) {
+			line.y += dy;
+		}
+	}
+
+	/**
+	 * Stack purpose bullets from real text heights so wrapped lines never
+	 * overlap. Left edges align; the block is centered under the silhouette.
+	 */
+	private layoutPurposeBullets(): void {
+		const purposeLeft = this.leftCenterX - LEFT_COPY_WIDTH / 2;
+		let nextY =
+			this.classFlavorText.y +
+			this.classFlavorText.height +
+			PURPOSE_GAP_AFTER_FLAVOR;
+
+		for (const line of this.classPurposeTexts) {
+			line.x = purposeLeft;
+			line.y = nextY;
+			if (line.text.length === 0) {
+				line.visible = false;
+				continue;
+			}
+			line.visible = true;
+			nextY += Math.max(line.height, 30) + PURPOSE_GAP_BETWEEN;
+		}
+	}
+
 	private cycleClass(dir: number): void {
 		const currentIndex = CLASSES.indexOf(this.selectedClass);
 		const nextIndex = (currentIndex + dir + MODEL_COUNT) % MODEL_COUNT;
@@ -445,24 +487,24 @@ export class CharacterCreationScene implements Scene {
 		const modelIndex = CLASSES.indexOf(this.selectedClass);
 
 		switch (modelIndex) {
-			case 0: // Tank — Circle
+			case 0:
 				g.circle(0, 0, s);
 				g.fill(color);
 				g.circle(-s * 0.3, -s * 0.35, s * 0.35);
 				g.fill({ color: 0xffffff, alpha: 0.35 });
 				break;
-			case 1: // Brawler — Square
+			case 1:
 				g.roundRect(-s, -s, s * 2, s * 2, 8);
 				g.fill(color);
 				break;
-			case 2: // Hunter — Triangle
+			case 2:
 				g.moveTo(0, -s);
 				g.lineTo(s, s);
 				g.lineTo(-s, s);
 				g.closePath();
 				g.fill(color);
 				break;
-			case 3: // Scout — Diamond
+			case 3:
 				g.moveTo(0, -s);
 				g.lineTo(s, 0);
 				g.lineTo(0, s);
@@ -470,7 +512,7 @@ export class CharacterCreationScene implements Scene {
 				g.closePath();
 				g.fill(color);
 				break;
-			case 4: // Mage — Hexagon
+			case 4:
 				for (let i = 0; i < 6; i++) {
 					const a = (Math.PI / 3) * i - Math.PI / 6;
 					const x = Math.cos(a) * s;
@@ -481,7 +523,7 @@ export class CharacterCreationScene implements Scene {
 				g.closePath();
 				g.fill(color);
 				break;
-			case 5: // Summoner — Cross
+			case 5:
 				g.rect(-s * 0.35, -s, s * 0.7, s * 2);
 				g.fill(color);
 				g.rect(-s, -s * 0.35, s * 2, s * 0.7);
@@ -489,8 +531,6 @@ export class CharacterCreationScene implements Scene {
 				break;
 		}
 	}
-
-	// ---------- Stats ----------
 
 	private adjustStat(key: keyof StatAllocation, delta: number): void {
 		const next = { ...this.allocation };
@@ -510,10 +550,18 @@ export class CharacterCreationScene implements Scene {
 		this.classNameText.text =
 			this.selectedClass.charAt(0).toUpperCase() + this.selectedClass.slice(1);
 		this.classFlavorText.text = CLASS_FLAVOR[this.selectedClass];
+
 		const purposeLines = CLASS_PURPOSE[this.selectedClass];
 		this.classPurposeTexts.forEach((textObj, i) => {
 			textObj.text = purposeLines[i] ? `• ${purposeLines[i]}` : "";
 		});
+
+		// Heights are valid only after text is assigned — restack + re-center
+		if (this.leftMidY !== 0) {
+			this.layoutLeftStack(this.leftMidY);
+		} else {
+			this.layoutPurposeBullets();
+		}
 
 		const remaining = this.remainingPoints();
 		this.pointsRemainingText.text = `Points remaining: ${remaining} / ${CHAR_POINT_BUDGET}`;
@@ -556,8 +604,6 @@ export class CharacterCreationScene implements Scene {
 		}
 	}
 
-	// ---------- Name input (HTML overlay) ----------
-
 	private createNameInput(): void {
 		this.destroyNameInput();
 		const input = document.createElement("input");
@@ -566,17 +612,17 @@ export class CharacterCreationScene implements Scene {
 		input.maxLength = 16;
 		input.placeholder = "Name";
 		input.style.cssText = `
-			position: absolute;
-			z-index: 10;
-			font-size: 16px;
-			padding: 6px 10px;
-			border-radius: 6px;
-			border: 2px solid #555;
-			background: #1a1a1a;
-			color: #fff;
-			outline: none;
-			width: 180px;
-		`;
+position: absolute;
+z-index: 10;
+font-size: 16px;
+padding: 6px 10px;
+border-radius: 6px;
+border: 2px solid #555;
+background: #1a1a1a;
+color: #fff;
+outline: none;
+width: 180px;
+`;
 		input.addEventListener("input", () => {
 			this.name = input.value.trim() || "Hunter";
 		});
@@ -585,12 +631,6 @@ export class CharacterCreationScene implements Scene {
 		this.positionNameInput();
 	}
 
-	/**
-	 * The input lives outside Pixi's container tree entirely, so it
-	 * doesn't inherit `content`'s scale automatically — its design-space
-	 * position has to be scaled and offset by hand to match wherever
-	 * the scaled canvas content actually landed.
-	 */
 	private positionNameInput(): void {
 		if (!this.nameInput) return;
 		const canvas = this.game.app.canvas;
@@ -607,8 +647,6 @@ export class CharacterCreationScene implements Scene {
 			this.nameInput = null;
 		}
 	}
-
-	// ---------- Confirm ----------
 
 	private onConfirm(): void {
 		const character = createCharacter(

@@ -43,8 +43,9 @@ export class BagButton {
 	}
 
 	hitTest(screenX: number, screenY: number): boolean {
-		const lx = screenX - this.view.x;
-		const ly = screenY - this.view.y;
+		const s = this.view.scale.x || 1;
+		const lx = (screenX - this.view.x) / s;
+		const ly = (screenY - this.view.y) / s;
 		return lx >= 0 && lx <= 40 && ly >= 0 && ly <= 40;
 	}
 }

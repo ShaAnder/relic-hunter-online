@@ -8,6 +8,7 @@ import {
 	TILE_WIDTH,
 	TILE_HEIGHT,
 } from "@/math/isoGridMath";
+import { computeUiScale, uiPx } from "@/math/uiScale";
 import { Mercenary } from "@/entities/Mercenary";
 import { Chest } from "@/entities/Chest";
 
@@ -220,12 +221,19 @@ export class MapScene implements Scene {
 		this.boardContainer.addChild(this.mercenaryContainer);
 		this.view.addChild(this.boardContainer);
 
-		this.camera = new Camera(this.boardContainer, {
-			initialZoom: 1.75,
-			minZoom: 1.4,
-			maxZoom: 4,
-			panSpeed: 700,
-		});
+		{
+			const sw = this.game.app.screen.width;
+			const sh = this.game.app.screen.height;
+			const ui = computeUiScale(sw, sh);
+			// Mobile / narrow: start more zoomed out so the board is readable
+			const mobile = ui < 0.85 || Math.min(sw, sh) < 500;
+			this.camera = new Camera(this.boardContainer, {
+				initialZoom: mobile ? 1.05 : 1.75,
+				minZoom: mobile ? 1.05 : 1.4,
+				maxZoom: 4,
+				panSpeed: 700,
+			});
+		}
 
 		this.applyCameraBounds();
 
@@ -562,38 +570,64 @@ export class MapScene implements Scene {
 	private layoutHud(): void {
 		const w = this.game.app.screen.width;
 		const h = this.game.app.screen.height;
+		const s = computeUiScale(w, h);
 
-		this.characterPanel.layout(w, h);
+		for (const v of [
+			this.characterPanel.view,
+			this.bagButton.view,
+			this.inspectButton.view,
+			this.logsButton.view,
+			this.inventoryPanel.view,
+			this.logPanel.view,
+			this.hunterSummaryPanel.view,
+			this.deckTracker.view,
+			this.refocusButton.view,
+			this.playZone.view,
+		]) {
+			v.scale.set(s);
+		}
+		// buttonBar + hand set scale inside their own layout/resize
 
-		this.buttonBar.layout(w, h);
-		this.refocusButton.layout(w - 40, h - 40, 280);
-		this.bagButton.layout(
-			this.characterPanel.view.x,
-			this.characterPanel.view.y,
-			this.characterPanel.panelHeight,
-		);
+		const m = uiPx(16, s);
+		const panelW = this.characterPanel.panelWidth * s;
+		const panelH = this.characterPanel.panelHeight * s;
+		const btn = uiPx(40, s);
+		const gap = uiPx(8, s);
 
-		this.inspectButton.layout(this.bagButton.view.x, this.bagButton.view.y);
-		this.hunterSummaryPanel.layout(
-			this.bagButton.view.x,
-			this.bagButton.view.y + 56,
-		);
+		this.characterPanel.view.x = m;
+		this.characterPanel.view.y = m;
 
-		this.logsButton.layout(
-			this.inspectButton.view.x,
-			this.inspectButton.view.y,
-		);
-		this.logPanel.layout(this.bagButton.view.x, this.bagButton.view.y + 56);
+		this.bagButton.view.x = m;
+		this.bagButton.view.y = m + panelH + gap;
 
-		this.inventoryPanel.layoutRightOfCharacter(
-			this.characterPanel.view.x,
-			this.characterPanel.view.y,
-			this.characterPanel.panelWidth,
-		);
-		this.deckTracker.layout(w);
-		this.hand.resize(w, h);
+		this.inspectButton.view.x = this.bagButton.view.x + btn + gap;
+		this.inspectButton.view.y = this.bagButton.view.y;
+
+		this.logsButton.view.x = this.inspectButton.view.x + btn + gap;
+		this.logsButton.view.y = this.inspectButton.view.y;
+
+		this.hunterSummaryPanel.view.x = this.bagButton.view.x;
+		this.hunterSummaryPanel.view.y = this.bagButton.view.y + uiPx(56, s);
+
+		this.logPanel.view.x = this.bagButton.view.x;
+		this.logPanel.view.y = this.bagButton.view.y + uiPx(56, s);
+
+		this.inventoryPanel.view.x = m + panelW + gap;
+		this.inventoryPanel.view.y = m;
+
+		this.buttonBar.layout(w, h, s);
+
+		// Refocus: center-right edge
+		this.refocusButton.view.x = w - uiPx(28, s);
+		this.refocusButton.view.y = h / 2;
+
+		this.deckTracker.view.x = w - uiPx(88, s) - m;
+		this.deckTracker.view.y = m;
+
+		// Hand owns its scale + left anchor inside resize
+		this.hand.resize(w, h, s);
+		this.playZone.layout(w / 2, h / 2, s);
 		this.game.app.stage.hitArea = this.game.app.screen;
-		this.playZone.layout(w / 2, h / 2);
 	}
 
 	/** Flashing red alert, centered on screen, for durationMs. Resolves once it's done and hidden again. */
@@ -688,8 +722,13 @@ export class MapScene implements Scene {
 
 		const { screenX, screenY } = this.getScreenPoint(event);
 
+		const hs = computeUiScale(
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
 		const nearHand =
-			screenX < 420 && screenY > this.game.app.screen.height - 160;
+			screenX < uiPx(380, hs) &&
+			screenY > this.game.app.screen.height - uiPx(180, hs);
 		this.hand.setHovered(nearHand);
 
 		if (!this.moveController.active) return;
@@ -2253,8 +2292,13 @@ export class MapScene implements Scene {
 	private handleMouseMove = (event: MouseEvent): void => {
 		if (this.game.overlays.isOpen) return;
 		const { screenX, screenY } = this.getScreenPoint(event);
+		const hs = computeUiScale(
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
 		const nearHand =
-			screenX < 420 && screenY > this.game.app.screen.height - 160;
+			screenX < uiPx(380, hs) &&
+			screenY > this.game.app.screen.height - uiPx(180, hs);
 		this.hand.setHovered(nearHand);
 	};
 

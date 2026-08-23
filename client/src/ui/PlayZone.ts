@@ -139,17 +139,23 @@ export class PlayZone {
 	}
 
 	/** Centre of the screen (or any caller-chosen point). */
-	layout(x: number, y: number): void {
+	layout(x: number, y: number, s?: number): void {
+		const scale = s ?? 1;
+		this.view.scale.set(scale);
 		this.view.x = x;
 		this.view.y = y;
 	}
 
 	/** True if the global point is inside the grey strip (not the skip button). */
 	containsGlobalPoint(globalX: number, globalY: number): boolean {
-		const local = this.view.toLocal({ x: globalX, y: globalY });
+		// Bounds include view.scale / parent transforms — more reliable on
+		// mobile than manual toLocal + design-space half extents.
+		const b = this.zoneBg.getBounds();
 		return (
-			Math.abs(local.x) <= ZONE_WIDTH / 2 &&
-			Math.abs(local.y) <= ZONE_HEIGHT / 2
+			globalX >= b.x &&
+			globalX <= b.x + b.width &&
+			globalY >= b.y &&
+			globalY <= b.y + b.height
 		);
 	}
 
