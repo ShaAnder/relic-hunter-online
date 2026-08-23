@@ -103,7 +103,7 @@ export class TutorialsMenuScene implements Scene {
 	 */
 	private startTutorial(topic: string): void {
 		console.log(`[Tutorials] Launching: ${topic}`);
-		this.game.session.missionParams = { mapSize: "S" };
+		this.game.session.missionParams = {};
 		void this.game.overlays.show(new LoadingOverlay(this.game));
 	}
 

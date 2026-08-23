@@ -19,10 +19,10 @@ export type ButtonAction =
 	| "special"
 	| null;
 
-const HUB_RADIUS = 25;
-const NODE_RADIUS = 25;
-const INNER_RING_R = 100; // was 80, widened to match bigger NODE_RADIUS
-const OUTER_RING_R = 169; // was 144, widened to match bigger NODE_RADIUS
+const HUB_RADIUS = 31;
+const NODE_RADIUS = 31;
+const INNER_RING_R = 125;
+const OUTER_RING_R = 211;
 
 const INNER_EASE_SPEED = 1.0; // px per ms — fast/snappy, was miscalibrated ~100x too slow before
 const OUTER_ANGLE_EASE_SPEED = 0.018; // radians per ms — same fast feel, angular instead of linear
@@ -95,8 +95,8 @@ export class RadialActionWheel {
 	}
 
 	layout(screenWidth: number, screenHeight: number): void {
-		this.view.x = screenWidth - 40;
-		this.view.y = screenHeight - 40;
+		this.view.x = screenWidth - 50;
+		this.view.y = screenHeight - 50;
 	}
 
 	update(deltaTime: number): void {

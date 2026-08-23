@@ -7,22 +7,9 @@ import type {
 	MatchScore,
 } from "@relic-hunter/shared";
 
-/**
- * Lightweight session bag owned by Game.
- * Scenes / overlays read-write this instead of threading constructor params.
- */
-export interface MissionParams {
-	mapSize: "S" | "M" | "L";
-}
+export interface MissionParams {}
 
-export const MAP_SIZE_DIMENSIONS: Record<
-	MissionParams["mapSize"],
-	{ width: number; height: number }
-> = {
-	S: { width: 30, height: 30 },
-	M: { width: 50, height: 50 },
-	L: { width: 70, height: 70 },
-};
+export const TEST_MAP_DIMENSIONS = { width: 35, height: 35 };
 
 export interface TurnOrderEntry {
 	id: string;

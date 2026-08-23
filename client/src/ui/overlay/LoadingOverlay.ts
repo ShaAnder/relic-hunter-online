@@ -4,7 +4,7 @@ import type { Game } from "@/core/game/Game";
 import { Camera } from "@/core/cameras/Camera";
 import { MapRenderer } from "@/rendering/MapRenderer";
 import {
-	MAP_SIZE_DIMENSIONS,
+	TEST_MAP_DIMENSIONS,
 	type TurnOrderEntry,
 	type PlacedChestRecord,
 } from "@/core/game/GameSession";
@@ -147,8 +147,7 @@ export class LoadingOverlay implements Overlay {
 	// ---------- Setup ----------
 
 	private setupGrid(): void {
-		const mapSize = this.game.session.missionParams?.mapSize ?? "M";
-		const { width, height } = MAP_SIZE_DIMENSIONS[mapSize];
+		const { width, height } = TEST_MAP_DIMENSIONS;
 		const seed = Math.floor(Math.random() * 1_000_000);
 		this.game.session.mapSeed = seed;
 
@@ -440,11 +439,10 @@ export class LoadingOverlay implements Overlay {
 	// ---------- Info panel ----------
 
 	private buildPanel(): void {
-		const mapSize = this.game.session.missionParams?.mapSize ?? "M";
 		const target = this.game.session.chestPlan?.targetItem;
 		const style = { fill: 0xffffff, fontSize: 16, fontFamily: "monospace" };
 
-		this.sizeText = new Text({ text: `Map Size: ${mapSize}`, style });
+		this.sizeText = new Text({ text: "Test Map", style });
 		this.seedText = new Text({
 			text: `Seed: ${this.game.session.mapSeed}`,
 			style,

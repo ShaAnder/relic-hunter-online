@@ -2,6 +2,7 @@ import { Container, Graphics, Text } from "pixi.js";
 import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
 import { Button } from "@/ui/generics/Button";
+import { computeFitScale } from "@/math/fitScale";
 import { MissionSelectScene } from "./MissionSelectScene";
 import { MainMenuScene } from "./MainMenuScene";
 
@@ -12,6 +13,7 @@ import { MainMenuScene } from "./MainMenuScene";
  */
 export class LobbyScene implements Scene {
 	readonly view = new Container();
+	private content = new Container();
 
 	private title!: Text;
 	private characterPanel = new Container();
@@ -20,6 +22,9 @@ export class LobbyScene implements Scene {
 	private characterStats!: Text;
 	private menuButtons: Button[] = [];
 	private statusText!: Text;
+
+	private readonly DESIGN_WIDTH = 1000;
+	private readonly DESIGN_HEIGHT = 600;
 
 	constructor(private game: Game) {}
 
@@ -42,6 +47,8 @@ export class LobbyScene implements Scene {
 	// ---------- Construction ----------
 
 	private buildUI(): void {
+		this.view.addChild(this.content);
+
 		// Title
 		this.title = new Text({
 			text: "Relic Hunter Online",
@@ -51,7 +58,7 @@ export class LobbyScene implements Scene {
 				fontWeight: "bold",
 			},
 		});
-		this.view.addChild(this.title);
+		this.content.addChild(this.title);
 
 		// Character panel background + text
 		const panelBg = new Graphics();
@@ -84,7 +91,7 @@ export class LobbyScene implements Scene {
 		this.characterStats.y = 80;
 		this.characterPanel.addChild(this.characterStats);
 
-		this.view.addChild(this.characterPanel);
+		this.content.addChild(this.characterPanel);
 
 		// Menu buttons
 		const menuItems: {
@@ -126,7 +133,7 @@ export class LobbyScene implements Scene {
 				onClick: item.action,
 			});
 			this.menuButtons.push(btn);
-			this.view.addChild(btn.view);
+			this.content.addChild(btn.view);
 		}
 
 		// Status / feedback line
@@ -134,28 +141,38 @@ export class LobbyScene implements Scene {
 			text: "",
 			style: { fill: 0xffcc66, fontSize: 16 },
 		});
-		this.view.addChild(this.statusText);
+		this.content.addChild(this.statusText);
 	}
 
 	private layout(width: number, height: number): void {
-		this.title.x = width / 2 - this.title.width / 2;
+		this.title.x = this.DESIGN_WIDTH / 2 - this.title.width / 2;
 		this.title.y = 40;
 
 		// Character panel — left side
-		this.characterPanel.x = width * 0.12;
-		this.characterPanel.y = height * 0.28;
+		this.characterPanel.x = this.DESIGN_WIDTH * 0.12;
+		this.characterPanel.y = this.DESIGN_HEIGHT * 0.28;
 
 		// Menu — right of character panel
-		const menuX = width * 0.55;
-		let menuY = height * 0.26;
+		const menuX = this.DESIGN_WIDTH * 0.55;
+		let menuY = this.DESIGN_HEIGHT * 0.26;
 		for (const btn of this.menuButtons) {
 			btn.view.x = menuX;
 			btn.view.y = menuY;
 			menuY += 60;
 		}
 
-		this.statusText.x = width / 2 - this.statusText.width / 2;
-		this.statusText.y = height - 60;
+		this.statusText.x = this.DESIGN_WIDTH / 2 - this.statusText.width / 2;
+		this.statusText.y = this.DESIGN_HEIGHT - 60;
+
+		const scale = computeFitScale(
+			width,
+			height,
+			this.DESIGN_WIDTH,
+			this.DESIGN_HEIGHT,
+		);
+		this.content.scale.set(scale);
+		this.content.x = (width - this.DESIGN_WIDTH * scale) / 2;
+		this.content.y = (height - this.DESIGN_HEIGHT * scale) / 2;
 	}
 
 	// ---------- Character panel ----------
@@ -189,8 +206,7 @@ export class LobbyScene implements Scene {
 
 	private showComingSoon(feature: string): void {
 		this.statusText.text = `${feature} — Coming Soon`;
-		this.statusText.x =
-			this.game.app.screen.width / 2 - this.statusText.width / 2;
+		this.statusText.x = this.DESIGN_WIDTH / 2 - this.statusText.width / 2;
 	}
 
 	private onQuit(): void {

@@ -2,6 +2,7 @@ import { Container, Text } from "pixi.js";
 import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
 import { Button } from "@/ui/generics/Button";
+import { computeFitScale } from "@/math/fitScale";
 import { LocalCharacterRepo } from "@/core/entities/CharacterRepo";
 import type { CharacterData } from "@relic-hunter/shared";
 import { LobbyScene } from "./LobbyScene";
@@ -15,6 +16,7 @@ import { CharacterCreationScene } from "./CharacterCreationScene";
  */
 export class LoadGameScene implements Scene {
 	readonly view = new Container();
+	private content = new Container();
 
 	private readonly repo = new LocalCharacterRepo();
 	private title!: Text;
@@ -23,6 +25,9 @@ export class LoadGameScene implements Scene {
 	private deleteButtons: Button[] = [];
 	private backBtn!: Button;
 	private createBtn!: Button;
+
+	private readonly DESIGN_WIDTH = 700;
+	private readonly DESIGN_HEIGHT = 720;
 
 	constructor(private game: Game) {}
 
@@ -42,15 +47,16 @@ export class LoadGameScene implements Scene {
 	private buildUI(): void {
 		// buildUI can now be called more than once (delete triggers a
 		// rebuild) — clear everything first so children don't double up.
-		this.view.removeChildren();
+		this.content.removeChildren();
 		this.charButtons = [];
 		this.deleteButtons = [];
+		this.view.addChild(this.content);
 
 		this.title = new Text({
 			text: "Load Character",
 			style: { fill: 0xffffff, fontSize: 32, fontWeight: "bold" },
 		});
-		this.view.addChild(this.title);
+		this.content.addChild(this.title);
 
 		const characters = this.repo.loadAll();
 
@@ -58,7 +64,7 @@ export class LoadGameScene implements Scene {
 			text: characters.length === 0 ? "No saved hunters yet." : "",
 			style: { fill: 0xaaaaaa, fontSize: 18 },
 		});
-		this.view.addChild(this.emptyText);
+		this.content.addChild(this.emptyText);
 
 		for (const char of characters) {
 			const label = `${char.name}  ·  ${this.capitalize(char.characterClass)}  ·  HP ${char.stats.maxHp}`;
@@ -70,7 +76,7 @@ export class LoadGameScene implements Scene {
 				onClick: () => this.selectCharacter(char),
 			});
 			this.charButtons.push(btn);
-			this.view.addChild(btn.view);
+			this.content.addChild(btn.view);
 
 			const deleteBtn = new Button({
 				text: "✕",
@@ -80,7 +86,7 @@ export class LoadGameScene implements Scene {
 				onClick: () => this.deleteCharacter(char.id),
 			});
 			this.deleteButtons.push(deleteBtn);
-			this.view.addChild(deleteBtn.view);
+			this.content.addChild(deleteBtn.view);
 		}
 
 		this.createBtn = new Button({
@@ -94,7 +100,7 @@ export class LoadGameScene implements Scene {
 				);
 			},
 		});
-		this.view.addChild(this.createBtn.view);
+		this.content.addChild(this.createBtn.view);
 
 		this.backBtn = new Button({
 			text: "Back",
@@ -105,7 +111,7 @@ export class LoadGameScene implements Scene {
 				void this.game.sceneManager.changeScene(new MainMenuScene(this.game));
 			},
 		});
-		this.view.addChild(this.backBtn.view);
+		this.content.addChild(this.backBtn.view);
 	}
 
 	private selectCharacter(char: CharacterData): void {
@@ -120,26 +126,36 @@ export class LoadGameScene implements Scene {
 	}
 
 	private layout(width: number, height: number): void {
-		this.title.x = width / 2 - this.title.width / 2;
+		this.title.x = this.DESIGN_WIDTH / 2 - this.title.width / 2;
 		this.title.y = 50;
 
-		this.emptyText.x = width / 2 - this.emptyText.width / 2;
+		this.emptyText.x = this.DESIGN_WIDTH / 2 - this.emptyText.width / 2;
 		this.emptyText.y = 140;
 
 		let y = 140;
 		for (let i = 0; i < this.charButtons.length; i++) {
-			this.charButtons[i].view.x = width / 2 - 210;
+			this.charButtons[i].view.x = this.DESIGN_WIDTH / 2 - 210;
 			this.charButtons[i].view.y = y;
-			this.deleteButtons[i].view.x = width / 2 + 220;
+			this.deleteButtons[i].view.x = this.DESIGN_WIDTH / 2 + 220;
 			this.deleteButtons[i].view.y = y;
 			y += 60;
 		}
 
-		this.createBtn.view.x = width / 2 - 110;
-		this.createBtn.view.y = height - 120;
+		this.createBtn.view.x = this.DESIGN_WIDTH / 2 - 110;
+		this.createBtn.view.y = this.DESIGN_HEIGHT - 120;
 
-		this.backBtn.view.x = width / 2 - 70;
-		this.backBtn.view.y = height - 60;
+		this.backBtn.view.x = this.DESIGN_WIDTH / 2 - 70;
+		this.backBtn.view.y = this.DESIGN_HEIGHT - 60;
+
+		const scale = computeFitScale(
+			width,
+			height,
+			this.DESIGN_WIDTH,
+			this.DESIGN_HEIGHT,
+		);
+		this.content.scale.set(scale);
+		this.content.x = (width - this.DESIGN_WIDTH * scale) / 2;
+		this.content.y = (height - this.DESIGN_HEIGHT * scale) / 2;
 	}
 
 	private capitalize(s: string): string {

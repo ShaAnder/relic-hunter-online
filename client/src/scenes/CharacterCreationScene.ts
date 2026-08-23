@@ -2,6 +2,7 @@ import { Container, Graphics, Text } from "pixi.js";
 import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
 import { Button } from "@/ui/generics/Button";
+import { computeFitScale } from "@/math/fitScale";
 import {
 	type CharacterClass,
 	type StatAllocation,
@@ -80,8 +81,12 @@ const MODEL_COUNT = CLASSES.length;
  */
 export class CharacterCreationScene implements Scene {
 	readonly view = new Container();
+	private content = new Container();
 
 	private readonly repo = new LocalCharacterRepo();
+
+	private readonly DESIGN_WIDTH = 1000;
+	private readonly DESIGN_HEIGHT = 700;
 
 	// ---------- State ----------
 	private selectedClass: CharacterClass = "brawler";
@@ -118,8 +123,16 @@ export class CharacterCreationScene implements Scene {
 	private backBtn!: Button;
 	private nameInput: HTMLInputElement | null = null;
 
+	// Design-space position for the HTML name input, and the current
+	// scale/offset applied to `content` — nameInput lives outside Pixi's
+	// container tree entirely, so its screen position has to be computed
+	// by hand using these instead of inheriting a container transform.
+	private nameInputDesignX = 0;
+	private nameInputDesignY = 0;
+	private currentScale = 1;
+
 	constructor(private game: Game) {
-		this.view.addChild(this.modelContainer);
+		this.content.addChild(this.modelContainer);
 		this.modelContainer.addChild(this.modelGraphics);
 	}
 
@@ -143,8 +156,7 @@ export class CharacterCreationScene implements Scene {
 	// ---------- Construction ----------
 
 	private buildUI(): void {
-		const w = this.game.app.screen.width;
-		const h = this.game.app.screen.height;
+		this.view.addChild(this.content);
 
 		// Class/model arrows — now cycle class directly, moved further out
 		// to leave room for the name + flavor text stacked beneath the icon.
@@ -162,15 +174,15 @@ export class CharacterCreationScene implements Scene {
 			fontSize: 22,
 			onClick: () => this.cycleClass(1),
 		});
-		this.view.addChild(this.leftArrow.view);
-		this.view.addChild(this.rightArrow.view);
+		this.content.addChild(this.leftArrow.view);
+		this.content.addChild(this.rightArrow.view);
 
 		this.classNameText = new Text({
 			text: "",
 			style: { fill: 0xffffff, fontSize: 20, fontWeight: "bold" },
 		});
 		this.classNameText.anchor.set(0.5, 0);
-		this.view.addChild(this.classNameText);
+		this.content.addChild(this.classNameText);
 
 		this.classFlavorText = new Text({
 			text: "",
@@ -183,7 +195,7 @@ export class CharacterCreationScene implements Scene {
 			},
 		});
 		this.classFlavorText.anchor.set(0.5, 0);
-		this.view.addChild(this.classFlavorText);
+		this.content.addChild(this.classFlavorText);
 
 		// One Text per bullet line, not one Text with embedded newlines —
 		// more reliable than depending on Pixi's wordWrap to respect
@@ -201,7 +213,7 @@ export class CharacterCreationScene implements Scene {
 			});
 			line.anchor.set(0.5, 0);
 			this.classPurposeTexts.push(line);
-			this.view.addChild(line);
+			this.content.addChild(line);
 		}
 
 		// Points remaining
@@ -209,7 +221,7 @@ export class CharacterCreationScene implements Scene {
 			text: "",
 			style: { fill: 0xffffff, fontSize: 18, fontWeight: "bold" },
 		});
-		this.view.addChild(this.pointsRemainingText);
+		this.content.addChild(this.pointsRemainingText);
 
 		// Table headers — no gridlines, just aligned column labels
 		const headerLabels = ["Stat", "", "Value", "", "Total", "Next Cost"];
@@ -219,7 +231,7 @@ export class CharacterCreationScene implements Scene {
 				style: { fill: 0x888888, fontSize: 12, fontWeight: "bold" },
 			});
 			this.tableHeaders.push(t);
-			this.view.addChild(t);
+			this.content.addChild(t);
 		}
 
 		// Stat rows
@@ -263,12 +275,12 @@ export class CharacterCreationScene implements Scene {
 			});
 			nextCostText.anchor.set(0.5, 0);
 
-			this.view.addChild(label);
-			this.view.addChild(minus.view);
-			this.view.addChild(valueText);
-			this.view.addChild(plus.view);
-			this.view.addChild(totalText);
-			this.view.addChild(nextCostText);
+			this.content.addChild(label);
+			this.content.addChild(minus.view);
+			this.content.addChild(valueText);
+			this.content.addChild(plus.view);
+			this.content.addChild(totalText);
+			this.content.addChild(nextCostText);
 
 			this.statRows.push({
 				key,
@@ -291,7 +303,7 @@ export class CharacterCreationScene implements Scene {
 				void this.game.sceneManager.changeScene(new MainMenuScene(this.game));
 			},
 		});
-		this.view.addChild(this.backBtn.view);
+		this.content.addChild(this.backBtn.view);
 
 		// Confirm
 		this.confirmBtn = new Button({
@@ -303,19 +315,21 @@ export class CharacterCreationScene implements Scene {
 			activeColor: 0x43a047,
 			onClick: () => this.onConfirm(),
 		});
-		this.view.addChild(this.confirmBtn.view);
+		this.content.addChild(this.confirmBtn.view);
 
-		this.layout(w, h);
+		this.layout(this.game.app.screen.width, this.game.app.screen.height);
 	}
 
 	private layout(width: number, height: number): void {
 		// ===== RIGHT SIDE computed FIRST — the left side anchors to its =====
 		// ===== real Attack-row position, not an independent estimate.  =====
-		const panelX = width * 0.55;
-		let y = height * 0.18;
+		const panelX = this.DESIGN_WIDTH * 0.55;
+		let y = this.DESIGN_HEIGHT * 0.18;
 
 		// Name input is positioned separately via HTML overlay
 		y += 50;
+		this.nameInputDesignX = panelX;
+		this.nameInputDesignY = this.DESIGN_HEIGHT * 0.12;
 
 		this.pointsRemainingText.x = panelX;
 		this.pointsRemainingText.y = y;
@@ -372,13 +386,13 @@ export class CharacterCreationScene implements Scene {
 		this.confirmBtn.view.x = panelX;
 		this.confirmBtn.view.y = y + 24;
 
-		this.backBtn.view.x = 24;
-		this.backBtn.view.y = 24;
+		this.backBtn.view.x = panelX + 180;
+		this.backBtn.view.y = y + 28;
 
 		// ===== LEFT SIDE: silhouette + class name + flavor + purpose =====
 		// Icon is vertically anchored to the real Attack row's Y, not an
 		// estimated block-center — matches wherever the table actually is.
-		const leftCenterX = width * 0.26;
+		const leftCenterX = this.DESIGN_WIDTH * 0.26;
 		const PICKER_CONTAINER_HALF_WIDTH = 170;
 		const modelY = attackRowY;
 
@@ -400,6 +414,16 @@ export class CharacterCreationScene implements Scene {
 			line.x = leftCenterX;
 			line.y = modelY + 140 + i * 18;
 		});
+
+		this.currentScale = computeFitScale(
+			width,
+			height,
+			this.DESIGN_WIDTH,
+			this.DESIGN_HEIGHT,
+		);
+		this.content.scale.set(this.currentScale);
+		this.content.x = (width - this.DESIGN_WIDTH * this.currentScale) / 2;
+		this.content.y = (height - this.DESIGN_HEIGHT * this.currentScale) / 2;
 	}
 
 	// ---------- Model silhouettes ----------
@@ -561,14 +585,20 @@ export class CharacterCreationScene implements Scene {
 		this.positionNameInput();
 	}
 
+	/**
+	 * The input lives outside Pixi's container tree entirely, so it
+	 * doesn't inherit `content`'s scale automatically — its design-space
+	 * position has to be scaled and offset by hand to match wherever
+	 * the scaled canvas content actually landed.
+	 */
 	private positionNameInput(): void {
 		if (!this.nameInput) return;
 		const canvas = this.game.app.canvas;
 		const rect = canvas.getBoundingClientRect();
-		const panelX = this.game.app.screen.width * 0.55;
-		const y = this.game.app.screen.height * 0.12;
-		this.nameInput.style.left = `${rect.left + panelX}px`;
-		this.nameInput.style.top = `${rect.top + y}px`;
+		const scaledX = this.nameInputDesignX * this.currentScale + this.content.x;
+		const scaledY = this.nameInputDesignY * this.currentScale + this.content.y;
+		this.nameInput.style.left = `${rect.left + scaledX}px`;
+		this.nameInput.style.top = `${rect.top + scaledY}px`;
 	}
 
 	private destroyNameInput(): void {

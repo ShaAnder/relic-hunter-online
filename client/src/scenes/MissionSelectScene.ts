@@ -2,30 +2,33 @@ import { Container, Text } from "pixi.js";
 import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
 import { Button } from "@/ui/generics/Button";
+import { computeFitScale } from "@/math/fitScale";
 import { LobbyScene } from "./LobbyScene";
 import { LoadingOverlay } from "@/ui/overlay/LoadingOverlay";
-import type { MissionParams } from "@/core/game/GameSession";
 
 /**
- * Per-match config: map size only (enemy count fixed at 4 for this pass).
- * Start writes missionParams into the session and enters LoadingScene,
- * which generates the map/chests and does the pre-match reveal before
- * handing off to MapScene itself.
+ * Per-match config. Only one map exists right now — a single 35x35 test
+ * map — so this is currently just a confirmation screen rather than a
+ * real config picker. Start writes missionParams into the session and
+ * enters LoadingScene, which generates the map/chests and does the
+ * pre-match reveal before handing off to MapScene itself.
  */
 export class MissionSelectScene implements Scene {
 	readonly view = new Container();
+	private content = new Container();
 
 	private title!: Text;
-	private sizeButtons: Button[] = [];
+	private mapLabel!: Text;
 	private startBtn!: Button;
 	private backBtn!: Button;
-	private selectedSize: MissionParams["mapSize"] = "M";
+
+	private readonly DESIGN_WIDTH = 700;
+	private readonly DESIGN_HEIGHT = 460;
 
 	constructor(private game: Game) {}
 
 	onEnter(): void {
 		this.buildUI();
-		this.refreshSizeButtons();
 		this.layout(this.game.app.screen.width, this.game.app.screen.height);
 	}
 
@@ -38,27 +41,19 @@ export class MissionSelectScene implements Scene {
 	}
 
 	private buildUI(): void {
+		this.view.addChild(this.content);
+
 		this.title = new Text({
 			text: "Select Mission",
 			style: { fill: 0xffffff, fontSize: 32, fontWeight: "bold" },
 		});
-		this.view.addChild(this.title);
+		this.content.addChild(this.title);
 
-		const sizes: MissionParams["mapSize"][] = ["S", "M", "L"];
-		for (const size of sizes) {
-			const btn = new Button({
-				text: `Map ${size}`,
-				width: 120,
-				height: 48,
-				fontSize: 18,
-				onClick: () => {
-					this.selectedSize = size;
-					this.refreshSizeButtons();
-				},
-			});
-			this.sizeButtons.push(btn);
-			this.view.addChild(btn.view);
-		}
+		this.mapLabel = new Text({
+			text: "Test Map",
+			style: { fill: 0x88ccff, fontSize: 20 },
+		});
+		this.content.addChild(this.mapLabel);
 
 		this.startBtn = new Button({
 			text: "Start Mission",
@@ -69,7 +64,7 @@ export class MissionSelectScene implements Scene {
 			activeColor: 0x2e7d32,
 			onClick: () => this.onStart(),
 		});
-		this.view.addChild(this.startBtn.view);
+		this.content.addChild(this.startBtn.view);
 
 		this.backBtn = new Button({
 			text: "Back",
@@ -80,36 +75,35 @@ export class MissionSelectScene implements Scene {
 				void this.game.sceneManager.changeScene(new LobbyScene(this.game));
 			},
 		});
-		this.view.addChild(this.backBtn.view);
-	}
-
-	private refreshSizeButtons(): void {
-		const sizes: MissionParams["mapSize"][] = ["S", "M", "L"];
-		this.sizeButtons.forEach((btn, i) => {
-			btn.setActive(sizes[i] === this.selectedSize);
-		});
+		this.content.addChild(this.backBtn.view);
 	}
 
 	private onStart(): void {
-		this.game.session.missionParams = { mapSize: this.selectedSize };
+		this.game.session.missionParams = {};
 		void this.game.overlays.show(new LoadingOverlay(this.game));
 	}
 
 	private layout(width: number, height: number): void {
-		this.title.x = width / 2 - this.title.width / 2;
-		this.title.y = height * 0.22;
+		this.title.x = this.DESIGN_WIDTH / 2 - this.title.width / 2;
+		this.title.y = this.DESIGN_HEIGHT * 0.22;
 
-		const totalW = 3 * 120 + 2 * 20;
-		const startX = width / 2 - totalW / 2;
-		this.sizeButtons.forEach((btn, i) => {
-			btn.view.x = startX + i * 140;
-			btn.view.y = height * 0.4;
-		});
+		this.mapLabel.x = this.DESIGN_WIDTH / 2 - this.mapLabel.width / 2;
+		this.mapLabel.y = this.DESIGN_HEIGHT * 0.4;
 
-		this.startBtn.view.x = width / 2 - 100;
-		this.startBtn.view.y = height * 0.55;
+		this.startBtn.view.x = this.DESIGN_WIDTH / 2 - 100;
+		this.startBtn.view.y = this.DESIGN_HEIGHT * 0.55;
 
-		this.backBtn.view.x = width / 2 - 70;
-		this.backBtn.view.y = height * 0.7;
+		this.backBtn.view.x = this.DESIGN_WIDTH / 2 - 70;
+		this.backBtn.view.y = this.DESIGN_HEIGHT * 0.7;
+
+		const scale = computeFitScale(
+			width,
+			height,
+			this.DESIGN_WIDTH,
+			this.DESIGN_HEIGHT,
+		);
+		this.content.scale.set(scale);
+		this.content.x = (width - this.DESIGN_WIDTH * scale) / 2;
+		this.content.y = (height - this.DESIGN_HEIGHT * scale) / 2;
 	}
 }

@@ -12,19 +12,23 @@ const CARD_STEP = CARD_WIDTH * 0.75; // 25% overlap between adjacent cards
 const HIGHLIGHT_LIFT = 22;
 const CARET_GAP = 14;
 
-// Hide/reveal — tucked off-screen by default; hover OR tap toggles it.
-const REVEALED_Y_OFFSET = 20;
-const HIDDEN_Y_OFFSET = CARD_HEIGHT - 25;
-const HOVER_EASE_MS = 180;
+// Accordion — cards sit folded behind the holder (all at x=0) until
+// held or in selection mode, then splay out to the right. splayProgress
+// eases 0→1, multiplying each card's normal cascade offset, rather than
+// the old vertical slide-reveal.
+const SPLAY_EASE_MS = 160;
+const HOLDER_RADIUS = 26;
 
 export const SKIP_CARD_ID = "__skip__";
 
 /**
- * Cascaded hand, bottom-right, tucked off-screen until hovered or
- * tapped. Confirming a card (click, Enter, or dragging it into the
- * independent PlayZone) hands the card's visual off to PlayZone for the
- * grow-slam-vanish sequence. "No Card" now lives as a button on PlayZone
- * itself, not a draggable card in this row.
+ * Cascaded hand, folded behind a compact holder icon by default — press
+ * and hold the holder (or hover it, on desktop) to splay the hand out
+ * to the right; release to fold it back. Selection mode always keeps
+ * it fully splayed regardless of hold state. Confirming a card (click,
+ * Enter, or dragging it into the independent PlayZone) hands the card's
+ * visual off to PlayZone for the grow-slam-vanish sequence. "No Card"
+ * now lives as a button on PlayZone itself, not a draggable card here.
  * @param stage - screen-spanning interactive container, needed so a drag
  *   keeps tracking the pointer once it moves off the card itself
  * @param playZone - the independent entity plays get sent to; shown/hidden
@@ -36,7 +40,7 @@ export const SKIP_CARD_ID = "__skip__";
 export class Hand {
 	readonly view = new Container();
 	private fanContainer = new Container();
-	private hitArea = new Graphics(); // invisible, catches tap-to-toggle outside selection mode
+	private holder = new Graphics();
 
 	private cards: Card[] = [];
 	private onCardConfirmed?: (card: CardData) => void;
@@ -46,8 +50,8 @@ export class Hand {
 	private selectableFilter: (data: CardData) => boolean = () => true;
 
 	private isHovered = false;
-	private forceRevealed = false;
-	private manuallyToggled = false;
+	private isHeld = false;
+	private splayProgress = 0;
 
 	private caret = new Container();
 	private caretElapsedMs = 0;
@@ -66,12 +70,9 @@ export class Hand {
 		this.onCardConfirmed = onCardConfirmed;
 
 		this.view.addChild(this.fanContainer);
-		this.fanContainer.y = HIDDEN_Y_OFFSET;
 
-		this.hitArea.eventMode = "static";
-		this.hitArea.cursor = "pointer";
-		this.hitArea.on("pointerdown", () => this.handleHitAreaTap());
-		this.fanContainer.addChild(this.hitArea);
+		this.buildHolder();
+		this.view.addChild(this.holder);
 
 		this.buildCaret();
 		this.caret.visible = false;
@@ -84,7 +85,7 @@ export class Hand {
 		return this.selecting;
 	}
 
-	/** Called from the scene's own mousemove handler — proximity to the hand's corner. */
+	/** Called from the scene's own mousemove handler — proximity to the holder. Desktop convenience only; press-and-hold is the primary, touch-compatible trigger. */
 	setHovered(isHovered: boolean): void {
 		this.isHovered = isHovered;
 	}
@@ -104,14 +105,12 @@ export class Hand {
 			card.view.on("pointerdown", (e) => this.handlePointerDownCard(card, e));
 		});
 
-		this.redrawHitArea();
 		this.layoutCards();
 	}
 
 	enterSelectionMode(filter: (data: CardData) => boolean): void {
 		this.selectableFilter = filter;
 		this.selecting = true;
-		this.forceRevealed = true;
 		this.resolved = false;
 
 		this.cards.forEach((card) => {
@@ -130,7 +129,6 @@ export class Hand {
 
 	exitSelectionMode(): void {
 		this.selecting = false;
-		this.forceRevealed = false;
 		this.highlightedIndex = -1;
 		this.caret.visible = false;
 		this.cards.forEach((card) => {
@@ -169,12 +167,11 @@ export class Hand {
 	update(deltaTime: number): void {
 		const deltaMs = (deltaTime / 60) * 1000;
 
-		const targetY =
-			this.isHovered || this.forceRevealed || this.manuallyToggled
-				? REVEALED_Y_OFFSET
-				: HIDDEN_Y_OFFSET;
-		const easeT = Math.min(1, deltaMs / HOVER_EASE_MS);
-		this.fanContainer.y += (targetY - this.fanContainer.y) * easeT;
+		const splayTarget = this.isHovered || this.isHeld || this.selecting ? 1 : 0;
+		const easeT = Math.min(1, deltaMs / SPLAY_EASE_MS);
+		this.splayProgress += (splayTarget - this.splayProgress) * easeT;
+
+		this.layoutCards();
 
 		if (this.caret.visible) {
 			this.caretElapsedMs += deltaMs;
@@ -184,13 +181,12 @@ export class Hand {
 		}
 	}
 
-	/** Bottom-right of the screen. */
+	/** Bottom-left of the screen — holder sits at a fixed spot, hand splays rightward from it. */
 	resize(screenWidth: number, screenHeight: number): void {
-		// Pivot far enough right that the leftmost card still has a visible gap
-		// from the screen edge (and from the bottom-left UI cluster).
-		this.view.x = 100;
-		this.view.y = screenHeight;
 		void screenWidth;
+		this.view.x = 40;
+		this.view.y = screenHeight - 40;
+		this.fanContainer.x = HOLDER_RADIUS + 16;
 		this.layoutCards();
 	}
 
@@ -200,10 +196,30 @@ export class Hand {
 
 	// ---------- private ----------
 
-	/** Tap-to-toggle — only outside selection mode, so it never fights with an active play decision. */
-	private handleHitAreaTap(): void {
+	/** Small, always-visible holder — press and hold to splay the hand, release to fold it back. Disabled during selection mode, where the hand is already forced open. */
+	private buildHolder(): void {
+		this.holder.circle(0, 0, HOLDER_RADIUS);
+		this.holder.fill(0x2a2a2a);
+		this.holder.stroke({ width: 2, color: 0x666666 });
+		this.holder.moveTo(-9, 4);
+		this.holder.lineTo(0, -8);
+		this.holder.lineTo(9, 4);
+		this.holder.stroke({ width: 2, color: 0xcccccc });
+
+		this.holder.eventMode = "static";
+		this.holder.cursor = "pointer";
+		this.holder.on("pointerdown", () => this.handleHolderDown());
+		this.holder.on("pointerup", () => this.handleHolderUp());
+		this.holder.on("pointerupoutside", () => this.handleHolderUp());
+	}
+
+	private handleHolderDown(): void {
 		if (this.selecting) return;
-		this.manuallyToggled = !this.manuallyToggled;
+		this.isHeld = true;
+	}
+
+	private handleHolderUp(): void {
+		this.isHeld = false;
 	}
 
 	private isSelectable(card: Card): boolean {
@@ -319,29 +335,20 @@ export class Hand {
 		this.layoutCards();
 	}
 
-	/** Cascaded layout — each card offset by CARD_STEP, no rotation. Highlighted card lifts straight up. */
+	/** Cascaded layout — each card's normal offset scaled by splayProgress, so 0 = folded flat behind the holder, 1 = fully splayed. Highlighted card still lifts straight up on top of that. */
 	private layoutCards(): void {
 		this.cards.forEach((card, i) => {
 			if (card === this.draggingCard) return;
 
 			const isHighlighted = i === this.highlightedIndex && this.selecting;
 			card.view.rotation = 0;
-			card.view.x = i * CARD_STEP;
+			card.view.x = i * CARD_STEP * this.splayProgress;
 			card.view.y = isHighlighted ? -HIGHLIGHT_LIFT : 0;
-			card.view.alpha = 1;
+			card.view.alpha = this.splayProgress;
 			card.view.scale.set(1);
 		});
 
 		if (this.selecting) this.positionCaret(0);
-	}
-
-	/** Invisible rect covering the cascaded row's rough footprint, for tap-to-toggle. */
-	private redrawHitArea(): void {
-		this.hitArea.clear();
-		const n = Math.max(1, this.cards.length);
-		const width = CARD_WIDTH + (n - 1) * CARD_STEP;
-		this.hitArea.rect(0, -CARD_HEIGHT, width, CARD_HEIGHT);
-		this.hitArea.fill({ color: 0x000000, alpha: 0.001 }); // invisible but still hit-testable
 	}
 
 	private buildCaret(): void {

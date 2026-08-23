@@ -3,6 +3,7 @@ import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
 import type { HunterScoreEntry } from "@/core/game/GameSession";
 import { Button } from "@/ui/generics/Button";
+import { computeFitScale } from "@/math/fitScale";
 import { LobbyScene } from "./LobbyScene";
 
 /** One row of the scoreboard — a label plus how to pull that metric's number out of a hunter's score. */
@@ -34,10 +35,14 @@ const ICON_RADIUS = 24;
  */
 export class MatchResultScene implements Scene {
 	readonly view = new Container();
+	private content = new Container();
 
 	private headline!: Text;
 	private grid = new Container();
 	private returnBtn!: Button;
+
+	private readonly DESIGN_WIDTH = 900;
+	private readonly DESIGN_HEIGHT = 600;
 
 	constructor(private game: Game) {}
 
@@ -55,6 +60,8 @@ export class MatchResultScene implements Scene {
 	}
 
 	private buildUI(): void {
+		this.view.addChild(this.content);
+
 		const result = this.game.session.matchResult;
 
 		this.headline = new Text({
@@ -65,9 +72,9 @@ export class MatchResultScene implements Scene {
 				fontWeight: "bold",
 			},
 		});
-		this.view.addChild(this.headline);
+		this.content.addChild(this.headline);
 
-		this.view.addChild(this.grid);
+		this.content.addChild(this.grid);
 		if (result && result.hunterScores.length > 0) {
 			this.buildGrid(result.hunterScores);
 		} else {
@@ -87,7 +94,7 @@ export class MatchResultScene implements Scene {
 			activeColor: 0x2e7d32,
 			onClick: () => this.onReturnToLobby(),
 		});
-		this.view.addChild(this.returnBtn.view);
+		this.content.addChild(this.returnBtn.view);
 	}
 
 	private buildGrid(hunters: HunterScoreEntry[]): void {
@@ -165,13 +172,23 @@ export class MatchResultScene implements Scene {
 	}
 
 	private layout(width: number, height: number): void {
-		this.headline.x = width / 2 - this.headline.width / 2;
-		this.headline.y = height * 0.08;
+		this.headline.x = this.DESIGN_WIDTH / 2 - this.headline.width / 2;
+		this.headline.y = this.DESIGN_HEIGHT * 0.08;
 
-		this.grid.x = width / 2 - this.grid.width / 2;
-		this.grid.y = height * 0.2;
+		this.grid.x = this.DESIGN_WIDTH / 2 - this.grid.width / 2;
+		this.grid.y = this.DESIGN_HEIGHT * 0.2;
 
-		this.returnBtn.view.x = width / 2 - 110;
-		this.returnBtn.view.y = height * 0.88;
+		this.returnBtn.view.x = this.DESIGN_WIDTH / 2 - 110;
+		this.returnBtn.view.y = this.DESIGN_HEIGHT * 0.88;
+
+		const scale = computeFitScale(
+			width,
+			height,
+			this.DESIGN_WIDTH,
+			this.DESIGN_HEIGHT,
+		);
+		this.content.scale.set(scale);
+		this.content.x = (width - this.DESIGN_WIDTH * scale) / 2;
+		this.content.y = (height - this.DESIGN_HEIGHT * scale) / 2;
 	}
 }

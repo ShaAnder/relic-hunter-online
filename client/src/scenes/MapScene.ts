@@ -21,7 +21,7 @@ import { MoveController } from "@/systems/MoveController";
 import { TurnManager } from "@/systems/TurnManager";
 import { Hand } from "@/ui/Hand";
 import { CharacterPanel } from "@/ui/CharacterPanel";
-import { HunterScoreEntry, MAP_SIZE_DIMENSIONS } from "@/core/game/GameSession";
+import { HunterScoreEntry, TEST_MAP_DIMENSIONS } from "@/core/game/GameSession";
 import { MatchResultScene } from "./MatchResultScene";
 import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
 import { BagButton } from "@/ui/buttons/BagButton";
@@ -201,8 +201,7 @@ export class MapScene implements Scene {
 	constructor(private game: Game) {
 		// Dimensions + seed come from the mission/LoadingScene setup. Falls
 		// back to sane defaults for direct MapScene boots during dev.
-		const mapSize = this.game.session.missionParams?.mapSize ?? "M";
-		const dims = MAP_SIZE_DIMENSIONS[mapSize];
+		const dims = TEST_MAP_DIMENSIONS;
 		this.mapWidth = dims.width;
 		this.mapHeight = dims.height;
 		this.roomCount = Math.floor(
