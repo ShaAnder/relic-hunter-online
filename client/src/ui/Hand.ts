@@ -17,7 +17,7 @@ const CARET_GAP = 14;
 // eases 0→1, multiplying each card's normal cascade offset, rather than
 // the old vertical slide-reveal.
 const SPLAY_EASE_MS = 160;
-const HOLDER_WIDTH = CARD_WIDTH * 0.7;
+const HOLDER_WIDTH = CARD_WIDTH;
 
 export const SKIP_CARD_ID = "__skip__";
 
@@ -182,7 +182,7 @@ export class Hand {
 		void screenWidth;
 		this.view.x = 40;
 		this.view.y = screenHeight - 40;
-		this.fanContainer.x = HOLDER_WIDTH / 2 + 16;
+		this.fanContainer.x = HOLDER_WIDTH / 2 + 50;
 		this.layoutCards();
 	}
 
@@ -198,8 +198,9 @@ export class Hand {
 	 * not just the holder itself, so a pointer that drifts off it mid-press
 	 * still correctly closes the hand. */
 	private buildHolder(): void {
-		const w = CARD_WIDTH * 0.7;
-		const h = CARD_HEIGHT * 0.7;
+		const w = CARD_WIDTH;
+		const h = CARD_HEIGHT;
+
 		this.holder.roundRect(-w / 2, -h, w, h, 6);
 		this.holder.fill(0x2a2a2a);
 		this.holder.stroke({ width: 2, color: 0x666666 });

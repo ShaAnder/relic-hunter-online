@@ -1,7 +1,6 @@
 import { Container, Graphics, Text, Ticker } from "pixi.js";
 import type { Overlay } from "@/core/overlays/Overlay";
 import type { Game } from "@/core/game/Game";
-import { Button } from "@/ui/generics/Button";
 import {
 	TEST_MAP_DIMENSIONS,
 	type TurnOrderEntry,
@@ -26,13 +25,16 @@ const ROOM_DENSITY = 1 / 50;
 // finishes. Easily tunable, single source of truth.
 const LOADING_DURATION_MS = 4000;
 
+// How long the summary screen (seed, target, turn order) stays up
+// before automatically fading into the game.
+const SUMMARY_LINGER_MS = 2500;
 const FADE_MS = 500;
 
 /**
  * Loading screen — a progress bar with step-labeled text (seed, target
  * item, turn order, as each is determined), then a centered summary
- * screen with a real "Begin Mission" button the player has to press —
- * fading into MapScene only once they do. No camera pan/orbit cinematic.
+ * screen that lingers briefly before automatically fading into
+ * MapScene. No camera pan/orbit cinematic, no button press required.
  * Places the map + chests once, stores positions on GameSession.
  */
 export class LoadingOverlay implements Overlay {
@@ -50,7 +52,6 @@ export class LoadingOverlay implements Overlay {
 
 	private summaryRoot = new Container();
 	private summaryText!: Text;
-	private beginBtn!: Button;
 
 	private placements: PlacedChestRecord[] = [];
 	private spawnCoord: GridCoord = { x: 0, y: 0 };
@@ -116,6 +117,12 @@ export class LoadingOverlay implements Overlay {
 			this.game.app.screen.width,
 			this.game.app.screen.height,
 		);
+
+		await this.delay(SUMMARY_LINGER_MS);
+
+		await this.fadeCover(0, 1, FADE_MS);
+		await this.game.sceneManager.changeScene(new MapScene(this.game));
+		this.game.overlays.hide();
 	}
 
 	onHide(): void {}
@@ -261,19 +268,8 @@ export class LoadingOverlay implements Overlay {
 				align: "center",
 			},
 		});
-		this.summaryText.anchor.set(0.5, 0);
+		this.summaryText.anchor.set(0.5, 0.5);
 		this.summaryRoot.addChild(this.summaryText);
-
-		this.beginBtn = new Button({
-			text: "Begin Mission",
-			width: 220,
-			height: 52,
-			fontSize: 18,
-			bgColor: 0x1b5e20,
-			activeColor: 0x2e7d32,
-			onClick: () => void this.onBeginMission(),
-		});
-		this.summaryRoot.addChild(this.beginBtn.view);
 
 		this.summaryRoot.visible = false;
 	}
@@ -294,16 +290,7 @@ export class LoadingOverlay implements Overlay {
 
 	private layoutSummaryUI(width: number, height: number): void {
 		this.summaryText.x = width / 2;
-		this.summaryText.y = height / 2 - 120;
-
-		this.beginBtn.view.x = width / 2 - 110;
-		this.beginBtn.view.y = height / 2 + 80;
-	}
-
-	private async onBeginMission(): Promise<void> {
-		await this.fadeCover(0, 1, FADE_MS);
-		await this.game.sceneManager.changeScene(new MapScene(this.game));
-		this.game.overlays.hide();
+		this.summaryText.y = height / 2;
 	}
 
 	// ---------- Cover / backdrop ----------
