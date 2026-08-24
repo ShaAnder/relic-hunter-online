@@ -174,6 +174,19 @@ export class CardDrawQueue {
 		});
 	}
 
+	/**
+	 * Global position of the front (top, currently tappable) card in the
+	 * stack — null if nothing is currently presenting. Used by tutorial
+	 * UI pointers to point at "the card you need to collect", distinct
+	 * from getCardScreenPosition on Hand, which only knows about cards
+	 * already actually in the hand.
+	 */
+	getFrontCardScreenPosition(): { x: number; y: number } | null {
+		if (this.stack.length === 0) return null;
+		const front = this.stack[this.stack.length - 1];
+		return front.card.view.getGlobalPosition();
+	}
+
 	private async flyFront(entry: StackEntry): Promise<void> {
 		if (this.flying) return;
 		const idx = this.stack.indexOf(entry);

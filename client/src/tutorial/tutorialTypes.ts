@@ -4,7 +4,7 @@ import type {
 	GridCoord,
 	TileType,
 } from "@relic-hunter/shared";
-import type { ButtonAction } from "@/ui/buttons/ActionMenu";
+import type { ButtonAction, RowKey } from "@/ui/buttons/ActionMenu";
 import type { DialogueLine } from "./dialogue";
 
 /**
@@ -22,6 +22,9 @@ export type TutorialEvent =
 			finalCoord: GridCoord;
 	  }
 	| { type: "cardPlayed"; cardColor: CardColor; actionType: string }
+	| { type: "cardCollected" }
+	| { type: "skipChosen" }
+	| { type: "cardChosen" }
 	| { type: "actionMenuOpened" }
 	| { type: "turnEnded" }
 	| { type: "combatStarted"; opponentType: "hunter" | "monster" }
@@ -47,10 +50,28 @@ export type TutorialEvent =
  */
 export interface TutorialObjective {
 	id: string;
-	/** On-screen hint shown for as long as this objective is active. */
 	prompt: string;
 	isMet: (event: TutorialEvent) => boolean;
 }
+
+/**
+ * A screen-space UI element a tutorial segment can point a bobbing
+ * arrow at — distinct from targetTile (a fixed map coordinate), since
+ * these positions can move frame to frame (a hand card shifting as it
+ * splays, an ActionMenu submenu toggling). Each variant maps to one
+ * small query method already added to the relevant component. `side`
+ * is required, not defaulted — the right side genuinely depends on
+ * context (skipButton needs "down" so it doesn't collide with
+ * PlayZone above it; actionButton needs "left" so it doesn't collide
+ * with neighboring stacked rows), not something safe to guess per-kind.
+ */
+export type TutorialUiPointerTarget = (
+	| { kind: "actionButton"; key: RowKey }
+	| { kind: "handCard"; cardId?: string }
+	| { kind: "playZone" }
+	| { kind: "skipButton" }
+	| { kind: "cardDrawStack" }
+) & { side: "up" | "down" | "left" | "right" };
 
 /**
  * One beat of a tutorial: narrator sets up the moment, player does the
@@ -63,8 +84,10 @@ export interface TutorialSegment {
 	intro: DialogueLine[];
 	/** If set, handed to the player's hand (via MapScene.giveCard) right after intro plays, before the objective becomes active. */
 	giveCard?: CardData;
-	/** If set, MapScene highlights this tile (glow + bobbing arrow) for as long as this segment's objective is active — a generic "move here" pointer, not specific to this one tutorial. */
+	/** If set, MapScene highlights this tile (glow + bobbing arrow) for as long as this segment's objective is active. */
 	targetTile?: GridCoord;
+	/** If set, a bobbing arrow points at this UI element for as long as this segment's objective is active — tracked live every frame. */
+	uiPointer?: TutorialUiPointerTarget;
 	objective: TutorialObjective | null;
 	confirm: DialogueLine[];
 }
@@ -75,7 +98,6 @@ export interface DebugMapSpec {
 	height: number;
 	seed: number;
 	roomCount?: number;
-	/** If set, the map starts as an all-Floor grid at width×height and each of these gets applied via Grid's own setTileType — a hand-authored layout, not procedural generation. */
 	tileOverrides?: { coord: GridCoord; type: TileType }[];
 }
 
@@ -92,8 +114,7 @@ export interface TutorialScript {
 	title: string;
 	debugMap: DebugMapSpec;
 	staticActors?: StaticActorSpec[];
-	/** Overrides the test character's base movement stat for this
-	 * tutorial specifically — doesn't touch the real game's spawn defaults. */
+	/** Overrides the test character's base movement stat for this tutorial specifically — doesn't touch the real game's spawn defaults. */
 	playerMovement?: number;
 	segments: TutorialSegment[];
 }

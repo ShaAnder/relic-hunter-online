@@ -379,6 +379,16 @@ export class PlayZone {
 			requestAnimationFrame(frame);
 		});
 	}
+
+	/** Global center of the zone itself — used by tutorial UI pointers. */
+	getZoneScreenPosition(): { x: number; y: number } {
+		return this.view.getGlobalPosition();
+	}
+
+	/** Global position of the "No Card" / skip button — used by tutorial UI pointers. */
+	getSkipButtonScreenPosition(): { x: number; y: number } {
+		return this.noCardBtn.getGlobalPosition();
+	}
 }
 
 function easeOutCubic(t: number): number {

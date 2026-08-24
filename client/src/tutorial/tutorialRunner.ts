@@ -60,11 +60,16 @@ export class TutorialRunner {
 				this.mapScene.showTutorialTarget(segment.targetTile);
 			}
 
+			if (segment.uiPointer) {
+				this.mapScene.showUiPointer(segment.uiPointer);
+			}
+
 			if (segment.objective) {
 				await this.waitForObjective(segment.objective);
 			}
 
 			this.mapScene.hideTutorialTarget();
+			this.mapScene.hideUiPointer();
 
 			await this.playDialogue(segment.confirm);
 		}

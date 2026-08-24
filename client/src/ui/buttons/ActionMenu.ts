@@ -11,7 +11,7 @@ export type ButtonAction =
 	| "endTurn"
 	| null;
 
-type RowKey = ButtonAction | "actions";
+export type RowKey = ButtonAction | "actions";
 
 interface Row {
 	key: RowKey;
@@ -188,5 +188,13 @@ export class ActionMenu {
 			screenY >= b.y &&
 			screenY <= b.y + b.height
 		);
+	}
+
+	/** Global center of a specific button, or null if it doesn't exist or is currently hidden (e.g. a submenu row while the submenu is closed) — used by tutorial UI pointers. */
+	getButtonScreenPosition(key: RowKey): { x: number; y: number } | null {
+		const row = [...this.mainRows, ...this.subRows].find((r) => r.key === key);
+		if (!row || !row.button.view.visible) return null;
+		const b = row.button.view.getBounds();
+		return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 	}
 }

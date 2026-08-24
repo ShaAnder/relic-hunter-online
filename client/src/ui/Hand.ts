@@ -272,6 +272,15 @@ export class Hand {
 		return this.cards;
 	}
 
+	/** Global position of a specific card by id, or the first card if no id given — null if the hand is empty or no match. Used by tutorial UI pointers. */
+	getCardScreenPosition(cardId?: string): { x: number; y: number } | null {
+		const card = cardId
+			? this.cards.find((c) => c.getData().id === cardId)
+			: this.cards[0];
+		if (!card) return null;
+		return card.view.getGlobalPosition();
+	}
+
 	// ---------- construction ----------
 
 	/**

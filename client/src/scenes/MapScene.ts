@@ -23,7 +23,10 @@ import { TurnManager } from "@/systems/TurnManager";
 import { Hand } from "@/ui/Hand";
 import { CharacterPanel } from "@/ui/CharacterPanel";
 import { HunterScoreEntry, TEST_MAP_DIMENSIONS } from "@/core/game/GameSession";
-import type { TutorialConfig } from "@/tutorial/tutorialTypes";
+import type {
+	TutorialConfig,
+	TutorialUiPointerTarget,
+} from "@/tutorial/tutorialTypes";
 import { MatchResultScene } from "./MatchResultScene";
 import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
 import { BagButton } from "@/ui/buttons/BagButton";
@@ -161,6 +164,10 @@ export class MapScene implements Scene {
 	private tutorialTargetMarker = new Container();
 	private tutorialTargetElapsedMs = 0;
 	private staticActorCoords: RH.GridCoord[] = [];
+
+	private uiPointerMarker = new Container();
+	private uiPointerElapsedMs = 0;
+	private activeUiPointerTarget: TutorialUiPointerTarget | null = null;
 
 	private readonly TILE_COLORS: Record<RH.TileType, number> = {
 		[RH.TileType.Floor]: 0x3a3a3a,
@@ -327,14 +334,16 @@ export class MapScene implements Scene {
 		this.cardDrawQueue = new CardDrawQueue({
 			layer: this.drawLayer,
 			getHandTarget: () => {
-				// layer is centred on screen — hand is in view space
-				return {
-					x: this.hand.view.x - this.drawLayer.x,
-					y: this.hand.view.y - this.drawLayer.y,
-				};
+				// toLocal correctly accounts for drawLayer's own scale — a
+				// plain position subtraction here only worked while drawLayer
+				// sat at scale 1; now that it's genuinely scaled to match the
+				// rest of the UI, the conversion needs to divide by that scale
+				// too, which toLocal does for us.
+				return this.drawLayer.toLocal(this.hand.view.getGlobalPosition());
 			},
 			onCollected: (card) => {
 				this.localUnit.state.hand.push(card);
+				this.tutorialConfig?.onTutorialEvent({ type: "cardCollected" });
 				this.syncUI();
 			},
 		});
@@ -379,6 +388,8 @@ export class MapScene implements Scene {
 		this.bossAlertText.anchor.set(0.5);
 		this.bossAlertText.visible = false;
 		this.view.addChild(this.bossAlertText);
+
+		this.view.addChild(this.uiPointerMarker);
 	}
 
 	/** Render the map, center the camera, and wire up input. */
@@ -516,6 +527,52 @@ export class MapScene implements Scene {
 				0.6 + Math.abs(Math.sin(t * 0.004)) * 0.4;
 			const arrow = this.tutorialTargetMarker.children[1];
 			if (arrow) arrow.y = -50 - Math.abs(Math.sin(t * 0.005)) * 8;
+		}
+
+		if (this.activeUiPointerTarget) {
+			const pos = this.resolveUiPointerPosition(this.activeUiPointerTarget);
+			if (pos) {
+				this.uiPointerElapsedMs += (deltaTime / 60) * 1000;
+				const t = this.uiPointerElapsedMs;
+				const bob = Math.abs(Math.sin(t * 0.005)) * 8;
+				// actionButton (the only left/right consumer) is 130px
+				// wide — 65px half-width — so a flat 40px offset landed
+				// the arrow inside the button's own bounds. Vertical
+				// targets (cards, skipButton, PlayZone) are all smaller,
+				// 40px clears them fine.
+				const isHorizontal =
+					this.activeUiPointerTarget.side === "left" ||
+					this.activeUiPointerTarget.side === "right";
+				const offset = (isHorizontal ? 85 : 40) + bob;
+
+				this.uiPointerMarker.visible = true;
+				this.uiPointerMarker.alpha = 0.6 + Math.abs(Math.sin(t * 0.004)) * 0.4;
+
+				switch (this.activeUiPointerTarget.side) {
+					case "up":
+						this.uiPointerMarker.x = pos.x;
+						this.uiPointerMarker.y = pos.y - offset;
+						break;
+					case "down":
+						this.uiPointerMarker.x = pos.x;
+						this.uiPointerMarker.y = pos.y + offset;
+						break;
+					case "left":
+						this.uiPointerMarker.x = pos.x - offset;
+						this.uiPointerMarker.y = pos.y;
+						break;
+					case "right":
+						this.uiPointerMarker.x = pos.x + offset;
+						this.uiPointerMarker.y = pos.y;
+						break;
+				}
+			} else {
+				// Target genuinely doesn't exist right now (e.g. pointing
+				// at a submenu row while the submenu is closed, or the
+				// card-draw stack once it's already been collected) —
+				// hide rather than leave a stale arrow floating in place.
+				this.uiPointerMarker.visible = false;
+			}
 		}
 
 		this.fpsAccumulator += deltaTime;
@@ -691,6 +748,7 @@ export class MapScene implements Scene {
 
 		this.drawLayer.x = w / 2;
 		this.drawLayer.y = h * 0.42;
+		this.drawLayer.scale.set(s);
 	}
 
 	/** Flashing red alert, centered on screen, for durationMs. Resolves once it's done and hidden again. */
@@ -747,6 +805,7 @@ export class MapScene implements Scene {
 		if (!tm.canMove) return;
 
 		this.hand.enterSelectionMode((data) => data.actionType !== "attack");
+		this.tutorialConfig?.onTutorialEvent({ type: "actionMenuOpened" });
 		this.buttonBar.setMoveActive(true);
 		this.buttonBar.closeMenu();
 	}
@@ -2494,6 +2553,68 @@ export class MapScene implements Scene {
 		this.tutorialTargetMarker.visible = false;
 	}
 
+	/**
+	 * Points a bobbing arrow at a screen-space UI element — a specific
+	 * ActionMenu button, a hand card, the card-draw stack, the
+	 * PlayZone, or its skip button. `side` picks which direction the
+	 * arrow sits and points from, chosen per-call to avoid overlapping
+	 * whatever neighboring UI actually surrounds that target (e.g.
+	 * "down" for the skip button so the arrow doesn't collide with
+	 * PlayZone sitting above it). Unlike showTutorialTarget (a fixed
+	 * map coordinate), this target's position is re-queried every
+	 * frame in update(), since the actual screen position of a hand
+	 * card or menu row can genuinely move.
+	 */
+	showUiPointer(target: TutorialUiPointerTarget): void {
+		this.activeUiPointerTarget = target;
+		this.uiPointerElapsedMs = 0;
+
+		this.uiPointerMarker.removeChildren();
+		const arrow = new Graphics();
+		arrow.poly([0, 0, 10, -16, -10, -16]);
+		arrow.fill(0xffd700);
+
+		switch (target.side) {
+			case "up":
+				arrow.rotation = 0;
+				break;
+			case "down":
+				arrow.rotation = Math.PI;
+				break;
+			case "left":
+				arrow.rotation = -Math.PI / 2;
+				break;
+			case "right":
+				arrow.rotation = Math.PI / 2;
+				break;
+		}
+
+		this.uiPointerMarker.addChild(arrow);
+	}
+
+	hideUiPointer(): void {
+		this.activeUiPointerTarget = null;
+		this.uiPointerMarker.visible = false;
+	}
+
+	/** Dispatches to whichever component actually owns the requested target's live screen position. Returns null if that element doesn't currently exist rather than throwing. */
+	private resolveUiPointerPosition(
+		target: TutorialUiPointerTarget,
+	): { x: number; y: number } | null {
+		switch (target.kind) {
+			case "actionButton":
+				return this.buttonBar.getButtonScreenPosition(target.key);
+			case "handCard":
+				return this.hand.getCardScreenPosition(target.cardId);
+			case "cardDrawStack":
+				return this.cardDrawQueue.getFrontCardScreenPosition();
+			case "playZone":
+				return this.playZone.getZoneScreenPosition();
+			case "skipButton":
+				return this.playZone.getSkipButtonScreenPosition();
+		}
+	}
+
 	private syncUI(): void {
 		if (!this.buttonBar || this.units.length === 0) return;
 		const local = this.localUnit;
@@ -2532,6 +2653,9 @@ export class MapScene implements Scene {
 		const cardType = card.id === "__skip__" ? "none" : card.color;
 		const numericValue = typeof card.value === "number" ? card.value : 0;
 		this.pendingMoveUsedCard = cardType !== "none";
+		this.tutorialConfig?.onTutorialEvent({
+			type: cardType === "none" ? "skipChosen" : "cardChosen",
+		});
 
 		if (!local.turnManager.beginMovement(cardType, numericValue)) {
 			return;
