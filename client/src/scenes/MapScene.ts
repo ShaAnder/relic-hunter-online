@@ -23,6 +23,7 @@ import { TurnManager } from "@/systems/TurnManager";
 import { Hand } from "@/ui/Hand";
 import { CharacterPanel } from "@/ui/CharacterPanel";
 import { HunterScoreEntry, TEST_MAP_DIMENSIONS } from "@/core/game/GameSession";
+import type { TutorialConfig } from "@/tutorial/tutorialTypes";
 import { MatchResultScene } from "./MatchResultScene";
 import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
 import { BagButton } from "@/ui/buttons/BagButton";
@@ -150,6 +151,13 @@ export class MapScene implements Scene {
 	private roomCount: number;
 	private mapSeed: number;
 
+	private tutorialConfig: TutorialConfig | null;
+	/** Set by handleCardConfirmed right before a move starts — read once, in onMoveCommitted, to know whether the move that's about to fire actually spent a card. */
+	private pendingMoveUsedCard = false;
+	private tutorialTargetMarker = new Container();
+	private tutorialTargetElapsedMs = 0;
+	private staticActorCoords: RH.GridCoord[] = [];
+
 	private readonly TILE_COLORS: Record<RH.TileType, number> = {
 		[RH.TileType.Floor]: 0x3a3a3a,
 		[RH.TileType.Wall]: 0x1a1a1a,
@@ -198,21 +206,30 @@ export class MapScene implements Scene {
 		return this.units.filter((u) => u.pilot === "ai");
 	}
 
-	constructor(private game: Game) {
-		// Dimensions + seed come from the mission/LoadingScene setup. Falls
-		// back to sane defaults for direct MapScene boots during dev.
-		const dims = TEST_MAP_DIMENSIONS;
+	constructor(
+		private game: Game,
+		tutorialConfig: TutorialConfig | null = null,
+	) {
+		this.tutorialConfig = tutorialConfig;
+
+		// Dimensions + seed come from the mission/LoadingScene setup, unless
+		// a tutorial config supplies its own small, fixed debug map.
+		const dims = tutorialConfig?.script.debugMap ?? TEST_MAP_DIMENSIONS;
 		this.mapWidth = dims.width;
 		this.mapHeight = dims.height;
-		this.roomCount = Math.floor(
-			this.mapWidth * this.mapHeight * this.ROOM_DENSITY,
-		);
+		this.roomCount =
+			tutorialConfig?.script.debugMap.roomCount ??
+			Math.floor(this.mapWidth * this.mapHeight * this.ROOM_DENSITY);
 		this.mapSeed =
-			this.game.session.mapSeed ?? Math.floor(Math.random() * 1_000_000);
+			tutorialConfig?.script.debugMap.seed ??
+			this.game.session.mapSeed ??
+			Math.floor(Math.random() * 1_000_000);
 
 		// WE ADD THIS - So when a new match happens it's a fresh deck, without it
-		// would try to carry old deck over
-		this.game.session.sharedDeck = null;
+		// would try to carry old deck over. Tutorials get a genuinely empty
+		// array, not null — null lazily rebuilds a full deck on first
+		// access via `??=`, an empty array never does.
+		this.game.session.sharedDeck = this.tutorialConfig ? [] : null;
 
 		this.grid = this.buildMap();
 
@@ -238,7 +255,10 @@ export class MapScene implements Scene {
 		this.applyCameraBounds();
 
 		this.spawnLocalUnit();
-		this.spawnEnemyHunters();
+		if (!this.tutorialConfig || this.tutorialConfig.spawnAiHunters) {
+			this.spawnEnemyHunters();
+		}
+		this.spawnStaticActors();
 
 		// Item popup rides along as a child of the mercenary's own view,
 		// so it moves with the token automatically — no manual per-frame
@@ -253,7 +273,12 @@ export class MapScene implements Scene {
 		this.targetReticle.visible = false;
 		this.mercenaryContainer.addChild(this.targetReticle);
 
-		this.spawnChests();
+		if (!this.tutorialConfig || this.tutorialConfig.spawnChests) {
+			this.spawnChests();
+		}
+
+		this.tutorialTargetMarker.visible = false;
+		this.mercenaryContainer.addChild(this.tutorialTargetMarker);
 
 		this.characterPanel = new CharacterPanel();
 		this.view.addChild(this.characterPanel.view);
@@ -299,8 +324,10 @@ export class MapScene implements Scene {
 
 		// Top up to the full 5-card starting hand — the local unit's own
 		// TurnManager already drew 1 via its own reset()→endTurn() cascade;
-		// this draws the remaining 4.
-		this.localUnit.turnManager.dealStartingHand();
+		// this draws the remaining 4. Skipped entirely for tutorials.
+		if (!this.tutorialConfig) {
+			this.localUnit.turnManager.dealStartingHand();
+		}
 
 		this.moveController = this.createMoveController();
 		this.boardContainer.addChild(this.moveController.view);
@@ -456,6 +483,15 @@ export class MapScene implements Scene {
 			if (this.itemPopupTimer <= 0) {
 				this.itemPopup.visible = false;
 			}
+		}
+
+		if (this.tutorialTargetMarker.visible) {
+			this.tutorialTargetElapsedMs += (deltaTime / 60) * 1000;
+			const t = this.tutorialTargetElapsedMs;
+			this.tutorialTargetMarker.alpha =
+				0.6 + Math.abs(Math.sin(t * 0.004)) * 0.4;
+			const arrow = this.tutorialTargetMarker.children[1];
+			if (arrow) arrow.y = -50 - Math.abs(Math.sin(t * 0.005)) * 8;
 		}
 
 		this.fpsAccumulator += deltaTime;
@@ -793,6 +829,13 @@ export class MapScene implements Scene {
 		this.tryOpenChestAt(local.state, target);
 		await this.checkWinCondition(local);
 
+		this.tutorialConfig?.onTutorialEvent({
+			type: "moved",
+			tilesMoved: truncatedPath.length,
+			usedCard: this.pendingMoveUsedCard,
+			finalCoord: local.state.coord,
+		});
+
 		this.syncUI();
 	}
 
@@ -902,6 +945,42 @@ export class MapScene implements Scene {
 	// ---------- Chests & Items ----------
 
 	/** Place chests from the session plan onto walkable tiles. No-ops if plan is missing. */
+	/**
+	 * Purely visual, non-interactive tokens from the tutorial script's
+	 * staticActors list — a narrator's on-map presence, a decorative
+	 * "enemy" prop staged for tension. No PilotedMercenary, no
+	 * TurnManager, no combat stats.
+	 */
+	private spawnStaticActors(): void {
+		const actors = this.tutorialConfig?.script.staticActors;
+		if (!actors) return;
+
+		this.staticActorCoords = actors.map((a) => a.coord);
+
+		for (const actor of actors) {
+			const pos = gridToScreen(actor.coord);
+			const token = new Container();
+			token.x = pos.x;
+			token.y = pos.y;
+
+			const body = new Graphics();
+			body.circle(0, -14, 16);
+			body.fill(actor.color);
+			body.stroke({ width: 2, color: 0x000000, alpha: 0.5 });
+			token.addChild(body);
+
+			const label = new Text({
+				text: actor.label,
+				style: { fill: 0xffffff, fontSize: 12, fontWeight: "bold" },
+			});
+			label.anchor.set(0.5, 1);
+			label.y = -38;
+			token.addChild(label);
+
+			this.mercenaryContainer.addChild(token);
+		}
+	}
+
 	private spawnChests(): void {
 		this.chestContainer.removeChildren();
 		this.placedChests = [];
@@ -1381,6 +1460,7 @@ export class MapScene implements Scene {
 	 * every living hunter.
 	 */
 	private async checkDeckExhaustion(): Promise<void> {
+		if (this.tutorialConfig) return;
 		if (this.game.session.bossSpawned) return;
 		if ((this.game.session.sharedDeck?.length ?? 1) > 0) return;
 
@@ -1658,6 +1738,9 @@ export class MapScene implements Scene {
 
 	private spawnLocalUnit(): void {
 		const state = this.spawnMercenary();
+		if (this.tutorialConfig?.playerMovement !== undefined) {
+			state.stats.movement = this.tutorialConfig.playerMovement;
+		}
 		const mercenary = new Mercenary(state.coord);
 		this.mercenaryContainer.addChild(mercenary.view);
 
@@ -1754,6 +1837,7 @@ export class MapScene implements Scene {
 	}
 
 	private trySpawnMonster(): void {
+		if (this.tutorialConfig && !this.tutorialConfig.spawnMonsters) return;
 		if (!RH.shouldSpawnMonster(this.monsters.length)) return;
 
 		const used = new Set<string>(
@@ -2158,6 +2242,7 @@ export class MapScene implements Scene {
 		this.buttonBar.closeMenu();
 		this.localUnit.turnManager.endTurn();
 		this.turnsTaken++;
+		this.tutorialConfig?.onTutorialEvent({ type: "turnEnded" });
 		this.trySpawnMonster();
 		void this.processEnemyTurns();
 	}
@@ -2317,6 +2402,58 @@ export class MapScene implements Scene {
 		this.logPanel.sync(this.game.session.matchLog ?? []);
 	}
 	/** Sync all UI to the local unit's TurnManager state. Guarded — fires before buttonBar exists during construction. */
+	/**
+	 * Pushes a specific card directly into the local player's hand,
+	 * bypassing the deck entirely. Deliberately generic, not shaped
+	 * around tutorials specifically — a future shop granting a purchased
+	 * item-card can reuse this exactly as-is.
+	 */
+	giveCard(card: RH.CardData): void {
+		this.localUnit.state.hand.push(card);
+		this.syncUI();
+	}
+
+	/**
+	 * Glowing tile + bobbing downward arrow over a specific coord — a
+	 * generic "move here" pointer any tutorial segment can request via
+	 * targetTile, not something built one-off for this scene. Guidance
+	 * only, never enforced — the player can still move anywhere.
+	 */
+	showTutorialTarget(coord: RH.GridCoord): void {
+		const pos = gridToScreen(coord);
+		this.tutorialTargetMarker.removeChildren();
+		this.tutorialTargetMarker.x = pos.x;
+		this.tutorialTargetMarker.y = pos.y;
+
+		const glow = new Graphics();
+		glow.poly([
+			0,
+			-TILE_HEIGHT / 2,
+			TILE_WIDTH / 2,
+			0,
+			0,
+			TILE_HEIGHT / 2,
+			-TILE_WIDTH / 2,
+			0,
+		]);
+		glow.fill({ color: 0xffd700, alpha: 0.45 });
+		glow.stroke({ width: 2, color: 0xffd700, alpha: 0.9 });
+		this.tutorialTargetMarker.addChild(glow);
+
+		const arrow = new Graphics();
+		arrow.poly([0, 0, 10, -16, -10, -16]);
+		arrow.fill(0xffd700);
+		arrow.y = -50;
+		this.tutorialTargetMarker.addChild(arrow);
+
+		this.tutorialTargetElapsedMs = 0;
+		this.tutorialTargetMarker.visible = true;
+	}
+
+	hideTutorialTarget(): void {
+		this.tutorialTargetMarker.visible = false;
+	}
+
 	private syncUI(): void {
 		if (!this.buttonBar || this.units.length === 0) return;
 		const local = this.localUnit;
@@ -2354,6 +2491,7 @@ export class MapScene implements Scene {
 
 		const cardType = card.id === "__skip__" ? "none" : card.color;
 		const numericValue = typeof card.value === "number" ? card.value : 0;
+		this.pendingMoveUsedCard = cardType !== "none";
 
 		if (!local.turnManager.beginMovement(cardType, numericValue)) {
 			return;
@@ -2621,6 +2759,7 @@ export class MapScene implements Scene {
 					.filter((u) => u.state.currentHp > 0)
 					.map((u) => u.state.coord),
 				...this.livingMonsterCoords(),
+				...this.staticActorCoords,
 			],
 			onMoveCommitted: (
 				target: RH.GridCoord,
@@ -2712,6 +2851,15 @@ export class MapScene implements Scene {
 	 * the target relic is found (see tryOpenChestAt + spawnExitFarFrom).
 	 */
 	private buildMap(): RH.Grid {
+		const overrides = this.tutorialConfig?.script.debugMap.tileOverrides;
+		if (overrides) {
+			const grid = new RH.Grid(this.mapWidth, this.mapHeight);
+			for (const { coord, type } of overrides) {
+				grid.setTileType(coord, type);
+			}
+			return grid;
+		}
+
 		return RH.generateDungeon(this.mapWidth, this.mapHeight, {
 			seed: this.mapSeed,
 			roomCount: this.roomCount,

@@ -6,13 +6,12 @@
  */
 export interface DialogueLine {
 	speaker: string;
-	/** Key into the portrait factory's asset table */
+	/** Key into the portrait factory's asset table — not a raw URL, so swapping art later never touches script content. */
 	portraitId: string;
 	text: string;
 }
 
-/** A named group of lines with a single speaker, for scripting convenience —
- * expands to individual DialogueLines at render time, never stored or passed around as its own type. */
+/** A named group of lines with a single speaker, for scripting convenience — expands to individual DialogueLines at render time, never stored or passed around as its own type. */
 export function linesFor(
 	speaker: string,
 	portraitId: string,

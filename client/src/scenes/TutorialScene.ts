@@ -5,6 +5,8 @@ import { Button } from "@/ui/generics/Button";
 import { computeFitScale } from "@/math/fitScale";
 import { LoadingOverlay } from "@/ui/overlay/LoadingOverlay";
 import { MainMenuScene } from "./MainMenuScene";
+import { TutorialRunner } from "@/tutorial/tutorialRunner";
+import { MOVEMENT_SCRIPT } from "@/tutorial/scripts/movementScript";
 
 /**
  * Tutorials hub — six real, comprehensive tutorials covering everything
@@ -102,6 +104,16 @@ export class TutorialsMenuScene implements Scene {
 	 * guided setup yet — that's the next real build, not this pass.
 	 */
 	private startTutorial(topic: string): void {
+		if (topic === "Movement") {
+			const runner = new TutorialRunner(this.game, MOVEMENT_SCRIPT, () => {
+				void this.game.sceneManager.changeScene(
+					new TutorialsMenuScene(this.game),
+				);
+			});
+			void runner.start();
+			return;
+		}
+		// Other five real topics don't have scripts yet.
 		console.log(`[Tutorials] Launching: ${topic}`);
 		this.game.session.missionParams = {};
 		void this.game.overlays.show(new LoadingOverlay(this.game));

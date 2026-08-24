@@ -9,11 +9,6 @@ const PORTRAIT_SIZE = 110;
 const MARGIN = 20;
 const ADVANCE_CARET_PULSE_SPEED = 0.005;
 
-/**
- * Deterministic placeholder color per portraitId — real
- * portrait art can replace this lookup later without
- * touching any calling code
- * */
 const PLACEHOLDER_COLORS: Record<string, number> = {
 	narrator: 0x4a9eff,
 	default: 0x888888,
@@ -26,7 +21,9 @@ function colorForPortrait(portraitId: string): number {
 /**
  * Bottom-strip narrator/dialogue system — a portrait, a speaker name,
  * and word-wrapped text, tap-anywhere-on-the-strip to advance. Never
- * covers the full screen
+ * covers the full screen. Deliberately generic: tutorials, the
+ * eventual shop, and story mode all drive this same overlay with the
+ * same DialogueLine shape.
  * @author ShaAnder
  */
 export class DialogueOverlay implements Overlay {
@@ -107,11 +104,6 @@ export class DialogueOverlay implements Overlay {
 		this.layout(width, height);
 	}
 
-	/**
-	 * Plays every line in order, tap-to-advance between each, resolving
-	 * once the last line has been dismissed. The caller (a TutorialRunner,
-	 * a future shop/story system) awaits this directly
-	 */
 	async playLines(lines: DialogueLine[]): Promise<void> {
 		for (const line of lines) {
 			this.showLine(line);
