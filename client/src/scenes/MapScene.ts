@@ -44,6 +44,7 @@ import type { MonsterEntity } from "@/types/entities";
 import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
 import { AudioController } from "@/core/audio/audioController";
 import { Ticker } from "pixi.js";
+import { CardDrawQueue } from "@/ui/CardDrawQueue";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -136,6 +137,9 @@ export class MapScene implements Scene {
 	// Cards
 	private hand: Hand;
 	private playZone: PlayZone;
+
+	private cardDrawQueue!: CardDrawQueue;
+	private drawLayer = new Container();
 
 	// traps
 	private traps: RH.Trap[] = [];
@@ -318,6 +322,23 @@ export class MapScene implements Scene {
 		);
 		this.view.addChild(this.hand.view);
 
+		// after hand is added to view:
+		this.view.addChild(this.drawLayer);
+		this.cardDrawQueue = new CardDrawQueue({
+			layer: this.drawLayer,
+			getHandTarget: () => {
+				// layer is centred on screen — hand is in view space
+				return {
+					x: this.hand.view.x - this.drawLayer.x,
+					y: this.hand.view.y - this.drawLayer.y,
+				};
+			},
+			onCollected: (card) => {
+				this.localUnit.state.hand.push(card);
+				this.syncUI();
+			},
+		});
+
 		// Required so drag keeps tracking after the pointer leaves the card sprite
 		this.game.app.stage.eventMode = "static";
 		this.game.app.stage.hitArea = this.game.app.screen;
@@ -326,7 +347,9 @@ export class MapScene implements Scene {
 		// TurnManager already drew 1 via its own reset()→endTurn() cascade;
 		// this draws the remaining 4. Skipped entirely for tutorials.
 		if (!this.tutorialConfig) {
-			this.localUnit.turnManager.dealStartingHand();
+			const starter = this.localUnit.turnManager.dealStartingHand();
+			// Defer present until onEnter so layer is laid out — or enqueue now:
+			this.cardDrawQueue.enqueue(starter);
 		}
 
 		this.moveController = this.createMoveController();
@@ -461,7 +484,8 @@ export class MapScene implements Scene {
 			this.localUnit.mercenary.isAnimating ||
 			this.hand.isSelecting ||
 			this.exitCardInProgress ||
-			this.targetingActive
+			this.targetingActive ||
+			this.cardDrawQueue.isActive
 		) {
 			this.camera.lockTo({
 				x: this.localUnit.mercenary.view.x,
@@ -570,7 +594,7 @@ export class MapScene implements Scene {
 				this.game.app.screen.height,
 			);
 			this.localUnit.state.currentHp = 1;
-			this.localUnit.turnManager.endTurn();
+			this.localUnit.turnManager.refreshTurnWithoutDraw();
 			this.showFeedback("✨ You recover and get back up");
 			this.turnsTaken++;
 			this.trySpawnMonster();
@@ -581,7 +605,7 @@ export class MapScene implements Scene {
 
 		if (this.localUnit.state.stunnedTurnsRemaining > 0) {
 			this.localUnit.state.stunnedTurnsRemaining -= 1;
-			this.localUnit.turnManager.endTurn();
+			this.localUnit.turnManager.refreshTurnWithoutDraw();
 			this.showFeedback("🪤 You're stunned and can't act this turn");
 			this.turnsTaken++;
 			this.trySpawnMonster();
@@ -664,6 +688,9 @@ export class MapScene implements Scene {
 		this.hand.resize(w, h, s);
 		this.playZone.layout(w / 2, h / 2, s);
 		this.game.app.stage.hitArea = this.game.app.screen;
+
+		this.drawLayer.x = w / 2;
+		this.drawLayer.y = h * 0.42;
 	}
 
 	/** Flashing red alert, centered on screen, for durationMs. Resolves once it's done and hidden again. */
@@ -1157,7 +1184,8 @@ export class MapScene implements Scene {
 					await this.delay(BETWEEN_AI_MS);
 				}
 				isFirst = false;
-				unit.turnManager.endTurn();
+				const drawn = unit.turnManager.endTurn();
+				unit.state.hand.push(...drawn);
 				await this.processOneEnemyTurn(unit);
 				this.trySpawnMonster();
 			}
@@ -1395,7 +1423,7 @@ export class MapScene implements Scene {
 		);
 
 		unit.state.currentHp = 1;
-		unit.turnManager.endTurn();
+		unit.turnManager.refreshTurnWithoutDraw();
 		this.showFeedback(
 			`✨ ${this.getUnitLabel(unit)} recovers and gets back up`,
 		);
@@ -1421,9 +1449,13 @@ export class MapScene implements Scene {
 			unit.turnManager.canDisengage,
 			unit.turnManager.canRest,
 		);
-		if (fallback === "rest" && unit.turnManager.spendRest()) {
-			RH.clearFleeMemory(unit.memory);
-			this.showFeedback(`💤 ${unit.archetype} hunter rests`);
+		if (fallback === "rest") {
+			const restDrawn = unit.turnManager.spendRest();
+			if (restDrawn) {
+				unit.state.hand.push(...restDrawn);
+				RH.clearFleeMemory(unit.memory);
+				this.showFeedback(`💤 ${unit.archetype} hunter rests`);
+			}
 		} else if (fallback === "retreat" && unit.turnManager.beginDisengage()) {
 			const retreatBlocked = new Set(
 				othersAfter.map((o) => RH.coordKey(o.coord)),
@@ -2192,8 +2224,11 @@ export class MapScene implements Scene {
 	/** Spend 1 AP on Rest, lock Move, draw up to 2 cards. */
 	private handleRest(): void {
 		this.resetActionState();
-		if (!this.localUnit.turnManager.spendRest()) return;
-		this.showFeedback("💤 Rested — drew cards");
+		const drawn = this.localUnit.turnManager.spendRest();
+		if (!drawn) return;
+		this.cardDrawQueue.enqueue(drawn);
+		this.showFeedback("💤 Rested — draw your cards");
+		this.syncUI();
 	}
 
 	/** Spend 2 AP on Disengage — alternative movement, immune to ZoC. */
@@ -2231,7 +2266,8 @@ export class MapScene implements Scene {
 		if (
 			this.localUnit.mercenary.isAnimating ||
 			this.exitCardInProgress ||
-			this.processingEnemyTurns
+			this.processingEnemyTurns ||
+			this.cardDrawQueue.isActive
 		) {
 			return;
 		}
@@ -2240,7 +2276,8 @@ export class MapScene implements Scene {
 		this.exitTargetingMode();
 		this.buttonBar.setMoveActive(false);
 		this.buttonBar.closeMenu();
-		this.localUnit.turnManager.endTurn();
+		const drawn = this.localUnit.turnManager.endTurn();
+		this.cardDrawQueue.enqueue(drawn);
 		this.turnsTaken++;
 		this.tutorialConfig?.onTutorialEvent({ type: "turnEnded" });
 		this.trySpawnMonster();
@@ -2312,6 +2349,10 @@ export class MapScene implements Scene {
 		}
 		if (this.game.overlays.isOpen) return;
 		if (this.processingEnemyTurns) return;
+		if (this.cardDrawQueue.isActive) {
+			this.cardDrawQueue.tryCollect();
+			return;
+		}
 
 		const { screenX, screenY } = this.getScreenPoint(event);
 		const action = this.buttonBar.handleClick(screenX, screenY);
@@ -2409,8 +2450,7 @@ export class MapScene implements Scene {
 	 * item-card can reuse this exactly as-is.
 	 */
 	giveCard(card: RH.CardData): void {
-		this.localUnit.state.hand.push(card);
-		this.syncUI();
+		this.cardDrawQueue.enqueue(card);
 	}
 
 	/**
@@ -2804,7 +2844,8 @@ export class MapScene implements Scene {
 
 		this.hand.syncFromHand(this.localUnit.state.hand);
 		this.localUnit.turnManager.reset();
-		this.localUnit.turnManager.dealStartingHand();
+		const starter = this.localUnit.turnManager.dealStartingHand();
+		this.cardDrawQueue.enqueue(starter);
 		this.turnsTaken = 0;
 
 		this.boardContainer.removeChild(this.moveController.view);

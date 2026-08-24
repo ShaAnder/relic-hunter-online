@@ -27,14 +27,17 @@ type ManagedEntity = EntityCore &
 
 /**
  * Manages the AP-based turn cycle for a single match. Generic over any
- * entity with a hand and items
+ * entity with a hand and items.
  *
  * Each turn the entity has a base AP pool spent across Move and
  * Action (Attack / Rest / Disengage / Special), in any order.
  *
- * Also owns the draw side of the hand economy: 1 card at the start of
- * every turn, and up to 2 more from Rest. Both draw from the ONE shared
- * match deck (`getSharedDeck`, backed by `GameSession.sharedDeck`).
+ * Draw economy: 1 card at the start of every turn, up to 2 more from Rest,
+ * both from the shared match deck (`getSharedDeck` → GameSession.sharedDeck).
+ *
+ * Player-facing draws return CardData[] so MapScene can run CardDrawQueue
+ * instead of silently stuffing the hand. AI / construction use
+ * drawCardsIntoHand for silent injection.
  */
 export class TurnManager<T extends ManagedEntity = MercenaryState> {
 	private _apRemaining: number;
@@ -172,17 +175,21 @@ export class TurnManager<T extends ManagedEntity = MercenaryState> {
 		return true;
 	}
 
-	/** Spend 1 AP on Rest, heal toward the current HP ceiling,
-	 * draw up to 2 cards. No longer touches Move at all. Cancels any active special. */
-	spendRest(): boolean {
-		if (!this.canRest) return false;
+	/**
+	 * Spend 1 AP on Rest, heal toward the current HP ceiling.
+	 * Returns cards drawn from the shared deck — not yet in hand.
+	 * MapScene should enqueue them into CardDrawQueue; AI can push into hand.
+	 * Returns null if Rest is not available.
+	 */
+	spendRest(): CardData[] | null {
+		if (!this.canRest) return null;
 		this.clearSpecial();
 		this._apRemaining -= 1;
 		this._hasRestedThisTurn = true;
-		this.drawCards(2);
+		const drawn = this.pullFromDeck(2);
 		applyRestHeal(this.getEntity());
 		this.onChanged();
-		return true;
+		return drawn;
 	}
 
 	/** Spend 2 AP to Disengage — a full alternative movement, ZoC-immune. Cancels any active special. */
@@ -216,7 +223,13 @@ export class TurnManager<T extends ManagedEntity = MercenaryState> {
 
 	// ---------- TURN LIFECYCLE ----------
 
-	endTurn(): void {
+	/**
+	 * Refresh AP / flags for a new turn.
+	 * Returns the 1 card drawn from the deck (not yet in hand).
+	 * Local player: enqueue into CardDrawQueue.
+	 * AI: unit.state.hand.push(...drawn).
+	 */
+	endTurn(): CardData[] {
 		this._apRemaining = this._baseAp;
 		this._hasMovedThisTurn = false;
 		this._movementRemaining = 0;
@@ -228,21 +241,67 @@ export class TurnManager<T extends ManagedEntity = MercenaryState> {
 			defense: 0,
 			movement: 0,
 		};
-		this.drawCards(1);
+		const drawn = this.pullFromDeck(1);
+		this.onChanged();
+		return drawn;
+	}
+
+	/**
+	 * Construction / AI bootstrap. Resets flags and silently draws 1 into hand
+	 * so entities still have a card without going through presentation.
+	 */
+	reset(): void {
+		this._apRemaining = this._baseAp;
+		this._hasMovedThisTurn = false;
+		this._movementRemaining = 0;
+		this._hasAttackedThisTurn = false;
+		this._hasRestedThisTurn = false;
+		this._hasUsedSpecialThisTurn = false;
+		this.getEntity().temporaryStatBonus = {
+			attack: 0,
+			defense: 0,
+			movement: 0,
+		};
+		this.drawCardsIntoHand(1);
 		this.onChanged();
 	}
 
-	reset(): void {
-		this.endTurn();
-	}
-
-	dealStartingHand(): void {
+	/**
+	 * Starting-hand top-up toward STARTING_HAND_SIZE.
+	 * Returns cards for presentation (local). Empty if already full.
+	 */
+	dealStartingHand(): CardData[] {
 		const entity = this.getEntity();
 		const needed = STARTING_HAND_SIZE - entity.hand.length;
-		if (needed > 0) this.drawCards(needed);
+		if (needed <= 0) return [];
+		return this.pullFromDeck(needed);
 	}
 
-	private drawCards(count: number): void {
+	/** Silent draw straight into the entity hand (AI / construction). */
+	drawCardsIntoHand(count: number): void {
 		drawCardsInto(this.getEntity().hand, this.getSharedDeck(), count);
+	}
+
+	/** Reset AP/flags without drawing a card. */
+	refreshTurnWithoutDraw(): void {
+		this._apRemaining = this._baseAp;
+		this._hasMovedThisTurn = false;
+		this._movementRemaining = 0;
+		this._hasAttackedThisTurn = false;
+		this._hasRestedThisTurn = false;
+		this._hasUsedSpecialThisTurn = false;
+		this.getEntity().temporaryStatBonus = {
+			attack: 0,
+			defense: 0,
+			movement: 0,
+		};
+		this.onChanged();
+	}
+
+	/** Pull from the shared deck into a buffer — does not touch entity.hand. */
+	private pullFromDeck(count: number): CardData[] {
+		const buffer: CardData[] = [];
+		drawCardsInto(buffer, this.getSharedDeck(), count);
+		return buffer;
 	}
 }
