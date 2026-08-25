@@ -276,6 +276,10 @@ export class MapScene implements Scene {
 			this.spawnEnemyHunters();
 		}
 		this.spawnStaticActors();
+		if (this.tutorialConfig?.script.tutorialMonster) {
+			const { coord, tier } = this.tutorialConfig.script.tutorialMonster;
+			this.spawnTutorialMonster(coord, tier);
+		}
 
 		// Item popup rides along as a child of the mercenary's own view,
 		// so it moves with the token automatically — no manual per-frame
@@ -2198,6 +2202,11 @@ export class MapScene implements Scene {
 		const monsterAsState = RH.monsterAsMercenaryState(monster.state);
 		const tierLabel = `${monster.state.tier[0].toUpperCase()}${monster.state.tier.slice(1)} Monster`;
 
+		this.tutorialConfig?.onTutorialEvent({
+			type: "combatStarted",
+			opponentType: "monster",
+		});
+
 		void this.game.overlays.show(
 			new BattleOverlay(
 				this.game,
@@ -2209,6 +2218,10 @@ export class MapScene implements Scene {
 					if (result.attackerNeedsTeleport) {
 						this.teleportEntity(this.localUnit.state, this.localUnit.mercenary);
 					}
+					this.tutorialConfig?.onTutorialEvent({
+						type: "combatEnded",
+						won: !!result.defenderMonsterDied,
+					});
 					this.syncUI();
 				},
 				0x4a9eff,
@@ -2520,6 +2533,17 @@ export class MapScene implements Scene {
 	 */
 	giveCard(card: RH.CardData): void {
 		this.cardDrawQueue.enqueue(card);
+	}
+
+	/**
+	 * Empties the local player's hand entirely — used right before a
+	 * guided combat round to guarantee the only card available is
+	 * whatever giveCard hands them next, not whatever was already
+	 * sitting in hand from earlier in the script.
+	 */
+	clearLocalHand(): void {
+		this.localUnit.state.hand = [];
+		this.syncUI();
 	}
 
 	/**

@@ -7,6 +7,7 @@ import { LoadingOverlay } from "@/ui/overlay/LoadingOverlay";
 import { MainMenuScene } from "./MainMenuScene";
 import { TutorialRunner } from "@/tutorial/tutorialRunner";
 import { MOVEMENT_SCRIPT } from "@/tutorial/scripts/movementScript";
+import { COMBAT_SCRIPT } from "@/tutorial/scripts/combatScript";
 
 /**
  * Tutorials hub — six real, comprehensive tutorials covering everything
@@ -113,7 +114,16 @@ export class TutorialsMenuScene implements Scene {
 			void runner.start();
 			return;
 		}
-		// Other five real topics don't have scripts yet.
+		if (topic === "Combat") {
+			const runner = new TutorialRunner(this.game, COMBAT_SCRIPT, () => {
+				void this.game.sceneManager.changeScene(
+					new TutorialsMenuScene(this.game),
+				);
+			});
+			void runner.start();
+			return;
+		}
+		// Other four real topics don't have scripts yet.
 		console.log(`[Tutorials] Launching: ${topic}`);
 		this.game.session.missionParams = {};
 		void this.game.overlays.show(new LoadingOverlay(this.game));

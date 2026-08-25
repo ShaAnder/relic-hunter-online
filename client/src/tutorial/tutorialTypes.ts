@@ -2,6 +2,7 @@ import type {
 	CardColor,
 	CardData,
 	GridCoord,
+	MonsterTier,
 	TileType,
 } from "@relic-hunter/shared";
 import type { ButtonAction, RowKey } from "@/ui/buttons/ActionMenu";
@@ -108,6 +109,10 @@ export interface TutorialSegment {
 	intro: DialogueSource;
 	/** If set, handed to the player's hand (via MapScene.giveCard) right after intro plays, before the objective becomes active. Only fires once, before the first attempt — see retryCard for the failed-attempt case. */
 	giveCard?: CardData;
+	/** Like giveCard, but for handing over several cards at once (e.g. "here's a full hand, go finish it") rather than guiding toward one specific card. */
+	giveCards?: CardData[];
+	/** If set alongside giveCard, MapScene.clearLocalHand runs first — guarantees giveCard's card is the ONLY one in hand, not appended to whatever was already there from earlier in the script. */
+	clearHandFirst?: boolean;
 	/** If set, MapScene highlights this tile (glow + bobbing arrow) for as long as this segment's objective is active. */
 	targetTile?: GridCoord;
 	/** If set, a bobbing arrow points at this UI element for as long as this segment's objective is active — tracked live every frame. */
@@ -131,6 +136,22 @@ export interface TutorialSegment {
 	 * the right one or not.
 	 */
 	retryCard?: CardData;
+	/**
+	 * If set, TutorialRunner awaits MapScene.moveStaticActor directly
+	 * for this segment instead of waiting on a player-driven objective
+	 * — a scripted visual beat (e.g. Kessler walking across the map),
+	 * not something the player does anything to trigger.
+	 */
+	moveActor?: { label: string; destination: GridCoord; durationMs?: number };
+	/**
+	 * If set, TutorialRunner awaits MapScene.triggerTutorialMonsterAttack
+	 * directly for this segment — a forced combat beat MapScene itself
+	 * initiates on cue, not something gated on a player-fired event.
+	 * Distinct from a normal objective for the same reason moveActor
+	 * is: nothing here is "wait for the player to do X", it's "make
+	 * this scripted thing happen, then continue".
+	 */
+	triggerCombat?: { maxRounds: number };
 	objective: TutorialObjective | null;
 	confirm: DialogueSource;
 }
@@ -157,6 +178,8 @@ export interface TutorialScript {
 	title: string;
 	debugMap: DebugMapSpec;
 	staticActors?: StaticActorSpec[];
+	/** A single, controlled, genuinely killable monster spawned at match start via MapScene.spawnTutorialMonster — not the normal random-position pool. */
+	tutorialMonster?: { coord: GridCoord; tier: MonsterTier };
 	/** Overrides the test character's base movement stat for this tutorial specifically — doesn't touch the real game's spawn defaults. */
 	playerMovement?: number;
 	segments: TutorialSegment[];

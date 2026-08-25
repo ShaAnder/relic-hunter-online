@@ -85,8 +85,18 @@ export class TutorialRunner {
 		for (const segment of this.script.segments) {
 			await this.playDialogue(segment.intro);
 
+			if (segment.clearHandFirst) {
+				this.mapScene.clearLocalHand();
+			}
+
 			if (segment.giveCard) {
 				this.mapScene.giveCard(segment.giveCard);
+			}
+
+			if (segment.giveCards) {
+				for (const card of segment.giveCards) {
+					this.mapScene.giveCard(card);
+				}
 			}
 
 			if (segment.targetTile) {
@@ -95,6 +105,20 @@ export class TutorialRunner {
 
 			if (segment.uiPointer) {
 				this.mapScene.showUiPointer(segment.uiPointer);
+			}
+
+			if (segment.moveActor) {
+				await this.mapScene.moveStaticActor(
+					segment.moveActor.label,
+					segment.moveActor.destination,
+					segment.moveActor.durationMs,
+				);
+			}
+
+			if (segment.triggerCombat) {
+				await this.mapScene.triggerTutorialMonsterAttack(
+					segment.triggerCombat.maxRounds,
+				);
 			}
 
 			if (segment.objective) {
