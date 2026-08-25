@@ -2512,6 +2512,29 @@ export class MapScene implements Scene {
 		this.cardDrawQueue.enqueue(card);
 	}
 
+	/** Current grid position of the local player — used by TutorialRunner to remember where an attempt started, so a failure can reset back to exactly that spot. */
+	getLocalUnitCoord(): RH.GridCoord {
+		return this.localUnit.state.coord;
+	}
+
+	/**
+	 * Instantly teleports the local player back to coord and undoes
+	 * the movement they just spent attempting this segment, so they
+	 * can immediately try again. Uses Mercenary's existing
+	 * setPositionInstant (no animation — a genuine teleport, not a
+	 * walk back) and TurnManager's undoMovementForRetry (refunds the
+	 * AP and clears "already moved" without a full end-turn cycle,
+	 * which would draw a new hand and could disrupt whatever a
+	 * tutorial script specifically gave the player).
+	 */
+	resetLocalUnitToCoord(coord: RH.GridCoord): void {
+		const local = this.localUnit;
+		local.state.coord = coord;
+		local.mercenary.setPositionInstant(gridToScreen(coord));
+		local.turnManager.undoMovementForRetry();
+		this.syncUI();
+	}
+
 	/**
 	 * Glowing tile + bobbing downward arrow over a specific coord — a
 	 * generic "move here" pointer any tutorial segment can request via

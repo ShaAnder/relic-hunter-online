@@ -163,6 +163,24 @@ export class TurnManager<T extends ManagedEntity = MercenaryState> {
 		this.onChanged();
 	}
 
+	/**
+	 * Undoes exactly what beginMovement spent — refunds the AP, clears
+	 * the "already moved this turn" flag, zeros the leftover movement
+	 * budget — without going through a full endTurn() cycle. A full
+	 * endTurn() would also draw a new hand and fire a real turn-ended
+	 * signal, which could disrupt whatever's actually in the player's
+	 * hand mid-tutorial or spuriously satisfy an unrelated "end your
+	 * turn" objective elsewhere in the same script. For tutorial retry
+	 * flows specifically, where a player needs to immediately try the
+	 * same move again after landing somewhere wrong.
+	 */
+	undoMovementForRetry(): void {
+		this._apRemaining += 1;
+		this._hasMovedThisTurn = false;
+		this._movementRemaining = 0;
+		this.onChanged();
+	}
+
 	// ---------- ACTIONS ----------
 
 	/** Spend 2 AP on Attack. No longer touches Move at all. Cancels any active special. */

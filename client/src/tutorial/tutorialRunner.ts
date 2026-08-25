@@ -7,17 +7,19 @@ import type {
 	TutorialEvent,
 	TutorialObjective,
 	TutorialScript,
+	TutorialSegment,
 } from "@/tutorial/tutorialTypes";
+import type { GridCoord } from "@relic-hunter/shared";
 
 /**
- * Drives one TutorialScript end to end: builds the TutorialConfig,
- * launches MapScene with it, then walks every segment — intro dialogue
+ * Drives one TutorialScript end to end. Each segment: intro dialogue
  * (overlay shown, MapScene paused), an optional card handoff, an
- * optional target-tile marker, the real objective (overlay hidden,
- * MapScene fully interactive), then confirm dialogue. MapScene never
- * imports this class or knows it exists; it only ever calls the
- * onTutorialEvent callback and exposes giveCard/showTutorialTarget as
- * plain public methods.
+ * optional map/UI pointer, the real objective (overlay hidden, MapScene
+ * fully interactive), then confirm dialogue. If a segment defines
+ * failZones, a "moved" event landing on one of them doesn't just keep
+ * waiting — it plays failLine, resets the player back to where this
+ * attempt started, and re-arms the same objective for another try.
+ * MapScene never imports this class or knows it exists.
  * @author ShaAnder
  */
 export class TutorialRunner {
@@ -25,7 +27,8 @@ export class TutorialRunner {
 	private mapScene!: MapScene;
 
 	private activeObjective: TutorialObjective | null = null;
-	private pendingObjectiveResolve: (() => void) | null = null;
+	private activeFailZones: GridCoord[] | null = null;
+	private pendingResolve: ((outcome: "met" | "failed") => void) | null = null;
 
 	constructor(
 		private game: Game,
@@ -65,7 +68,7 @@ export class TutorialRunner {
 			}
 
 			if (segment.objective) {
-				await this.waitForObjective(segment.objective);
+				await this.runObjectiveWithRetry(segment);
 			}
 
 			this.mapScene.hideTutorialTarget();
@@ -78,8 +81,37 @@ export class TutorialRunner {
 	}
 
 	/**
-	 * Overlay is genuinely shown (blocking MapScene's input entirely, via
-	 * the same overlays.isOpen check every scene handler already respects)
+	 * Waits for the objective, but if failZones is set, a wrong-tile
+	 * landing plays failLine and resets the player back to exactly
+	 * where they stood before this specific attempt — captured once,
+	 * before the first try, not re-captured after every failure (or
+	 * a second failure would reset to the first failure's spot, not
+	 * the segment's actual start).
+	 */
+	private async runObjectiveWithRetry(segment: TutorialSegment): Promise<void> {
+		const startCoord = segment.failZones
+			? this.mapScene.getLocalUnitCoord()
+			: null;
+
+		while (true) {
+			const outcome = await this.waitForOutcome(
+				segment.objective!,
+				segment.failZones,
+			);
+			if (outcome === "met") return;
+
+			if (segment.failLine && segment.failLine.length > 0) {
+				await this.playDialogue(segment.failLine);
+			}
+			if (startCoord) {
+				this.mapScene.resetLocalUnitToCoord(startCoord);
+			}
+			// Loop — same objective, same pointer/targetTile still showing.
+		}
+	}
+
+	/**
+	 * Overlay is genuinely shown (blocking MapScene's input entirely)
 	 * only for the duration of actual dialogue, then hidden immediately
 	 * after — never left up during an objective.
 	 */
@@ -90,20 +122,40 @@ export class TutorialRunner {
 		this.game.overlays.hide();
 	}
 
-	private waitForObjective(objective: TutorialObjective): Promise<void> {
+	private waitForOutcome(
+		objective: TutorialObjective,
+		failZones?: GridCoord[],
+	): Promise<"met" | "failed"> {
 		this.activeObjective = objective;
+		this.activeFailZones = failZones ?? null;
 		return new Promise((resolve) => {
-			this.pendingObjectiveResolve = resolve;
+			this.pendingResolve = resolve;
 		});
 	}
 
 	private handleEvent(event: TutorialEvent): void {
-		if (!this.activeObjective || !this.pendingObjectiveResolve) return;
+		if (!this.activeObjective || !this.pendingResolve) return;
+
+		if (this.activeFailZones && event.type === "moved") {
+			const hitFailZone = this.activeFailZones.some(
+				(z) => z.x === event.finalCoord.x && z.y === event.finalCoord.y,
+			);
+			if (hitFailZone) {
+				const resolve = this.pendingResolve;
+				this.activeObjective = null;
+				this.activeFailZones = null;
+				this.pendingResolve = null;
+				resolve("failed");
+				return;
+			}
+		}
+
 		if (!this.activeObjective.isMet(event)) return;
 
-		const resolve = this.pendingObjectiveResolve;
+		const resolve = this.pendingResolve;
 		this.activeObjective = null;
-		this.pendingObjectiveResolve = null;
-		resolve();
+		this.activeFailZones = null;
+		this.pendingResolve = null;
+		resolve("met");
 	}
 }

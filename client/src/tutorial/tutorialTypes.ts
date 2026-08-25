@@ -88,6 +88,17 @@ export interface TutorialSegment {
 	targetTile?: GridCoord;
 	/** If set, a bobbing arrow points at this UI element for as long as this segment's objective is active — tracked live every frame. */
 	uiPointer?: TutorialUiPointerTarget;
+	/**
+	 * Coordinates that count as a genuine wrong choice, not just "not
+	 * there yet" — e.g. walking toward the decorative enemy prop. If a
+	 * "moved" event's finalCoord lands on one of these, the segment
+	 * doesn't just keep waiting: it plays failLine, resets the player
+	 * back to where they stood before this attempt, and re-arms the
+	 * same objective for another try.
+	 */
+	failZones?: GridCoord[];
+	/** Shown (with whatever portrait the line specifies — typically the disappointed one) when a failZone is hit. */
+	failLine?: DialogueLine[];
 	objective: TutorialObjective | null;
 	confirm: DialogueLine[];
 }

@@ -1,13 +1,22 @@
-import { Container, Graphics, Text } from "pixi.js";
+import { Container, Graphics, Sprite, Text } from "pixi.js";
 import type { Overlay } from "@/core/overlays/Overlay";
 import type { Game } from "@/core/game/Game";
 import { computeUiScale, uiPx } from "@/math/uiScale";
 import type { DialogueLine } from "@/tutorial/dialogue";
+import {
+	hasRealPortrait,
+	loadPortraitTexture,
+	needsFlipForSide,
+} from "@/ui/portraits";
 
-const STRIP_HEIGHT = 150;
-const PORTRAIT_SIZE = 110;
-const MARGIN = 20;
+const STRIP_HEIGHT = 160;
+const PORTRAIT_TARGET_HEIGHT = 340;
+const PLACEHOLDER_SIZE = 110;
+const MARGIN = 24;
+const TEXT_PORTRAIT_GAP = 24;
 const ADVANCE_CARET_PULSE_SPEED = 0.005;
+/** DialogueOverlay currently only ever renders a portrait on the right — needsFlipForSide is called against this constant. When left-side speakers (per the initiator/recipient design) actually get built, this becomes a per-line value instead. */
+const PORTRAIT_SIDE = "right" as const;
 
 const PLACEHOLDER_COLORS: Record<string, number> = {
 	narrator: 0x4a9eff,
@@ -19,11 +28,14 @@ function colorForPortrait(portraitId: string): number {
 }
 
 /**
- * Bottom-strip narrator/dialogue system — a portrait, a speaker name,
- * and word-wrapped text, tap-anywhere-on-the-strip to advance. Never
- * covers the full screen. Deliberately generic: tutorials, the
- * eventual shop, and story mode all drive this same overlay with the
- * same DialogueLine shape.
+ * Talking-head dialogue system — a large portrait standing on the
+ * right, visibly taller than the strip itself so it reads as a
+ * character standing behind/on top of it rather than boxed inside it.
+ * The strip runs the full screen width behind the portrait. Tap
+ * anywhere on the strip to advance. Portrait art comes from the
+ * glob-based factory in tutorial/portraits.ts — no hardcoded per-file
+ * imports here, and any character with no real art yet falls back to
+ * a colored placeholder automatically.
  * @author ShaAnder
  */
 export class DialogueOverlay implements Overlay {
@@ -31,8 +43,9 @@ export class DialogueOverlay implements Overlay {
 	readonly blocksEscape = true;
 
 	private strip = new Graphics();
-	private portraitBg = new Graphics();
-	private portraitLabel!: Text;
+	private portraitSprite: Sprite | null = null;
+	private placeholderBg = new Graphics();
+	private placeholderLabel!: Text;
 	private nameText!: Text;
 	private bodyText!: Text;
 	private advanceCaret!: Text;
@@ -40,21 +53,26 @@ export class DialogueOverlay implements Overlay {
 
 	private caretElapsedMs = 0;
 	private advanceResolve: (() => void) | null = null;
+	/** Width (design px) the currently-shown portrait actually occupies at PORTRAIT_TARGET_HEIGHT — text wrap width is computed against this per-line, since different expressions/characters can be genuinely different widths at the same target height. */
+	private currentPortraitWidth = PLACEHOLDER_SIZE;
 
 	constructor(private game: Game) {
 		this.view.addChild(this.strip);
-		this.view.addChild(this.portraitBg);
 
-		this.portraitLabel = new Text({
+		this.placeholderBg.visible = false;
+		this.view.addChild(this.placeholderBg);
+
+		this.placeholderLabel = new Text({
 			text: "",
 			style: { fill: 0xffffff, fontSize: 48, fontWeight: "bold" },
 		});
-		this.portraitLabel.anchor.set(0.5);
-		this.view.addChild(this.portraitLabel);
+		this.placeholderLabel.anchor.set(0.5);
+		this.placeholderLabel.visible = false;
+		this.view.addChild(this.placeholderLabel);
 
 		this.nameText = new Text({
 			text: "",
-			style: { fill: 0xffd700, fontSize: 18, fontWeight: "bold" },
+			style: { fill: 0xffd700, fontSize: 26, fontWeight: "bold" },
 		});
 		this.view.addChild(this.nameText);
 
@@ -62,17 +80,17 @@ export class DialogueOverlay implements Overlay {
 			text: "",
 			style: {
 				fill: 0xffffff,
-				fontSize: 16,
+				fontSize: 24,
 				wordWrap: true,
 				wordWrapWidth: 600,
-				lineHeight: 22,
+				lineHeight: 32,
 			},
 		});
 		this.view.addChild(this.bodyText);
 
 		this.advanceCaret = new Text({
 			text: "▼",
-			style: { fill: 0xaaaaaa, fontSize: 16 },
+			style: { fill: 0xaaaaaa, fontSize: 18 },
 		});
 		this.advanceCaret.anchor.set(0.5);
 		this.view.addChild(this.advanceCaret);
@@ -106,18 +124,41 @@ export class DialogueOverlay implements Overlay {
 
 	async playLines(lines: DialogueLine[]): Promise<void> {
 		for (const line of lines) {
-			this.showLine(line);
+			await this.showLine(line);
 			await this.waitForAdvance();
 		}
 	}
 
-	private showLine(line: DialogueLine): void {
+	private async showLine(line: DialogueLine): Promise<void> {
 		this.nameText.text = line.speaker;
 		this.bodyText.text = line.text;
-		this.portraitLabel.text = line.speaker.charAt(0).toUpperCase();
-		this.portraitBg.clear();
-		this.portraitBg.roundRect(0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE, 8);
-		this.portraitBg.fill(colorForPortrait(line.portraitId));
+
+		if (hasRealPortrait(line.portraitId)) {
+			this.placeholderBg.visible = false;
+			this.placeholderLabel.visible = false;
+
+			const texture = await loadPortraitTexture(line.portraitId);
+			if (!this.portraitSprite) {
+				this.portraitSprite = new Sprite();
+				this.portraitSprite.anchor.set(1, 1);
+				this.view.addChild(this.portraitSprite);
+			}
+			this.portraitSprite.texture = texture;
+			const baseScale = PORTRAIT_TARGET_HEIGHT / texture.height;
+			const flip = needsFlipForSide(line.portraitId, PORTRAIT_SIDE);
+			this.portraitSprite.scale.set(flip ? -baseScale : baseScale, baseScale);
+			this.currentPortraitWidth = texture.width * baseScale;
+		} else {
+			if (this.portraitSprite) this.portraitSprite.visible = false;
+			this.placeholderBg.visible = true;
+			this.placeholderLabel.visible = true;
+			this.placeholderLabel.text = line.speaker.charAt(0).toUpperCase();
+			this.placeholderBg.clear();
+			this.placeholderBg.roundRect(0, 0, PLACEHOLDER_SIZE, PLACEHOLDER_SIZE, 8);
+			this.placeholderBg.fill(colorForPortrait(line.portraitId));
+			this.currentPortraitWidth = PLACEHOLDER_SIZE;
+		}
+
 		this.layout(this.game.app.screen.width, this.game.app.screen.height);
 	}
 
@@ -135,31 +176,42 @@ export class DialogueOverlay implements Overlay {
 	private layout(width: number, height: number): void {
 		const s = computeUiScale(width, height);
 		const stripH = uiPx(STRIP_HEIGHT, s);
-		const portraitSize = uiPx(PORTRAIT_SIZE, s);
 		const margin = uiPx(MARGIN, s);
+		const gap = uiPx(TEXT_PORTRAIT_GAP, s);
 		const stripY = height - stripH;
 
 		this.strip.clear();
 		this.strip.rect(0, stripY, width, stripH);
 		this.strip.fill({ color: 0x0a0a0a, alpha: 0.92 });
 
-		this.portraitBg.x = margin;
-		this.portraitBg.y = stripY + (stripH - portraitSize) / 2;
-		this.portraitBg.scale.set(s);
+		const portraitW = uiPx(this.currentPortraitWidth, s);
+		if (this.portraitSprite && this.portraitSprite.texture) {
+			this.portraitSprite.visible = true;
+			const flipped = this.portraitSprite.scale.x < 0;
+			const targetH = uiPx(PORTRAIT_TARGET_HEIGHT, s);
+			const mag = targetH / this.portraitSprite.texture.height;
+			this.portraitSprite.scale.set(flipped ? -mag : mag, mag);
+			this.portraitSprite.x = width - margin * 0.4;
+			this.portraitSprite.y = height;
+		} else {
+			const placeholderSize = uiPx(PLACEHOLDER_SIZE, s);
+			this.placeholderBg.x = width - margin - placeholderSize;
+			this.placeholderBg.y = stripY + (stripH - placeholderSize) / 2;
+			this.placeholderBg.scale.set(s);
+			this.placeholderLabel.x = width - margin - placeholderSize / 2;
+			this.placeholderLabel.y = stripY + stripH / 2;
+			this.placeholderLabel.scale.set(s);
+		}
 
-		this.portraitLabel.x = margin + portraitSize / 2;
-		this.portraitLabel.y = stripY + stripH / 2;
-		this.portraitLabel.scale.set(s);
-
-		const textX = margin + portraitSize + margin;
-		this.nameText.x = textX;
+		this.nameText.x = margin;
 		this.nameText.y = stripY + margin;
 		this.nameText.scale.set(s);
 
-		this.bodyText.x = textX;
-		this.bodyText.y = stripY + margin + uiPx(30, s);
+		this.bodyText.x = margin;
+		this.bodyText.y = stripY + margin + uiPx(40, s);
 		this.bodyText.scale.set(s);
-		this.bodyText.style.wordWrapWidth = (width - textX - margin * 2) / s;
+		const portraitLeftEdge = width - margin * 0.4 - portraitW;
+		this.bodyText.style.wordWrapWidth = (portraitLeftEdge - gap - margin) / s;
 
 		this.advanceCaret.x = width - margin - uiPx(10, s);
 		this.advanceCaret.y = height - uiPx(16, s);
