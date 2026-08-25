@@ -381,8 +381,17 @@ export class PlayZone {
 	}
 
 	/** Global center of the zone itself — used by tutorial UI pointers. */
+	/**
+	 * Global position of the zone's TOP edge, not its exact center —
+	 * used by tutorial UI pointers. PlayZone always sits at screen
+	 * center, and the player's own token can end up near there too
+	 * depending on camera state — pointing at the exact midpoint risked
+	 * visually coinciding with whatever else occupies that region.
+	 * Targeting the top edge keeps real, deliberate separation.
+	 */
 	getZoneScreenPosition(): { x: number; y: number } {
-		return this.view.getGlobalPosition();
+		const center = this.view.getGlobalPosition();
+		return { x: center.x, y: center.y - ZONE_HEIGHT / 2 };
 	}
 
 	/** Global position of the "No Card" / skip button — used by tutorial UI pointers. */

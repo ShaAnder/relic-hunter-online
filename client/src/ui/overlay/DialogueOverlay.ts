@@ -299,7 +299,7 @@ export class DialogueOverlay implements Overlay {
 		this.advanceCaret.scale.set(s);
 
 		this.hitArea.clear();
-		this.hitArea.rect(0, stripY, width, stripH);
+		this.hitArea.rect(0, 0, width, height);
 		this.hitArea.fill({ color: 0xffffff, alpha: 0.001 });
 	}
 }

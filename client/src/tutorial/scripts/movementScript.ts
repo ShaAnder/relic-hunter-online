@@ -123,7 +123,7 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 				"Kessler",
 				"kessler-disappoint",
 				"right",
-				"Not that way. Whatever's down there, you don't want its attention yet.",
+				"Not that way, the yellow marker, kid...",
 				"Look, let's try that again.",
 			),
 			objective: {
@@ -161,7 +161,8 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 				"kessler-neutral",
 				"right",
 				"Now here's the actual problem.",
-				"Whatever's down that stem is watching. Wide open ground between us — you're not walking that on your own two legs, not in one turn.",
+				"Whatever's down that stem is watching. You end up in the open and it won't end pretty",
+				"So we do this once and we do it right, point A-B easy as that",
 				"Here, take this.",
 			),
 			giveCard: {
@@ -190,13 +191,12 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 				"Play that card by dragging it into the zone there, then get moving.",
 			),
 			targetTile: MID_TARGET,
-			uiPointer: { kind: "playZone", side: "up" },
 			failZones: STEM_DANGER_ZONE,
 			failLine: linesFor(
 				"Kessler",
 				"kessler-disappoint",
 				"right",
-				"You're drifting toward the stem again. Stay on course.",
+				"What did i tell you, wrong way.",
 				"Look, let's try that again.",
 			),
 			objective: {
@@ -233,7 +233,6 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 				"Rest of the way's on your own two feet. Drag it into the zone there, then send it across. Come on.",
 			),
 			targetTile: NEAR_KESSLER_TARGET,
-			uiPointer: { kind: "playZone", side: "up" },
 			failZones: STEM_DANGER_ZONE,
 			failLine: linesFor(
 				"Kessler",

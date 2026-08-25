@@ -163,6 +163,8 @@ export class MapScene implements Scene {
 	private pendingMoveUsedCard = false;
 	private tutorialTargetMarker = new Container();
 	private tutorialTargetElapsedMs = 0;
+	/** Whether the target marker is logically "on" right now — tracked separately from tutorialTargetMarker.visible itself, since setHudVisible also toggles that same property and reading it back would corrupt the real state. */
+	private tutorialTargetActive = false;
 	private staticActorCoords: RH.GridCoord[] = [];
 
 	private uiPointerMarker = new Container();
@@ -2522,18 +2524,30 @@ export class MapScene implements Scene {
 	 * update() — update() itself early-returns the instant an overlay
 	 * is open, so it never runs while dialogue is actually showing.
 	 */
-	setHudVisible(visible: boolean): void {
-		const alpha = visible ? 1 : 0.12;
-		this.characterPanel.view.alpha = alpha;
-		this.deckTracker.view.alpha = alpha;
-		this.inventoryPanel.view.alpha = alpha;
-		this.bagButton.view.alpha = alpha;
-		this.buttonBar.view.alpha = alpha;
-		this.refocusButton.view.alpha = alpha;
-		this.logPanel.view.alpha = alpha;
-		this.inspectButton.view.alpha = alpha;
-		this.hand.view.alpha = alpha;
-		this.playZone.view.alpha = alpha;
+	/**
+	 * visible=false, not alpha — alpha only hides rendering, an
+	 * interactive child underneath a zero-alpha element can still be
+	 * hit-tested and fire on tap/click. visible=false skips both
+	 * rendering and hit-testing entirely: a clean, fully-inert HUD
+	 * during dialogue, not just an invisible one still capable of
+	 * responding to input underneath the overlay. This is a hand-listed
+	 * hack for now — see docs/known-issues-and-suggestions.md for the
+	 * planned UI-factory approach that would make this a single call
+	 * at the source instead of a maintained list here.
+	 */
+	setHudVisible(isVisible: boolean): void {
+		this.characterPanel.view.visible = isVisible;
+		this.deckTracker.view.visible = isVisible;
+		this.inventoryPanel.view.visible = isVisible;
+		this.bagButton.view.visible = isVisible;
+		this.buttonBar.view.visible = isVisible;
+		this.refocusButton.view.visible = isVisible;
+		this.logPanel.view.visible = isVisible;
+		this.inspectButton.view.visible = isVisible;
+		this.hand.view.visible = isVisible;
+		this.playZone.view.visible = isVisible;
+		this.uiPointerMarker.visible = isVisible && !!this.activeUiPointerTarget;
+		this.tutorialTargetMarker.visible = isVisible && this.tutorialTargetActive;
 	}
 
 	getLocalUnitCoord(): RH.GridCoord {
@@ -2593,10 +2607,12 @@ export class MapScene implements Scene {
 
 		this.tutorialTargetElapsedMs = 0;
 		this.tutorialTargetMarker.visible = true;
+		this.tutorialTargetActive = true;
 	}
 
 	hideTutorialTarget(): void {
 		this.tutorialTargetMarker.visible = false;
+		this.tutorialTargetActive = false;
 	}
 
 	/**

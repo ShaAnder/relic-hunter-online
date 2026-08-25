@@ -57,13 +57,10 @@ export interface TutorialObjective {
 /**
  * A screen-space UI element a tutorial segment can point a bobbing
  * arrow at — distinct from targetTile (a fixed map coordinate), since
- * these positions can move frame to frame (a hand card shifting as it
- * splays, an ActionMenu submenu toggling). Each variant maps to one
- * small query method already added to the relevant component. `side`
- * is required, not defaulted — the right side genuinely depends on
- * context (skipButton needs "down" so it doesn't collide with
- * PlayZone above it; actionButton needs "left" so it doesn't collide
- * with neighboring stacked rows), not something safe to guess per-kind.
+ * these positions can move frame to frame. `side` is required — the
+ * right side genuinely depends on context (skipButton needs "down" so
+ * it doesn't collide with PlayZone above it; actionButton needs "left"
+ * so it doesn't collide with neighboring stacked rows).
  */
 export type TutorialUiPointerTarget = (
 	| { kind: "actionButton"; key: RowKey }
@@ -74,6 +71,33 @@ export type TutorialUiPointerTarget = (
 ) & { side: "up" | "down" | "left" | "right" };
 
 /**
+ * Live counters TutorialRunner maintains as a script actually plays
+ * out — the "variables" a script can react to. Deliberately just two
+ * generic counters for now (a running total, and a per-segment
+ * breakdown) rather than a large bespoke state object per script;
+ * add fields here only once a real script needs something these two
+ * genuinely can't express.
+ */
+export interface TutorialState {
+	/** How many times ANY segment in this script has failed so far. */
+	totalFailures: number;
+	/** Per-segment failure counts, keyed by segment id. */
+	failuresBySegment: Record<string, number>;
+}
+
+/**
+ * Anywhere a script provides dialogue lines, it can give either a
+ * plain static array (the common case) or a function that receives
+ * the live TutorialState and returns the lines to show — the actual
+ * "variable injection" mechanism. E.g. an outro segment can check
+ * state.totalFailures and return a different closing line for a
+ * player who struggled versus one who didn't.
+ */
+export type DialogueSource =
+	| DialogueLine[]
+	| ((state: TutorialState) => DialogueLine[]);
+
+/**
  * One beat of a tutorial: narrator sets up the moment, player does the
  * thing (or, if objective is null, nothing is required and the runner
  * auto-advances after intro), narrator confirms, then the next
@@ -81,8 +105,8 @@ export type TutorialUiPointerTarget = (
  */
 export interface TutorialSegment {
 	id: string;
-	intro: DialogueLine[];
-	/** If set, handed to the player's hand (via MapScene.giveCard) right after intro plays, before the objective becomes active. */
+	intro: DialogueSource;
+	/** If set, handed to the player's hand (via MapScene.giveCard) right after intro plays, before the objective becomes active. Only fires once, before the first attempt — see retryCard for the failed-attempt case. */
 	giveCard?: CardData;
 	/** If set, MapScene highlights this tile (glow + bobbing arrow) for as long as this segment's objective is active. */
 	targetTile?: GridCoord;
@@ -90,17 +114,25 @@ export interface TutorialSegment {
 	uiPointer?: TutorialUiPointerTarget;
 	/**
 	 * Coordinates that count as a genuine wrong choice, not just "not
-	 * there yet" — e.g. walking toward the decorative enemy prop. If a
-	 * "moved" event's finalCoord lands on one of these, the segment
-	 * doesn't just keep waiting: it plays failLine, resets the player
-	 * back to where they stood before this attempt, and re-arms the
-	 * same objective for another try.
+	 * there yet". If a "moved" event's finalCoord lands on one of
+	 * these, the segment doesn't just keep waiting: it plays failLine,
+	 * resets the player back to where they stood before this attempt,
+	 * and re-arms the same objective for another try.
 	 */
 	failZones?: GridCoord[];
-	/** Shown (with whatever portrait the line specifies — typically the disappointed one) when a failZone is hit. */
-	failLine?: DialogueLine[];
+	/** Shown when a failure occurs. Falls back to a generic retry nudge if this segment doesn't author its own. */
+	failLine?: DialogueSource;
+	/**
+	 * Re-given on every failed retry of THIS segment specifically —
+	 * distinct from giveCard, which only fires once. Needed whenever
+	 * the segment's own objective requires a card that was already
+	 * consumed attempting the move — playing a card removes it from
+	 * the hand the moment it's played, whether the resulting move was
+	 * the right one or not.
+	 */
+	retryCard?: CardData;
 	objective: TutorialObjective | null;
-	confirm: DialogueLine[];
+	confirm: DialogueSource;
 }
 
 /** A tutorial's own small, purpose-built map — deliberately tiny and seeded for reproducibility, not the real game's procedural sizing. */

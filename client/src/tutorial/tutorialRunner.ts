@@ -3,11 +3,13 @@ import { MapScene } from "@/scenes/MapScene";
 import { DialogueOverlay } from "@/ui/overlay/DialogueOverlay";
 import type { DialogueLine } from "@/tutorial/dialogue";
 import type {
+	DialogueSource,
 	TutorialConfig,
 	TutorialEvent,
 	TutorialObjective,
 	TutorialScript,
 	TutorialSegment,
+	TutorialState,
 } from "@/tutorial/tutorialTypes";
 
 const DEFAULT_FAIL_LINE: DialogueLine[] = [
@@ -26,18 +28,21 @@ const DEFAULT_FAIL_LINE: DialogueLine[] = [
  * objective (overlay hidden, HUD restored, MapScene fully
  * interactive), then confirm dialogue.
  *
+ * Maintains a live TutorialState (failure counters) as the script
+ * plays out — any of a segment's intro/failLine/confirm can be either
+ * a plain DialogueLine[] or a function receiving that state, so a
+ * script can genuinely react to how the player's actually doing (e.g.
+ * a different outro line if they struggled versus if they didn't).
+ *
  * Any segment with a targetTile and/or failZones is a genuinely gated
  * move — a "moved" event that doesn't satisfy the objective isn't
  * just silently ignored while the runner keeps waiting forever. It
- * counts as a real wrong choice: plays a fail line (the segment's own
- * failLine if it authored one for that specific wrong move, otherwise
- * a generic retry nudge), resets the player back to exactly where
- * this attempt started, and re-arms the same objective. A player
- * can't wander the map trying every tile until one happens to work —
- * every move-based segment is strict by default. Segments with
- * neither targetTile nor failZones (press this button, tap that
- * option) have no "wrong way" to begin with, so they're unaffected —
- * they just keep waiting for the right event type.
+ * counts as a real wrong choice: increments the failure counters,
+ * plays a fail line, resets the player back to exactly where this
+ * attempt started (re-giving retryCard if the segment needs one),
+ * and re-arms the same objective. Segments with neither targetTile
+ * nor failZones have no "wrong way" to begin with, so they're
+ * unaffected.
  *
  * MapScene never imports this class or knows it exists.
  * @author ShaAnder
@@ -45,6 +50,11 @@ const DEFAULT_FAIL_LINE: DialogueLine[] = [
 export class TutorialRunner {
 	private dialogueOverlay: DialogueOverlay;
 	private mapScene!: MapScene;
+
+	private state: TutorialState = {
+		totalFailures: 0,
+		failuresBySegment: {},
+	};
 
 	private activeSegment: TutorialSegment | null = null;
 	private activeObjective: TutorialObjective | null = null;
@@ -100,12 +110,17 @@ export class TutorialRunner {
 		this.onComplete();
 	}
 
+	/** Resolves a DialogueSource against the live state — the actual "variable injection": a function source gets called with the current TutorialState right before its lines are needed, a plain array passes through unchanged. */
+	private resolveLines(source: DialogueSource): DialogueLine[] {
+		return typeof source === "function" ? source(this.state) : source;
+	}
+
 	/**
 	 * Waits for the objective. A "failed" outcome (any wrong move on a
-	 * move-gated segment — see class doc) plays a fail line and resets
-	 * the player back to exactly where they stood before this specific
-	 * attempt — captured once, before the first try, not re-captured
-	 * after every failure.
+	 * move-gated segment — see class doc) increments the failure
+	 * counters, plays a fail line, re-gives retryCard if set, and
+	 * resets the player back to exactly where they stood before this
+	 * specific attempt — captured once, before the first try.
 	 */
 	private async runObjectiveWithRetry(segment: TutorialSegment): Promise<void> {
 		const isMoveGated = !!(segment.targetTile || segment.failZones);
@@ -115,16 +130,22 @@ export class TutorialRunner {
 			const outcome = await this.waitForOutcome(segment);
 			if (outcome === "met") return;
 
-			const failLine =
-				segment.failLine && segment.failLine.length > 0
-					? segment.failLine
-					: isMoveGated
-						? DEFAULT_FAIL_LINE
-						: [];
+			this.state.totalFailures += 1;
+			this.state.failuresBySegment[segment.id] =
+				(this.state.failuresBySegment[segment.id] ?? 0) + 1;
+
+			const failLine = segment.failLine
+				? this.resolveLines(segment.failLine)
+				: isMoveGated
+					? DEFAULT_FAIL_LINE
+					: [];
 			await this.playDialogue(failLine);
 
 			if (startCoord) {
 				this.mapScene.resetLocalUnitToCoord(startCoord);
+			}
+			if (segment.retryCard) {
+				this.mapScene.giveCard(segment.retryCard);
 			}
 			// Loop — same objective, same pointer/targetTile still showing.
 		}
@@ -137,7 +158,8 @@ export class TutorialRunner {
 	 * objective, since MapScene's own update() stops running the
 	 * instant an overlay is open and can't drive the fade itself.
 	 */
-	private async playDialogue(lines: DialogueLine[]): Promise<void> {
+	private async playDialogue(source: DialogueSource): Promise<void> {
+		const lines = this.resolveLines(source);
 		if (lines.length === 0) return;
 		this.mapScene.setHudVisible(false);
 		await this.game.overlays.show(this.dialogueOverlay);
@@ -164,12 +186,6 @@ export class TutorialRunner {
 			return;
 		}
 
-		// Any "moved" event that didn't satisfy isMet, on a segment that
-		// actually cares where the player ends up, is a genuine wrong
-		// choice — not just the specific tiles hand-listed in
-		// failZones. This is what makes every move segment strict by
-		// default rather than a soft suggestion a player can ignore
-		// indefinitely.
 		if (
 			event.type === "moved" &&
 			(this.activeSegment.targetTile || this.activeSegment.failZones)
