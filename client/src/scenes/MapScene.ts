@@ -2514,43 +2514,39 @@ export class MapScene implements Scene {
 		this.cardDrawQueue.enqueue(card);
 	}
 
-	/** Current grid position of the local player — used by TutorialRunner to remember where an attempt started, so a failure can reset back to exactly that spot. */
 	/**
-	 * Fades every HUD element while dialogue is showing — input's
-	 * already blocked via overlays.isOpen everywhere in this file, but
-	 * a fully-interactive-looking board sitting right behind a talking
-	 * narrator was real, reported confusion. Called explicitly by
-	 * TutorialRunner around each dialogue beat, not driven from
-	 * update() — update() itself early-returns the instant an overlay
-	 * is open, so it never runs while dialogue is actually showing.
-	 */
-	/**
-	 * visible=false, not alpha — alpha only hides rendering, an
-	 * interactive child underneath a zero-alpha element can still be
-	 * hit-tested and fire on tap/click. visible=false skips both
-	 * rendering and hit-testing entirely: a clean, fully-inert HUD
-	 * during dialogue, not just an invisible one still capable of
-	 * responding to input underneath the overlay. This is a hand-listed
-	 * hack for now — see docs/known-issues-and-suggestions.md for the
-	 * planned UI-factory approach that would make this a single call
-	 * at the source instead of a maintained list here.
+	 * visible=false, not alpha — alpha only hides rendering; an interactive
+	 * child under a zero-alpha element can still be hit-tested. visible=false
+	 * skips both rendering and hits.
+	 *
+	 * Toggle panels (inventory / log / hunter summary) and PlayZone own their
+	 * own .view.visible via open state / show-hide. Never force those to true
+	 * here — that is what made them pop open after every dialogue beat.
+	 * On hide, close them so nothing peeks under the overlay.
 	 */
 	setHudVisible(isVisible: boolean): void {
 		this.characterPanel.view.visible = isVisible;
 		this.deckTracker.view.visible = isVisible;
-		this.inventoryPanel.view.visible = isVisible;
 		this.bagButton.view.visible = isVisible;
 		this.buttonBar.view.visible = isVisible;
 		this.refocusButton.view.visible = isVisible;
-		this.logPanel.view.visible = isVisible;
 		this.logsButton.view.visible = isVisible;
 		this.inspectButton.view.visible = isVisible;
 		this.hand.view.visible = isVisible;
-		this.playZone.view.visible = isVisible;
+
+		if (!isVisible) {
+			if (this.inventoryPanel.isOpen) this.inventoryPanel.close();
+			if (this.logPanel.isOpen) this.logPanel.toggle();
+			if (this.hunterSummaryPanel.isOpen) this.hunterSummaryPanel.toggle();
+			this.playZone.hide();
+		} else if (this.hand.isSelecting) {
+			// Dialogue hid the zone; selection is still active — put it back
+			this.playZone.show();
+		}
+
 		this.uiPointerMarker.visible = isVisible && !!this.activeUiPointerTarget;
 		this.tutorialTargetMarker.visible = isVisible && this.tutorialTargetActive;
 	}
-
 	getLocalUnitCoord(): RH.GridCoord {
 		return this.localUnit.state.coord;
 	}
