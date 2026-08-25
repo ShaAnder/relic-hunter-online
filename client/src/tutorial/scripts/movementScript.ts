@@ -259,14 +259,22 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 		},
 		{
 			id: "outro",
-			intro: linesFor(
-				"Kessler",
-				"kessler-approve",
-				"right",
-				"Congratulations. You now know how to move.",
-				"Everything else you'll learn out here builds on exactly that. Go on.",
-				"Maybe there's hope for you yet... thank god I didn't need to bring out the yellow paint.",
-			),
+			intro: (state) =>
+				state.totalFailures > 0
+					? linesFor(
+							"Kessler",
+							"kessler-disappoint",
+							"right",
+							"Oh, so another one where I'm gonna need to break out the yellow paint.",
+							"Still — you got there in the end. That's movement covered.",
+						)
+					: linesFor(
+							"Kessler",
+							"kessler-approve",
+							"right",
+							"Good job kid. We might make something out of you yet.",
+							"That's movement covered.",
+						),
 			objective: null,
 			confirm: [],
 		},

@@ -2543,6 +2543,7 @@ export class MapScene implements Scene {
 		this.buttonBar.view.visible = isVisible;
 		this.refocusButton.view.visible = isVisible;
 		this.logPanel.view.visible = isVisible;
+		this.logsButton.view.visible = isVisible;
 		this.inspectButton.view.visible = isVisible;
 		this.hand.view.visible = isVisible;
 		this.playZone.view.visible = isVisible;
