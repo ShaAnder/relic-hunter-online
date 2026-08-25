@@ -192,11 +192,19 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 			),
 			targetTile: MID_TARGET,
 			failZones: STEM_DANGER_ZONE,
+			retryCard: {
+				id: CARD_ID,
+				color: "blue",
+				name: "Move +3",
+				value: 3,
+				description: "+3 Movement",
+				actionType: "move",
+			},
 			failLine: linesFor(
 				"Kessler",
 				"kessler-disappoint",
 				"right",
-				"What did i tell you, wrong way.",
+				"WOAH what are you doing kid, not there, that thing won't play around.",
 				"Look, let's try that again.",
 			),
 			objective: {
@@ -230,7 +238,7 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 				"Kessler",
 				"kessler-neutral",
 				"right",
-				"Rest of the way's on your own two feet. Drag it into the zone there, then send it across. Come on.",
+				"Rest of the way's on your own two feet. Come on.",
 			),
 			targetTile: NEAR_KESSLER_TARGET,
 			failZones: STEM_DANGER_ZONE,
@@ -238,7 +246,7 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 				"Kessler",
 				"kessler-disappoint",
 				"right",
-				"Not toward me, toward the stem? Come on, focus.",
+				"No, toward me, not the stem? Come on, focus.",
 				"Look, let's try that again.",
 			),
 			objective: {
@@ -265,8 +273,8 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 							"Kessler",
 							"kessler-disappoint",
 							"right",
-							"Oh, so another one where I'm gonna need to break out the yellow paint.",
-							"Still — you got there in the end. That's movement covered.",
+							"Well you got there in the end. That's movement covered...",
+							"Though i hope I don't need to break out the yellow paint going forward.",
 						)
 					: linesFor(
 							"Kessler",

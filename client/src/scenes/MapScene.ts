@@ -539,13 +539,16 @@ export class MapScene implements Scene {
 				const bob = Math.abs(Math.sin(t * 0.005)) * 8;
 				// actionButton (the only left/right consumer) is 130px
 				// wide — 65px half-width — so a flat 40px offset landed
-				// the arrow inside the button's own bounds. Vertical
-				// targets (cards, skipButton, PlayZone) are all smaller,
-				// 40px clears them fine.
+				// the arrow inside the button's own bounds. cardDrawStack
+				// presents at 1.35x scale — genuinely taller than a normal
+				// hand card, skipButton, or PlayZone — so 40px landed the
+				// arrow inside that card specifically too.
 				const isHorizontal =
 					this.activeUiPointerTarget.side === "left" ||
 					this.activeUiPointerTarget.side === "right";
-				const offset = (isHorizontal ? 85 : 40) + bob;
+				const isTallTarget =
+					this.activeUiPointerTarget.kind === "cardDrawStack";
+				const offset = (isHorizontal ? 85 : isTallTarget ? 90 : 40) + bob;
 
 				this.uiPointerMarker.visible = true;
 				this.uiPointerMarker.alpha = 0.6 + Math.abs(Math.sin(t * 0.004)) * 0.4;
