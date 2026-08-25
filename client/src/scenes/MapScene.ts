@@ -9,7 +9,7 @@ import {
 	TILE_HEIGHT,
 } from "@/math/isoGridMath";
 import { computeUiScale, uiPx } from "@/math/uiScale";
-import { Mercenary } from "@/entities/Mercenary";
+import { Mercenary, interpolatePolyline } from "@/entities/Mercenary";
 import { Chest } from "@/entities/Chest";
 
 import * as RH from "@relic-hunter/shared";
@@ -168,6 +168,8 @@ export class MapScene implements Scene {
 	private staticActorCoords: RH.GridCoord[] = [];
 	/** Static actor tokens keyed by label, so a specific one (e.g. "Kessler") can be found again and animated — spawnStaticActors builds this, moveStaticActor reads it. */
 	private tutorialActorTokens: Map<string, Container> = new Map();
+	/** Each static actor's current grid coord, kept in sync as moveStaticActor animates it — needed to compute a real path for the NEXT move. */
+	private tutorialActorCoords: Map<string, RH.GridCoord> = new Map();
 	/** The one controlled, killable monster a combat tutorial spawns — deliberately separate from the normal random-spawn pool in this.monsters (though still added there too, so it's a genuine, targetable entity). */
 	private tutorialMonster: MonsterEntity | null = null;
 
@@ -276,10 +278,6 @@ export class MapScene implements Scene {
 			this.spawnEnemyHunters();
 		}
 		this.spawnStaticActors();
-		if (this.tutorialConfig?.script.tutorialMonster) {
-			const { coord, tier } = this.tutorialConfig.script.tutorialMonster;
-			this.spawnTutorialMonster(coord, tier);
-		}
 
 		// Item popup rides along as a child of the mercenary's own view,
 		// so it moves with the token automatically — no manual per-frame
@@ -1078,6 +1076,7 @@ export class MapScene implements Scene {
 
 			this.mercenaryContainer.addChild(token);
 			this.tutorialActorTokens.set(actor.label, token);
+			this.tutorialActorCoords.set(actor.label, actor.coord);
 		}
 	}
 
@@ -2616,19 +2615,34 @@ export class MapScene implements Scene {
 		durationMs = 900,
 	): Promise<void> {
 		const token = this.tutorialActorTokens.get(label);
-		if (!token) return Promise.resolve();
+		const currentCoord = this.tutorialActorCoords.get(label);
+		if (!token || !currentCoord) return Promise.resolve();
 
-		const startX = token.x;
-		const startY = token.y;
-		const end = gridToScreen(destination);
+		const range = RH.computeMovementRange(
+			this.grid,
+			currentCoord,
+			this.grid.width + this.grid.height,
+			new Set(),
+		);
+		const tilePath = RH.getPathTo(range, destination) ?? [destination];
+		this.tutorialActorCoords.set(label, destination);
+
+		// The whole path as one continuous polyline, not a queue of
+		// separate per-tile tweens — interpolatePolyline (shared with
+		// Mercenary's own movement) finds the correct position for a
+		// SINGLE eased t across the entire route, so there's exactly one
+		// ease-in at the start and one ease-out at the end, not a
+		// stop-start-stop-start jitter at every intermediate tile.
+		const points = [gridToScreen(currentCoord), ...tilePath.map(gridToScreen)];
 
 		return new Promise((resolve) => {
 			const start = performance.now();
 			const frame = (): void => {
 				const t = Math.min(1, (performance.now() - start) / durationMs);
 				const eased = 1 - Math.pow(1 - t, 3);
-				token.x = startX + (end.x - startX) * eased;
-				token.y = startY + (end.y - startY) * eased;
+				const pos = interpolatePolyline(points, eased);
+				token.x = pos.x;
+				token.y = pos.y;
 				if (t < 1) {
 					requestAnimationFrame(frame);
 				} else {
@@ -2657,6 +2671,38 @@ export class MapScene implements Scene {
 	}
 
 	/**
+	 * Animates the tutorial monster along a real, tile-based path to a
+	 * tile adjacent to the player — never onto the player's own tile,
+	 * since that coord is explicitly in the blocked set here (the
+	 * earlier version left it out, which meant the pathfinder had no
+	 * reason not to path the monster directly onto the player). Uses
+	 * the same computeMovementRange/getPathTo real AI monster movement
+	 * already uses, then MonsterToken's own moveAlongPath — same
+	 * genuine tile-based animation the token already has.
+	 */
+	async dashMonsterToPlayer(): Promise<void> {
+		const monster = this.tutorialMonster;
+		if (!monster) return;
+
+		const target = this.localUnit.state.coord;
+		const blocked = new Set<string>([RH.coordKey(target)]);
+		const range = RH.computeMovementRange(
+			this.grid,
+			monster.state.coord,
+			this.grid.width + this.grid.height,
+			blocked,
+		);
+		const landing =
+			RH.findNearestReachableTile(this.grid, range, target, blocked) ??
+			monster.state.coord;
+		const path = RH.getPathTo(range, landing) ?? [];
+		if (path.length === 0) return;
+
+		monster.state.coord = landing;
+		await monster.token.moveAlongPath(path);
+	}
+
+	/**
 	 * Forces the tutorial monster to attack the local player right now
 	 * — bypasses RH.decideMonsterTarget entirely, since a scripted
 	 * tutorial beat needs this to happen on cue, not whenever real AI
@@ -2665,7 +2711,10 @@ export class MapScene implements Scene {
 	 * — a tutorial's guided single-card rounds pass 1 here specifically.
 	 * Fires combatStarted/combatEnded so TutorialRunner can gate on them.
 	 */
-	triggerTutorialMonsterAttack(maxRounds?: number): Promise<void> {
+	triggerTutorialMonsterAttack(
+		maxRounds?: number,
+		availableActions?: RH.CombatAction[],
+	): Promise<void> {
 		const monster = this.tutorialMonster;
 		if (!monster) return Promise.resolve();
 
@@ -2707,7 +2756,7 @@ export class MapScene implements Scene {
 					monster.state.coord,
 					target.state.coord,
 					false,
-					undefined,
+					availableActions,
 					true,
 					false,
 					maxRounds ?? 3,
@@ -3239,7 +3288,8 @@ export class MapScene implements Scene {
 
 	/** Build the local player's RH.MercenaryState. */
 	private spawnMercenary(): RH.MercenaryState {
-		const spawnCoord = this.game.session.playerSpawn ??
+		const spawnCoord = this.tutorialConfig?.script.playerSpawn ??
+			this.game.session.playerSpawn ??
 			RH.findFirstWalkableTile(this.grid) ?? { x: 0, y: 0 };
 
 		const character = this.game.session.character;

@@ -59,6 +59,8 @@ export class TutorialRunner {
 	private activeSegment: TutorialSegment | null = null;
 	private activeObjective: TutorialObjective | null = null;
 	private pendingResolve: ((outcome: "met" | "failed") => void) | null = null;
+	/** Wherever the player stood right before their most recently completed objective — resolved into a spawnMonster's "behindPlayer" sentinel, since a script can't know in advance exactly which tile the player will end up choosing to move to. */
+	private coordBeforeLastObjective: { x: number; y: number } | null = null;
 
 	constructor(
 		private game: Game,
@@ -115,9 +117,23 @@ export class TutorialRunner {
 				);
 			}
 
+			if (segment.spawnMonster) {
+				const coord =
+					segment.spawnMonster.coord === "behindPlayer"
+						? (this.coordBeforeLastObjective ??
+							this.mapScene.getLocalUnitCoord())
+						: segment.spawnMonster.coord;
+				this.mapScene.spawnTutorialMonster(coord, segment.spawnMonster.tier);
+			}
+
+			if (segment.dashMonster) {
+				await this.mapScene.dashMonsterToPlayer();
+			}
+
 			if (segment.triggerCombat) {
 				await this.mapScene.triggerTutorialMonsterAttack(
 					segment.triggerCombat.maxRounds,
+					segment.triggerCombat.availableActions,
 				);
 			}
 
@@ -147,8 +163,9 @@ export class TutorialRunner {
 	 * specific attempt — captured once, before the first try.
 	 */
 	private async runObjectiveWithRetry(segment: TutorialSegment): Promise<void> {
+		this.coordBeforeLastObjective = this.mapScene.getLocalUnitCoord();
 		const isMoveGated = !!(segment.targetTile || segment.failZones);
-		const startCoord = isMoveGated ? this.mapScene.getLocalUnitCoord() : null;
+		const startCoord = isMoveGated ? this.coordBeforeLastObjective : null;
 
 		while (true) {
 			const outcome = await this.waitForOutcome(segment);

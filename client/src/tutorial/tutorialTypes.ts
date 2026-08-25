@@ -151,7 +151,27 @@ export interface TutorialSegment {
 	 * is: nothing here is "wait for the player to do X", it's "make
 	 * this scripted thing happen, then continue".
 	 */
-	triggerCombat?: { maxRounds: number };
+	triggerCombat?: {
+		maxRounds: number;
+		availableActions?: ("attack" | "defend" | "run" | "surrender")[];
+	};
+	/**
+	 * If set, TutorialRunner calls MapScene.spawnTutorialMonster directly
+	 * for this segment — the monster appears on cue, not at scene
+	 * construction. coord can be a fixed GridCoord, or the literal
+	 * string "behindPlayer" — resolved by TutorialRunner to wherever the
+	 * player stood right before their most recently completed objective,
+	 * so the monster genuinely spawns behind them rather than at a fixed
+	 * map coordinate that may or may not still be behind wherever they
+	 * actually ended up.
+	 */
+	spawnMonster?: { coord: GridCoord | "behindPlayer"; tier: MonsterTier };
+	/**
+	 * If set, TutorialRunner awaits MapScene.dashMonsterToPlayer directly
+	 * — a real, tile-based path ending adjacent to (never on top of) the
+	 * player, animated via the monster's own MonsterToken.moveAlongPath.
+	 */
+	dashMonster?: boolean;
 	objective: TutorialObjective | null;
 	confirm: DialogueSource;
 }
@@ -178,8 +198,8 @@ export interface TutorialScript {
 	title: string;
 	debugMap: DebugMapSpec;
 	staticActors?: StaticActorSpec[];
-	/** A single, controlled, genuinely killable monster spawned at match start via MapScene.spawnTutorialMonster — not the normal random-position pool. */
-	tutorialMonster?: { coord: GridCoord; tier: MonsterTier };
+	/** Where the local player spawns, explicitly — falls back to GameSession.playerSpawn, then the map's own first walkable tile, if unset. */
+	playerSpawn?: GridCoord;
 	/** Overrides the test character's base movement stat for this tutorial specifically — doesn't touch the real game's spawn defaults. */
 	playerMovement?: number;
 	segments: TutorialSegment[];

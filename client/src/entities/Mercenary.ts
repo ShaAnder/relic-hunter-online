@@ -127,7 +127,7 @@ export class Mercenary {
 }
 
 /** Point along a polyline at normalized t, constant speed via cumulative segment lengths. */
-function interpolatePolyline(
+export function interpolatePolyline(
 	points: { x: number; y: number }[],
 	t: number,
 ): { x: number; y: number } {
