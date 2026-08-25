@@ -104,7 +104,6 @@ export class BattleOverlay implements Overlay {
 
 	// combat resolution - rounds
 	private currentRound = 1;
-	private readonly maxRounds = 3;
 	private roundInProgress = false;
 	private roundCounterText!: Text;
 
@@ -149,6 +148,7 @@ export class BattleOverlay implements Overlay {
 		private availableActions: CombatAction[] = ACTIONS,
 		private isAttackerMonster: boolean = false,
 		private isDefenderMonster: boolean = false,
+		private readonly maxRounds: number = 3,
 	) {
 		this.localHand = new Hand(this.game.app.stage, this.localPlayZone, (card) =>
 			this.onHandCardConfirmed(card),

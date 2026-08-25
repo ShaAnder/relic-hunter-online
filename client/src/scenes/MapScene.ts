@@ -166,6 +166,10 @@ export class MapScene implements Scene {
 	/** Whether the target marker is logically "on" right now — tracked separately from tutorialTargetMarker.visible itself, since setHudVisible also toggles that same property and reading it back would corrupt the real state. */
 	private tutorialTargetActive = false;
 	private staticActorCoords: RH.GridCoord[] = [];
+	/** Static actor tokens keyed by label, so a specific one (e.g. "Kessler") can be found again and animated — spawnStaticActors builds this, moveStaticActor reads it. */
+	private tutorialActorTokens: Map<string, Container> = new Map();
+	/** The one controlled, killable monster a combat tutorial spawns — deliberately separate from the normal random-spawn pool in this.monsters (though still added there too, so it's a genuine, targetable entity). */
+	private tutorialMonster: MonsterEntity | null = null;
 
 	private uiPointerMarker = new Container();
 	private uiPointerElapsedMs = 0;
@@ -1069,6 +1073,7 @@ export class MapScene implements Scene {
 			token.addChild(label);
 
 			this.mercenaryContainer.addChild(token);
+			this.tutorialActorTokens.set(actor.label, token);
 		}
 	}
 
@@ -2570,6 +2575,121 @@ export class MapScene implements Scene {
 		local.mercenary.setPositionInstant(gridToScreen(coord));
 		local.turnManager.undoMovementForRetry();
 		this.syncUI();
+	}
+
+	/**
+	 * Animates a static actor's token from its current screen position
+	 * to destination — a simple, self-contained tween (not
+	 * Mercenary.moveAlongPath's full animation system, which handles
+	 * zone-of-control strikes mid-path that don't apply to a purely
+	 * decorative token). Purely visual — no game state, no coord
+	 * tracking, since static actors were never part of turn logic to
+	 * begin with.
+	 */
+	moveStaticActor(
+		label: string,
+		destination: RH.GridCoord,
+		durationMs = 900,
+	): Promise<void> {
+		const token = this.tutorialActorTokens.get(label);
+		if (!token) return Promise.resolve();
+
+		const startX = token.x;
+		const startY = token.y;
+		const end = gridToScreen(destination);
+
+		return new Promise((resolve) => {
+			const start = performance.now();
+			const frame = (): void => {
+				const t = Math.min(1, (performance.now() - start) / durationMs);
+				const eased = 1 - Math.pow(1 - t, 3);
+				token.x = startX + (end.x - startX) * eased;
+				token.y = startY + (end.y - startY) * eased;
+				if (t < 1) {
+					requestAnimationFrame(frame);
+				} else {
+					resolve();
+				}
+			};
+			requestAnimationFrame(frame);
+		});
+	}
+
+	/**
+	 * Spawns one specific, controlled, genuinely killable monster —
+	 * deliberately separate from trySpawnMonster's random-position
+	 * logic. Added to the real this.monsters array (not a decorative
+	 * token), so it's a real MonsterEntity a player can actually fight
+	 * and defeat through the normal Attack flow.
+	 */
+	spawnTutorialMonster(coord: RH.GridCoord, tier: RH.MonsterTier): void {
+		const state = RH.createMonster(`tutorial_monster_${tier}`, tier, coord);
+		const token = new MonsterToken(coord, tier);
+		this.mercenaryContainer.addChild(token.view);
+
+		const entity: MonsterEntity = { state, token };
+		this.monsters.push(entity);
+		this.tutorialMonster = entity;
+	}
+
+	/**
+	 * Forces the tutorial monster to attack the local player right now
+	 * — bypasses RH.decideMonsterTarget entirely, since a scripted
+	 * tutorial beat needs this to happen on cue, not whenever real AI
+	 * decision logic would normally choose to engage. maxRounds is
+	 * passed straight through to BattleOverlay (default 3 if omitted)
+	 * — a tutorial's guided single-card rounds pass 1 here specifically.
+	 * Fires combatStarted/combatEnded so TutorialRunner can gate on them.
+	 */
+	triggerTutorialMonsterAttack(maxRounds?: number): Promise<void> {
+		const monster = this.tutorialMonster;
+		if (!monster) return Promise.resolve();
+
+		const target = this.localUnit;
+		const monsterAsState = RH.monsterAsMercenaryState(monster.state);
+		const tierLabel = `${monster.state.tier[0].toUpperCase()}${monster.state.tier.slice(1)} Monster`;
+
+		this.tutorialConfig?.onTutorialEvent({
+			type: "combatStarted",
+			opponentType: "monster",
+		});
+
+		return new Promise((resolve) => {
+			void this.game.overlays.show(
+				new BattleOverlay(
+					this.game,
+					monsterAsState,
+					target.state,
+					async (result) => {
+						monster.state.currentHp = monsterAsState.currentHp;
+						if (result.attackerMonsterDied) this.removeMonster(monster);
+						if (result.defenderNeedsTeleport) {
+							this.teleportEntity(target.state, target.mercenary);
+						}
+						this.tutorialConfig?.onTutorialEvent({
+							type: "combatEnded",
+							won: !result.defenderNeedsTeleport,
+						});
+						this.syncUI();
+						resolve();
+					},
+					0x8b0000,
+					tierLabel,
+					0x4a9eff,
+					"You",
+					"balanced",
+					"balanced",
+					"defender",
+					monster.state.coord,
+					target.state.coord,
+					false,
+					undefined,
+					true,
+					false,
+					maxRounds ?? 3,
+				),
+			);
+		});
 	}
 
 	/**
