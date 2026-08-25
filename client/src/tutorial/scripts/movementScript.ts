@@ -15,8 +15,10 @@ const CARD_ID = "tutorial_move_plus3";
 /**
  * Lower stem, near the decorative enemy prop — not the prop's exact
  * tile (that's already unwalkable via the static-actor blocking fix),
- * but the area around it. Wandering down here mid-attempt counts as a
- * genuine wrong choice, not just "hasn't reached the target yet".
+ * but the area around it. A specific, authored failLine for wandering
+ * here — everywhere else wrong on a move-gated segment now fails too
+ * (via TutorialRunner's own default gating), just with a generic
+ * retry nudge instead of this specific one.
  */
 const STEM_DANGER_ZONE: GridCoord[] = (() => {
 	const tiles: GridCoord[] = [];
@@ -65,11 +67,12 @@ function chooseSkipSegment(id: string) {
 
 /**
  * First real tutorial script — Movement. Kessler's own real portrait
- * set now drives expression: kessler-neutral for instructional lines,
- * kessler-approve on a genuine success confirm, kessler-disappoint
- * when the player wanders into the stem's danger zone instead of
- * toward the actual objective — which also resets them back to where
- * this specific attempt started and re-arms the same objective.
+ * set drives expression: kessler-neutral for instructional lines,
+ * kessler-approve on a genuine success confirm, kessler-disappoint on
+ * a failed attempt. Every move segment (targetTile set) is strict —
+ * any wrong landing fails via TutorialRunner's own default gating,
+ * not just the stem's explicitly-marked danger zone. Kessler is
+ * "right"-side throughout this script.
  */
 export const MOVEMENT_SCRIPT: TutorialScript = {
 	id: "movement",
@@ -95,6 +98,7 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 			intro: linesFor(
 				"Kessler",
 				"kessler-neutral",
+				"right",
 				"Oi. You. Fresh meat.",
 				"Everyone who wants to eat regular in this line of work learns the same first lesson: how to actually move your feet.",
 				"So let's start with the basics. Movement.",
@@ -110,6 +114,7 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 			intro: linesFor(
 				"Kessler",
 				"kessler-neutral",
+				"right",
 				"Now get moving toward that edge up ahead. That's your base range, no card spent.",
 			),
 			targetTile: EDGE_TARGET,
@@ -117,6 +122,7 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 			failLine: linesFor(
 				"Kessler",
 				"kessler-disappoint",
+				"right",
 				"Not that way. Whatever's down there, you don't want its attention yet.",
 				"Look, let's try that again.",
 			),
@@ -132,6 +138,7 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 			confirm: linesFor(
 				"Kessler",
 				"kessler-approve",
+				"right",
 				"Not bad. That's the easy part done.",
 			),
 		},
@@ -140,13 +147,19 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 			id: "end-turn-confirm",
 			intro: [],
 			objective: null,
-			confirm: linesFor("Kessler", "kessler-neutral", "Good. Fresh turn."),
+			confirm: linesFor(
+				"Kessler",
+				"kessler-neutral",
+				"right",
+				"Good. Fresh turn.",
+			),
 		},
 		{
 			id: "give-card",
 			intro: linesFor(
 				"Kessler",
 				"kessler-neutral",
+				"right",
 				"Now here's the actual problem.",
 				"Whatever's down that stem is watching. Wide open ground between us — you're not walking that on your own two legs, not in one turn.",
 				"Here, take this.",
@@ -173,6 +186,7 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 			intro: linesFor(
 				"Kessler",
 				"kessler-neutral",
+				"right",
 				"Play that card by dragging it into the zone there, then get moving.",
 			),
 			targetTile: MID_TARGET,
@@ -181,6 +195,7 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 			failLine: linesFor(
 				"Kessler",
 				"kessler-disappoint",
+				"right",
 				"You're drifting toward the stem again. Stay on course.",
 				"Look, let's try that again.",
 			),
@@ -196,6 +211,7 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 			confirm: linesFor(
 				"Kessler",
 				"kessler-approve",
+				"right",
 				"Good job. Now get over here — you're not there yet.",
 			),
 		},
@@ -213,6 +229,7 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 			intro: linesFor(
 				"Kessler",
 				"kessler-neutral",
+				"right",
 				"Rest of the way's on your own two feet. Drag it into the zone there, then send it across. Come on.",
 			),
 			targetTile: NEAR_KESSLER_TARGET,
@@ -221,6 +238,7 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 			failLine: linesFor(
 				"Kessler",
 				"kessler-disappoint",
+				"right",
 				"Not toward me, toward the stem? Come on, focus.",
 				"Look, let's try that again.",
 			),
@@ -235,6 +253,7 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 			confirm: linesFor(
 				"Kessler",
 				"kessler-approve",
+				"right",
 				"There it is. Right on the mark.",
 				"Good job rookie",
 			),
@@ -244,6 +263,7 @@ export const MOVEMENT_SCRIPT: TutorialScript = {
 			intro: linesFor(
 				"Kessler",
 				"kessler-approve",
+				"right",
 				"Congratulations. You now know how to move.",
 				"Everything else you'll learn out here builds on exactly that. Go on.",
 				"Maybe there's hope for you yet... thank god I didn't need to bring out the yellow paint.",

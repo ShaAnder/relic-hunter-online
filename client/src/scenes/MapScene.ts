@@ -2513,6 +2513,29 @@ export class MapScene implements Scene {
 	}
 
 	/** Current grid position of the local player — used by TutorialRunner to remember where an attempt started, so a failure can reset back to exactly that spot. */
+	/**
+	 * Fades every HUD element while dialogue is showing — input's
+	 * already blocked via overlays.isOpen everywhere in this file, but
+	 * a fully-interactive-looking board sitting right behind a talking
+	 * narrator was real, reported confusion. Called explicitly by
+	 * TutorialRunner around each dialogue beat, not driven from
+	 * update() — update() itself early-returns the instant an overlay
+	 * is open, so it never runs while dialogue is actually showing.
+	 */
+	setHudVisible(visible: boolean): void {
+		const alpha = visible ? 1 : 0.12;
+		this.characterPanel.view.alpha = alpha;
+		this.deckTracker.view.alpha = alpha;
+		this.inventoryPanel.view.alpha = alpha;
+		this.bagButton.view.alpha = alpha;
+		this.buttonBar.view.alpha = alpha;
+		this.refocusButton.view.alpha = alpha;
+		this.logPanel.view.alpha = alpha;
+		this.inspectButton.view.alpha = alpha;
+		this.hand.view.alpha = alpha;
+		this.playZone.view.alpha = alpha;
+	}
+
 	getLocalUnitCoord(): RH.GridCoord {
 		return this.localUnit.state.coord;
 	}
