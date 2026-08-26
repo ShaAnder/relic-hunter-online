@@ -46,6 +46,22 @@ export function createMonster(
 	};
 }
 
+/** Frenzies every living non-boss monster once the relic is found. */
+export function applyFrenzy(monsters: MonsterState[]): void {
+	for (const m of monsters) {
+		if (m.currentHp <= 0) continue;
+		if (m.tier === "boss") continue;
+		if (m.frenzied) continue;
+
+		m.frenzied = true;
+		m.stats = {
+			...m.stats,
+			movement: m.stats.movement + FRENZY_MOVEMENT_BONUS,
+			attack: m.stats.attack + FRENZY_ATTACK_BONUS,
+		};
+	}
+}
+
 /**
  * TEMPORARY BRIDGE — still needed only because BattleOverlay hasn't
  * been updated to read against EntityCore + trait-checks yet (a later
