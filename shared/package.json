@@ -13,9 +13,11 @@
 	},
 	"scripts": {
 		"build": "tsc",
-		"dev": "tsc --watch --preserveWatchOutput"
+		"dev": "tsc --watch --preserveWatchOutput",
+		"test": "vitest run"
 	},
 	"devDependencies": {
-		"typescript": "^5.5.0"
+		"typescript": "^5.5.0",
+		"vitest": "^4.1.0"
 	}
 }

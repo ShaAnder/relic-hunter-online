@@ -11,6 +11,14 @@
 		"dev:client": "npm run dev --workspace=client",
 		"build:shared": "npm run build --workspace=@relic-hunter/shared",
 		"dev": "npm run dev:client",
-		"architecture:check": "node scripts/check-architecture.mjs"
+		"architecture:check": "node scripts/check-architecture.mjs",
+		"test:shared": "npm run test --workspace=@relic-hunter/shared",
+		"prepare": "husky"
+	},
+	"devDependencies": {
+		"husky": "^9.1.7"
+	},
+	"dependencies": {
+		"vitest": "^4.1.11"
 	}
 }

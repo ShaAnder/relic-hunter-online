@@ -8,6 +8,9 @@ import { MainMenuScene } from "./MainMenuScene";
 import { TutorialRunner } from "@/tutorial/tutorialRunner";
 import { MOVEMENT_SCRIPT } from "@/tutorial/scripts/movementScript";
 import { COMBAT_SCRIPT } from "@/tutorial/scripts/combatScript";
+import { MapScene } from "@/scenes/MapScene";
+import type { TutorialConfig } from "@/tutorial/tutorialTypes";
+import type { TutorialPort } from "@/tutorial/tutorialPort";
 
 /**
  * Tutorials hub — six real, comprehensive tutorials covering everything
@@ -104,22 +107,41 @@ export class TutorialsMenuScene implements Scene {
 	 * flow MissionSelectScene uses. No tutorial-specific objectives or
 	 * guided setup yet — that's the next real build, not this pass.
 	 */
+	/**
+	 * Constructs the real TutorialPort — a MapScene, switched to via
+	 * the normal scene-change path. This is the one place in the app
+	 * that constructs MapScene for tutorial purposes.
+	 */
+	private async buildPort(config: TutorialConfig): Promise<TutorialPort> {
+		const scene = new MapScene(this.game, config);
+		await this.game.sceneManager.changeScene(scene);
+		return scene;
+	}
+
 	private startTutorial(topic: string): void {
 		if (topic === "Movement") {
-			const runner = new TutorialRunner(this.game, MOVEMENT_SCRIPT, () => {
-				void this.game.sceneManager.changeScene(
-					new TutorialsMenuScene(this.game),
-				);
-			});
+			const runner = new TutorialRunner(
+				(config) => this.buildPort(config),
+				MOVEMENT_SCRIPT,
+				() => {
+					void this.game.sceneManager.changeScene(
+						new TutorialsMenuScene(this.game),
+					);
+				},
+			);
 			void runner.start();
 			return;
 		}
 		if (topic === "Combat") {
-			const runner = new TutorialRunner(this.game, COMBAT_SCRIPT, () => {
-				void this.game.sceneManager.changeScene(
-					new TutorialsMenuScene(this.game),
-				);
-			});
+			const runner = new TutorialRunner(
+				(config) => this.buildPort(config),
+				COMBAT_SCRIPT,
+				() => {
+					void this.game.sceneManager.changeScene(
+						new TutorialsMenuScene(this.game),
+					);
+				},
+			);
 			void runner.start();
 			return;
 		}

@@ -79,6 +79,11 @@ export interface HasStatusEffects {
 	statusEffects: StatusEffect[];
 }
 
+/** Adds stunned turns to an entity — the stun trap's actual rule. */
+export function applyStun(target: HasStatus, turns: number = 1): void {
+	target.stunnedTurnsRemaining += turns;
+}
+
 /**
  * Adds or refreshes a status effect — takes the longer of the two
  * durations if it's already present, rather than stacking or resetting blindly.

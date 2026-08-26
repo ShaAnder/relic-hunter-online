@@ -1,6 +1,4 @@
-import type { Game } from "@/core/game/Game";
-import { MapScene } from "@/scenes/MapScene";
-import { DialogueOverlay } from "@/ui/overlay/DialogueOverlay";
+import type { TutorialPort } from "./tutorialPort";
 import type { DialogueLine } from "@/tutorial/dialogue";
 import type {
 	DialogueSource,
@@ -22,34 +20,11 @@ const DEFAULT_FAIL_LINE: DialogueLine[] = [
 ];
 
 /**
- * Drives one TutorialScript end to end. Each segment: intro dialogue
- * (overlay shown, MapScene's HUD faded and input blocked), an
- * optional card handoff, an optional map/UI pointer, the real
- * objective (overlay hidden, HUD restored, MapScene fully
- * interactive), then confirm dialogue.
- *
- * Maintains a live TutorialState (failure counters) as the script
- * plays out — any of a segment's intro/failLine/confirm can be either
- * a plain DialogueLine[] or a function receiving that state, so a
- * script can genuinely react to how the player's actually doing (e.g.
- * a different outro line if they struggled versus if they didn't).
- *
- * Any segment with a targetTile and/or failZones is a genuinely gated
- * move — a "moved" event that doesn't satisfy the objective isn't
- * just silently ignored while the runner keeps waiting forever. It
- * counts as a real wrong choice: increments the failure counters,
- * plays a fail line, resets the player back to exactly where this
- * attempt started (re-giving retryCard if the segment needs one),
- * and re-arms the same objective. Segments with neither targetTile
- * nor failZones have no "wrong way" to begin with, so they're
- * unaffected.
- *
- * MapScene never imports this class or knows it exists.
+ * Drives one TutorialScript end to end against a TutorialPort — never MapScene or DialogueOverlay directly.
  * @author ShaAnder
  */
 export class TutorialRunner {
-	private dialogueOverlay: DialogueOverlay;
-	private mapScene!: MapScene;
+	private port!: TutorialPort;
 
 	private state: TutorialState = {
 		totalFailures: 0,
@@ -59,16 +34,14 @@ export class TutorialRunner {
 	private activeSegment: TutorialSegment | null = null;
 	private activeObjective: TutorialObjective | null = null;
 	private pendingResolve: ((outcome: "met" | "failed") => void) | null = null;
-	/** Wherever the player stood right before their most recently completed objective — resolved into a spawnMonster's "behindPlayer" sentinel, since a script can't know in advance exactly which tile the player will end up choosing to move to. */
+	/** Coord right before the last objective — resolves a spawnMonster "behindPlayer" sentinel. */
 	private coordBeforeLastObjective: { x: number; y: number } | null = null;
 
 	constructor(
-		private game: Game,
+		private createPort: (config: TutorialConfig) => Promise<TutorialPort>,
 		private script: TutorialScript,
 		private onComplete: () => void,
-	) {
-		this.dialogueOverlay = new DialogueOverlay(game);
-	}
+	) {}
 
 	async start(): Promise<void> {
 		const config: TutorialConfig = {
@@ -81,39 +54,38 @@ export class TutorialRunner {
 			onTutorialEvent: (event) => this.handleEvent(event),
 		};
 
-		this.mapScene = new MapScene(this.game, config);
-		await this.game.sceneManager.changeScene(this.mapScene);
+		this.port = await this.createPort(config);
 
 		for (const segment of this.script.segments) {
 			await this.playDialogue(segment.intro);
 
 			if (segment.clearHandFirst) {
-				this.mapScene.clearLocalHand();
+				this.port.clearLocalHand();
 			}
 
 			if (segment.giveCard) {
-				this.mapScene.giveCard(segment.giveCard);
+				this.port.giveCard(segment.giveCard);
 			}
 
 			if (segment.giveCards) {
-				this.mapScene.giveCards(segment.giveCards);
+				this.port.giveCards(segment.giveCards);
 			}
 
 			if (segment.targetTile) {
-				this.mapScene.showTutorialTarget(segment.targetTile);
+				this.port.showTutorialTarget(segment.targetTile);
 			}
 
 			if (segment.pointAtMonster) {
-				const coord = this.mapScene.getTutorialMonsterCoord();
-				if (coord) this.mapScene.showTutorialTarget(coord);
+				const coord = this.port.getTutorialMonsterCoord();
+				if (coord) this.port.showTutorialTarget(coord);
 			}
 
 			if (segment.uiPointer) {
-				this.mapScene.showUiPointer(segment.uiPointer);
+				this.port.showUiPointer(segment.uiPointer);
 			}
 
 			if (segment.moveActor) {
-				await this.mapScene.moveStaticActor(
+				await this.port.moveStaticActor(
 					segment.moveActor.label,
 					segment.moveActor.destination,
 					segment.moveActor.durationMs,
@@ -123,14 +95,13 @@ export class TutorialRunner {
 			if (segment.spawnMonster) {
 				const coord =
 					segment.spawnMonster.coord === "behindPlayer"
-						? (this.coordBeforeLastObjective ??
-							this.mapScene.getLocalUnitCoord())
+						? (this.coordBeforeLastObjective ?? this.port.getLocalUnitCoord())
 						: segment.spawnMonster.coord;
-				this.mapScene.spawnTutorialMonster(coord, segment.spawnMonster.tier);
+				this.port.spawnTutorialMonster(coord, segment.spawnMonster.tier);
 			}
 
 			if (segment.dashMonster) {
-				await this.mapScene.dashMonsterToPlayer();
+				await this.port.dashMonsterToPlayer();
 			}
 
 			if (segment.triggerCombat) {
@@ -142,7 +113,7 @@ export class TutorialRunner {
 						})
 					: Promise.resolve();
 
-				const battleDone = this.mapScene.triggerTutorialMonsterAttack(
+				const battleDone = this.port.triggerTutorialMonsterAttack(
 					segment.triggerCombat.maxRounds,
 					segment.triggerCombat.availableActions,
 					guideSpec
@@ -166,8 +137,8 @@ export class TutorialRunner {
 				);
 
 				await ready;
-				// Intro was already played before this block in the main loop —
-				// for guided fights, play a dedicated battle intro AFTER ready:
+				// Intro already played earlier in the loop — a guided fight's
+				// dedicated battle intro plays after ready, not before.
 				if (segment.battleIntro) {
 					await this.playDialogue(segment.battleIntro);
 				}
@@ -179,8 +150,8 @@ export class TutorialRunner {
 				await this.runObjectiveWithRetry(segment);
 			}
 
-			this.mapScene.hideTutorialTarget();
-			this.mapScene.hideUiPointer();
+			this.port.hideTutorialTarget();
+			this.port.hideUiPointer();
 
 			await this.playDialogue(segment.confirm);
 		}
@@ -188,20 +159,18 @@ export class TutorialRunner {
 		this.onComplete();
 	}
 
-	/** Resolves a DialogueSource against the live state — the actual "variable injection": a function source gets called with the current TutorialState right before its lines are needed, a plain array passes through unchanged. */
+	/** Resolves a DialogueSource against live state — the actual "variable injection". */
 	private resolveLines(source: DialogueSource): DialogueLine[] {
 		return typeof source === "function" ? source(this.state) : source;
 	}
 
 	/**
-	 * Waits for the objective. A "failed" outcome (any wrong move on a
-	 * move-gated segment — see class doc) increments the failure
+	 * Waits for the objective. A failed outcome increments failure
 	 * counters, plays a fail line, re-gives retryCard if set, and
-	 * resets the player back to exactly where they stood before this
-	 * specific attempt — captured once, before the first try.
+	 * resets the player to where this attempt started.
 	 */
 	private async runObjectiveWithRetry(segment: TutorialSegment): Promise<void> {
-		this.coordBeforeLastObjective = this.mapScene.getLocalUnitCoord();
+		this.coordBeforeLastObjective = this.port.getLocalUnitCoord();
 		const isMoveGated = !!(segment.targetTile || segment.failZones);
 		const startCoord = isMoveGated ? this.coordBeforeLastObjective : null;
 
@@ -221,43 +190,18 @@ export class TutorialRunner {
 			await this.playDialogue(failLine);
 
 			if (startCoord) {
-				this.mapScene.resetLocalUnitToCoord(startCoord);
+				this.port.resetLocalUnitToCoord(startCoord);
 			}
 			if (segment.retryCard) {
-				this.mapScene.giveCard(segment.retryCard);
+				this.port.giveCard(segment.retryCard);
 			}
 			// Loop — same objective, same pointer/targetTile still showing.
 		}
 	}
 
-	/**
-	 * Overlay is genuinely shown (blocking MapScene's input entirely)
-	 * and the HUD faded only for the duration of actual dialogue, then
-	 * both restored immediately after — never left up during an
-	 * objective, since MapScene's own update() stops running the
-	 * instant an overlay is open and can't drive the fade itself.
-	 */
+	/** Resolves the source against live state, then delegates entirely to the port. */
 	private async playDialogue(source: DialogueSource): Promise<void> {
-		const lines = this.resolveLines(source);
-		if (lines.length === 0) return;
-
-		const layered = this.game.overlays.isOpen;
-		if (!layered) this.mapScene.setHudVisible(false);
-
-		if (layered) {
-			await this.game.overlays.showOnTop(this.dialogueOverlay);
-		} else {
-			await this.game.overlays.show(this.dialogueOverlay);
-		}
-
-		await this.dialogueOverlay.playLines(lines);
-
-		if (layered) {
-			this.game.overlays.hideTop();
-		} else {
-			this.game.overlays.hide();
-			this.mapScene.setHudVisible(true);
-		}
+		await this.port.playDialogue(this.resolveLines(source));
 	}
 
 	private waitForOutcome(segment: TutorialSegment): Promise<"met" | "failed"> {

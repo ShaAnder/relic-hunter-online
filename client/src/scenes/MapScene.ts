@@ -48,6 +48,9 @@ import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
 import { AudioController } from "@/core/audio/audioController";
 import { Ticker } from "pixi.js";
 import { CardDrawQueue } from "@/ui/CardDrawQueue";
+import { DialogueOverlay } from "@/ui/overlay/DialogueOverlay";
+import type { TutorialPort } from "@/tutorial/tutorialPort";
+import type { DialogueLine } from "@/tutorial/dialogue";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
 interface PlacedChest {
@@ -63,7 +66,7 @@ interface PlacedChest {
  * content comes from GameSession (set by LoadingScene), not decided here.
  * @author ShaAnder
  */
-export class MapScene implements Scene {
+export class MapScene implements Scene, TutorialPort {
 	readonly view = new Container();
 
 	// Board layers
@@ -159,6 +162,8 @@ export class MapScene implements Scene {
 	private mapSeed: number;
 
 	private tutorialConfig: TutorialConfig | null;
+	/** Lazily constructed — only tutorials ever need dialogue. */
+	private dialogueOverlay: DialogueOverlay | null = null;
 	/** Set by handleCardConfirmed right before a move starts — read once, in onMoveCommitted, to know whether the move that's about to fire actually spent a card. */
 	private pendingMoveUsedCard = false;
 	private tutorialTargetMarker = new Container();
@@ -1165,18 +1170,7 @@ export class MapScene implements Scene {
 	 * it's already the endgame threat, frenzy doesn't apply on top of it.
 	 */
 	private triggerFrenzy(): void {
-		for (const m of this.monsters) {
-			if (m.state.currentHp <= 0) continue;
-			if (m.state.tier === "boss") continue;
-			if (m.state.frenzied) continue;
-
-			m.state.frenzied = true;
-			m.state.stats = {
-				...m.state.stats,
-				movement: m.state.stats.movement + RH.FRENZY_MOVEMENT_BONUS,
-				attack: m.state.stats.attack + RH.FRENZY_ATTACK_BONUS,
-			};
-		}
+		RH.applyFrenzy(this.monsters.map((m) => m.state));
 	}
 
 	/**
@@ -2574,6 +2568,35 @@ export class MapScene implements Scene {
 	}
 
 	/**
+	 * Shows dialogue, layered on top of an already-open overlay (a
+	 * live battle) or exclusively otherwise — fading/restoring the HUD
+	 * only in the exclusive case, since a layered battle's own HUD
+	 * stays exactly as it was.
+	 */
+	async playDialogue(lines: DialogueLine[]): Promise<void> {
+		if (lines.length === 0) return;
+		this.dialogueOverlay ??= new DialogueOverlay(this.game);
+
+		const layered = this.game.overlays.isOpen;
+		if (!layered) this.setHudVisible(false);
+
+		if (layered) {
+			await this.game.overlays.showOnTop(this.dialogueOverlay);
+		} else {
+			await this.game.overlays.show(this.dialogueOverlay);
+		}
+
+		await this.dialogueOverlay.playLines(lines);
+
+		if (layered) {
+			this.game.overlays.hideTop();
+		} else {
+			this.game.overlays.hide();
+			this.setHudVisible(true);
+		}
+	}
+
+	/**
 	 * visible=false, not alpha — alpha only hides rendering; an interactive
 	 * child under a zero-alpha element can still be hit-tested. visible=false
 	 * skips both rendering and hits.
@@ -3100,7 +3123,7 @@ export class MapScene implements Scene {
 	): void {
 		switch (kind) {
 			case "stun":
-				unit.state.stunnedTurnsRemaining += 1;
+				RH.applyStun(unit.state);
 				this.showFeedback(
 					`🪤 ${this.getUnitLabel(unit)} was stunned! (${result.hazardRoll} vs ${result.victimRoll})`,
 				);
