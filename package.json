@@ -10,6 +10,7 @@
 	"scripts": {
 		"dev:client": "npm run dev --workspace=client",
 		"build:shared": "npm run build --workspace=@relic-hunter/shared",
-		"dev": "npm run dev:client"
+		"dev": "npm run dev:client",
+		"architecture:check": "node scripts/check-architecture.mjs"
 	}
 }
