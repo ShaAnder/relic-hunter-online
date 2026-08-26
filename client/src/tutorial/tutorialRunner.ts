@@ -96,13 +96,16 @@ export class TutorialRunner {
 			}
 
 			if (segment.giveCards) {
-				for (const card of segment.giveCards) {
-					this.mapScene.giveCard(card);
-				}
+				this.mapScene.giveCards(segment.giveCards);
 			}
 
 			if (segment.targetTile) {
 				this.mapScene.showTutorialTarget(segment.targetTile);
+			}
+
+			if (segment.pointAtMonster) {
+				const coord = this.mapScene.getTutorialMonsterCoord();
+				if (coord) this.mapScene.showTutorialTarget(coord);
 			}
 
 			if (segment.uiPointer) {

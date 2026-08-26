@@ -1,5 +1,6 @@
 import { linesFor } from "@/tutorial/dialogue";
 import type { TutorialScript } from "@/tutorial/tutorialTypes";
+import type { GridCoord } from "@relic-hunter/shared";
 
 const PLAYER_SPAWN = { x: 1, y: 1 };
 const KESSLER_SPAWN = { x: 2, y: 1 };
@@ -7,8 +8,19 @@ const KESSLER_FORWARD = { x: 4, y: 1 };
 
 const YELLOW_CARD_ID = "tutorial_defense_card";
 
-/** "Press Move"/"Press End Turn" beat — same helper Movement uses. */
-function openActionSegment(id: string, key: "move" | "endTurn") {
+/** Anything behind where the player started counts as "went the wrong way" instead of following Kessler forward. */
+const BEHIND_START: GridCoord[] = (() => {
+	const tiles: GridCoord[] = [];
+	for (let y = 0; y < 8; y++) tiles.push({ x: 0, y });
+	return tiles;
+})();
+
+/** A single "press this ActionMenu button/row" beat, gated on a real event. */
+function pressButtonSegment(
+	id: string,
+	key: "move" | "endTurn" | "actions" | "attack",
+	eventType: string,
+) {
 	return {
 		id,
 		intro: [],
@@ -19,9 +31,8 @@ function openActionSegment(id: string, key: "move" | "endTurn") {
 		},
 		objective: {
 			id: `${id}-objective`,
-			prompt: key === "move" ? "Press Move" : "Press End Turn",
-			isMet: (event: { type: string }) =>
-				event.type === (key === "move" ? "actionMenuOpened" : "turnEnded"),
+			prompt: `Press ${key}`,
+			isMet: (event: { type: string }) => event.type === eventType,
 		},
 		confirm: [],
 	};
@@ -70,15 +81,16 @@ function giveAndCollectCard(
 }
 
 /**
- * Second real tutorial script — Combat. Kessler spawns right next to
- * the player and moves forward first — "follow me" — the player
- * matches. The monster doesn't exist until right after that move: it
- * spawns exactly where the player WAS standing (via spawnMonster's
- * "behindPlayer" resolution, not a fixed coord — the player's actual
- * destination isn't known in advance), then dashes to a tile adjacent
- * to wherever they ended up, then attacks. Three real combat beats:
- * an ungated surprise attack, one guided round with a locked Defend
- * action, then a real, player-driven finale with a full hand.
+ * Second real tutorial script — Combat. Kessler spawns next to the
+ * player and moves forward first; the player follows. The monster
+ * spawns exactly where the player was standing (a live "behindPlayer"
+ * resolution, not a guessed fixed coord) and dashes to a tile
+ * adjacent to wherever they actually ended up. Three real combat
+ * beats: an ungated surprise attack, one guided round with a locked
+ * Defend action, then a real, fully-gated, player-driven finale
+ * (open Actions → press Attack → select the target → fight) with a
+ * full, genuinely strong hand built to comfortably finish a 12-HP
+ * monster inside the 3-round cap.
  */
 export const COMBAT_SCRIPT: TutorialScript = {
 	id: "combat",
@@ -116,7 +128,7 @@ export const COMBAT_SCRIPT: TutorialScript = {
 			objective: null,
 			confirm: [],
 		},
-		openActionSegment("open-move-1", "move"),
+		pressButtonSegment("open-move-1", "move", "actionMenuOpened"),
 		chooseSkipSegment("choose-skip-1"),
 		{
 			id: "do-follow-move",
@@ -124,7 +136,14 @@ export const COMBAT_SCRIPT: TutorialScript = {
 				"Kessler",
 				"kessler-neutral",
 				"right",
-				"Come on, catch up.",
+				"Come on, catch up. This way.",
+			),
+			failZones: BEHIND_START,
+			failLine: linesFor(
+				"Kessler",
+				"kessler-disappoint",
+				"right",
+				"Wrong way. I said follow me, not wander off.",
 			),
 			objective: {
 				id: "move-any",
@@ -134,8 +153,8 @@ export const COMBAT_SCRIPT: TutorialScript = {
 			confirm: [],
 		},
 		{
-			id: "monster-appears",
-			intro: [],
+			id: "watch-out",
+			intro: linesFor("Kessler", "kessler-disappoint", "right", "Watch out!"),
 			spawnMonster: { coord: "behindPlayer", tier: "light" },
 			dashMonster: true,
 			objective: null,
@@ -143,15 +162,19 @@ export const COMBAT_SCRIPT: TutorialScript = {
 		},
 		{
 			id: "surprise-attack",
-			intro: [],
+			intro: linesFor(
+				"Kessler",
+				"kessler-disappoint",
+				"right",
+				"Fight back or take the hit — go!",
+			),
 			triggerCombat: { maxRounds: 1 },
 			objective: null,
 			confirm: linesFor(
 				"Kessler",
 				"kessler-neutral",
 				"right",
-				"Don't panic. Don't panic — we can get through this.",
-				"Let me actually show you how this works instead of just yelling.",
+				"Don't panic — we can get through this.",
 			),
 		},
 		{
@@ -160,9 +183,8 @@ export const COMBAT_SCRIPT: TutorialScript = {
 				"Kessler",
 				"kessler-neutral",
 				"right",
-				"Every card in your hand means something different once a fight starts.",
-				"Red cards add straight to your attack. Yellow cards add to your defense — they soak up damage instead of dealing it.",
-				"Run and you'll take a free hit on the way out. Surrender and it's over — you lose whatever you're carrying, but you walk away alive.",
+				"Red cards add to your attack. Yellow cards add to your defense.",
+				"Run costs you a free hit on the way out. Surrender ends it — you lose what you're carrying, but you walk away.",
 			),
 			objective: null,
 			confirm: [],
@@ -186,33 +208,28 @@ export const COMBAT_SCRIPT: TutorialScript = {
 				"Kessler",
 				"kessler-approve",
 				"right",
-				"Good. That's what yellow does for you.",
+				"That's what defense does for you.",
+				"But there's no time for banter — take it down.",
 			),
 		},
 		{
 			id: "finale-setup",
-			intro: linesFor(
-				"Kessler",
-				"kessler-neutral",
-				"right",
-				"Okay. We've got this.",
-				"Take these.",
-			),
+			intro: [],
 			clearHandFirst: true,
 			giveCards: [
 				{
 					id: "tutorial_finale_red_1",
 					color: "red",
-					name: "Attack +4",
-					value: 4,
+					name: "Attack +6",
+					value: 6,
 					description: "+Attack",
 					actionType: "attack",
 				},
 				{
 					id: "tutorial_finale_red_2",
 					color: "red",
-					name: "Attack +2",
-					value: 2,
+					name: "Attack +5",
+					value: 5,
 					description: "+Attack",
 					actionType: "attack",
 				},
@@ -227,8 +244,8 @@ export const COMBAT_SCRIPT: TutorialScript = {
 				{
 					id: "tutorial_finale_yellow_2",
 					color: "yellow",
-					name: "Defense +1",
-					value: 1,
+					name: "Defense +2",
+					value: 2,
 					description: "+Defense",
 					actionType: "defense",
 				},
@@ -236,26 +253,47 @@ export const COMBAT_SCRIPT: TutorialScript = {
 			objective: null,
 			confirm: [],
 		},
+		pressButtonSegment(
+			"finale-open-actions",
+			"actions",
+			"actionsSubmenuOpened",
+		),
+		pressButtonSegment(
+			"finale-press-attack",
+			"attack",
+			"attackTargetingEntered",
+		),
 		{
-			id: "finale-kill",
+			id: "finale-select-target",
 			intro: linesFor(
 				"Kessler",
 				"kessler-approve",
 				"right",
 				"Quick. Take him down.",
 			),
-			uiPointer: { kind: "actionButton", key: "actions", side: "left" },
+			pointAtMonster: true,
+			objective: {
+				id: "combat-started",
+				prompt: "Tap the monster",
+				isMet: (event) => event.type === "combatStarted",
+			},
+			confirm: [],
+		},
+		{
+			id: "finale-kill",
+			intro: [],
 			objective: {
 				id: "kill-monster",
-				prompt: "Attack the monster",
+				prompt: "Finish the fight",
 				isMet: (event) => event.type === "combatEnded" && event.won,
 			},
 			confirm: linesFor(
 				"Kessler",
 				"kessler-approve",
 				"right",
-				"That's it. That's combat.",
-				"You now know how to fight, how to defend, and when to just leave. That's most of the job right there.",
+				"That's it. Down for good.",
+				"That's combat — attack, defend, and know when to just walk away. Most of the job is exactly that.",
+				"You did good today. Go on, get some rest.",
 			),
 		},
 	],

@@ -165,7 +165,6 @@ export class MapScene implements Scene {
 	private tutorialTargetElapsedMs = 0;
 	/** Whether the target marker is logically "on" right now — tracked separately from tutorialTargetMarker.visible itself, since setHudVisible also toggles that same property and reading it back would corrupt the real state. */
 	private tutorialTargetActive = false;
-	private staticActorCoords: RH.GridCoord[] = [];
 	/** Static actor tokens keyed by label, so a specific one (e.g. "Kessler") can be found again and animated — spawnStaticActors builds this, moveStaticActor reads it. */
 	private tutorialActorTokens: Map<string, Container> = new Map();
 	/** Each static actor's current grid coord, kept in sync as moveStaticActor animates it — needed to compute a real path for the NEXT move. */
@@ -377,6 +376,13 @@ export class MapScene implements Scene {
 		this.boardContainer.addChild(this.trapMarkerContainer);
 
 		this.buttonBar = new ActionMenu();
+		this.buttonBar.onSubmenuToggled = (open) => {
+			if (open) {
+				this.tutorialConfig?.onTutorialEvent({
+					type: "actionsSubmenuOpened",
+				});
+			}
+		};
 		this.view.addChild(this.buttonBar.view);
 
 		this.refocusButton = new RefocusButton();
@@ -1052,7 +1058,6 @@ export class MapScene implements Scene {
 		const actors = this.tutorialConfig?.script.staticActors;
 		if (!actors) return;
 
-		this.staticActorCoords = actors.map((a) => a.coord);
 
 		for (const actor of actors) {
 			const pos = gridToScreen(actor.coord);
@@ -2084,13 +2089,14 @@ export class MapScene implements Scene {
 			this.showFeedback("⚔ Not enough AP to attack");
 			return;
 		}
-		if (this.livingEnemies().length === 0) {
+		if (this.livingEnemies().length === 0 && this.livingMonsters().length === 0) {
 			this.showFeedback("⚔ No enemies on the map");
 			return;
 		}
 
 		this.resetActionState();
 		this.enterTargetingMode();
+		this.tutorialConfig?.onTutorialEvent({ type: "attackTargetingEntered" });
 	}
 
 	/** All AI units still standing — the only valid targeting candidates. */
@@ -2099,8 +2105,9 @@ export class MapScene implements Scene {
 	}
 
 	private enterTargetingMode(): void {
-		const candidates = this.livingEnemies();
-		if (candidates.length === 0) return;
+		if (this.livingEnemies().length === 0 && this.livingMonsters().length === 0) {
+			return;
+		}
 
 		this.targetingActive = true;
 		this.game.app.canvas.style.cursor = "crosshair";
@@ -2535,6 +2542,22 @@ export class MapScene implements Scene {
 	}
 
 	/**
+	 * Hands over several cards as ONE real batch — not a loop of
+	 * giveCard() calls. CardDrawQueue.enqueue's own presentBatch runs
+	 * its synchronous setup (including splicing everything currently
+	 * pending) immediately, before control ever returns to a caller —
+	 * looping individual enqueue(single card) calls meant the first
+	 * call already started presenting with just that one card before
+	 * the loop's later calls had even pushed theirs in, splitting a
+	 * "4 cards at once" into a visible "1, then 3" a moment later.
+	 * Passing the whole array to a single enqueue() call is what
+	 * CardDrawQueue's own API is already built to accept correctly.
+	 */
+	giveCards(cards: RH.CardData[]): void {
+		this.cardDrawQueue.enqueue(cards);
+	}
+
+	/**
 	 * Empties the local player's hand entirely — used right before a
 	 * guided combat round to guarantee the only card available is
 	 * whatever giveCard hands them next, not whatever was already
@@ -2668,6 +2691,11 @@ export class MapScene implements Scene {
 		const entity: MonsterEntity = { state, token };
 		this.monsters.push(entity);
 		this.tutorialMonster = entity;
+	}
+
+	/** The tutorial monster's current coord, or null if none has been spawned yet — used to point at it once it exists, since its actual position isn't known until it's spawned and dashed at runtime. */
+	getTutorialMonsterCoord(): RH.GridCoord | null {
+		return this.tutorialMonster?.state.coord ?? null;
 	}
 
 	/**
@@ -3178,7 +3206,7 @@ export class MapScene implements Scene {
 					.filter((u) => u.state.currentHp > 0)
 					.map((u) => u.state.coord),
 				...this.livingMonsterCoords(),
-				...this.staticActorCoords,
+				...Array.from(this.tutorialActorCoords.values()),
 			],
 			onMoveCommitted: (
 				target: RH.GridCoord,

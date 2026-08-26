@@ -27,6 +27,8 @@ export type TutorialEvent =
 	| { type: "skipChosen" }
 	| { type: "cardChosen" }
 	| { type: "actionMenuOpened" }
+	| { type: "actionsSubmenuOpened" }
+	| { type: "attackTargetingEntered" }
 	| { type: "turnEnded" }
 	| { type: "combatStarted"; opponentType: "hunter" | "monster" }
 	| {
@@ -172,6 +174,8 @@ export interface TutorialSegment {
 	 * player, animated via the monster's own MonsterToken.moveAlongPath.
 	 */
 	dashMonster?: boolean;
+	/** If set, points the map-tile marker at wherever the tutorial monster currently is — resolved at runtime via MapScene.getTutorialMonsterCoord, since its position isn't known until it's actually spawned. */
+	pointAtMonster?: boolean;
 	objective: TutorialObjective | null;
 	confirm: DialogueSource;
 }

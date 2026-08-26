@@ -148,6 +148,9 @@ export class ActionMenu {
 		row?.button.setEnabled(enabled);
 	}
 
+	/** Fires whenever the Actions submenu opens or closes — the only way anything outside this class can know, since the toggle itself is handled entirely internally in handleClick. */
+	onSubmenuToggled: ((open: boolean) => void) | null = null;
+
 	private setSubmenuVisible(open: boolean): void {
 		this.submenuOpen = open;
 		const actionsRow = this.mainRows.find((r) => r.key === "actions");
@@ -155,6 +158,7 @@ export class ActionMenu {
 		for (const row of this.subRows) {
 			row.button.view.visible = open;
 		}
+		this.onSubmenuToggled?.(open);
 	}
 
 	/** Manual bounds hit-test, not Button's own onClick — MapScene routes clicks through its own DOM-level handler, not PixiJS's pointer system. "Actions" toggles the submenu internally and always returns null, since it isn't a real game action. */
