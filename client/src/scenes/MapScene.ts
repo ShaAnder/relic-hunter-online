@@ -1058,7 +1058,6 @@ export class MapScene implements Scene {
 		const actors = this.tutorialConfig?.script.staticActors;
 		if (!actors) return;
 
-
 		for (const actor of actors) {
 			const pos = gridToScreen(actor.coord);
 			const token = new Container();
@@ -2089,7 +2088,10 @@ export class MapScene implements Scene {
 			this.showFeedback("⚔ Not enough AP to attack");
 			return;
 		}
-		if (this.livingEnemies().length === 0 && this.livingMonsters().length === 0) {
+		if (
+			this.livingEnemies().length === 0 &&
+			this.livingMonsters().length === 0
+		) {
 			this.showFeedback("⚔ No enemies on the map");
 			return;
 		}
@@ -2105,7 +2107,10 @@ export class MapScene implements Scene {
 	}
 
 	private enterTargetingMode(): void {
-		if (this.livingEnemies().length === 0 && this.livingMonsters().length === 0) {
+		if (
+			this.livingEnemies().length === 0 &&
+			this.livingMonsters().length === 0
+		) {
 			return;
 		}
 
@@ -2742,6 +2747,12 @@ export class MapScene implements Scene {
 	triggerTutorialMonsterAttack(
 		maxRounds?: number,
 		availableActions?: RH.CombatAction[],
+		guide?: {
+			requiredAction: RH.CombatAction;
+			grayOthers?: boolean;
+			onWrongAction?: () => void | Promise<void>;
+			onReady?: () => void | Promise<void>;
+		},
 	): Promise<void> {
 		const monster = this.tutorialMonster;
 		if (!monster) return Promise.resolve();
@@ -2788,6 +2799,14 @@ export class MapScene implements Scene {
 					true,
 					false,
 					maxRounds ?? 3,
+					guide
+						? {
+								requiredAction: guide.requiredAction,
+								grayOthers: guide.grayOthers,
+								onWrongAction: guide.onWrongAction,
+								onReady: guide.onReady,
+							}
+						: null,
 				),
 			);
 		});

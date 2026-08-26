@@ -25,6 +25,7 @@ import {
 	decideSurrenderChoice,
 	monsterCombatChoice,
 } from "@relic-hunter/shared";
+import { CombatActionMenu } from "../buttons/CombatActionMenu";
 
 const ALLOWED_COLORS: Record<CombatAction, CardColor[]> = {
 	attack: ["red", "yellow", "blue"],
@@ -64,6 +65,14 @@ export interface BattleResult {
 	defenderMonsterDied?: boolean;
 }
 
+export interface TutorialCombatGuide {
+	requiredAction: CombatAction;
+	grayOthers?: boolean;
+	onWrongAction?: () => void | Promise<void>;
+	/** Fires once after buildUI + first layout — runner plays layered intro here. */
+	onReady?: () => void | Promise<void>;
+}
+
 /**
  * Iso arena. Orientation and slot assignment both follow the real map
  * direction the fight is happening along — north/south-dominant fights
@@ -94,9 +103,7 @@ export class BattleOverlay implements Overlay {
 	private attackerStatText!: Text;
 	private defenderStatText!: Text;
 
-	private selectorContainer = new Container();
-	private selectorIndex = 0;
-	private selectorLabel!: Text;
+	private combatActionMenu = new CombatActionMenu();
 
 	private localHand!: Hand;
 	private localPlayZone = new PlayZone();
@@ -149,6 +156,8 @@ export class BattleOverlay implements Overlay {
 		private isAttackerMonster: boolean = false,
 		private isDefenderMonster: boolean = false,
 		private readonly maxRounds: number = 3,
+		private tutorialGuide: TutorialCombatGuide | null = null,
+		private guideArrow = new Graphics(),
 	) {
 		this.localHand = new Hand(this.game.app.stage, this.localPlayZone, (card) =>
 			this.onHandCardConfirmed(card),
@@ -180,7 +189,10 @@ export class BattleOverlay implements Overlay {
 
 	onShow(): void {
 		this.buildUI();
+		this.combatActionMenu.onAction = (action) => this.confirmAction(action);
 		this.layout(this.game.app.screen.width, this.game.app.screen.height);
+		this.applyTutorialGuideVisuals();
+		void this.tutorialGuide?.onReady?.();
 	}
 
 	onHide(): void {
@@ -220,11 +232,6 @@ export class BattleOverlay implements Overlay {
 		let actions = ACTIONS;
 		if (role === "defender" && this.isRangedInitiated) {
 			actions = actions.filter((a) => a !== "attack");
-		}
-		const opponentIsMonster =
-			role === "attacker" ? this.isDefenderMonster : this.isAttackerMonster;
-		if (opponentIsMonster) {
-			actions = actions.filter((a) => a !== "surrender");
 		}
 		return actions;
 	}
@@ -267,6 +274,98 @@ export class BattleOverlay implements Overlay {
 		void this.resolveRound(attackerChoice, defenderChoice);
 	}
 
+	/**
+	 * Discrete action buttons parented to the local player's character panel
+	 * so they scale and move with it. Seed list ∩ role rules preserves
+	 * tutorial locks (e.g. defend-only).
+	 */
+	private buildActionSelector(role: "attacker" | "defender"): void {
+		const roleFiltered = this.allowedActionsFor(role);
+		const seed = this.availableActions;
+		this.availableActions = roleFiltered.filter((a) => seed.includes(a));
+
+		this.combatActionMenu.setActions(this.availableActions);
+		this.combatActionMenu.onAction = (action) => this.confirmAction(action);
+		this.view.addChild(this.combatActionMenu.view);
+		this.combatActionMenu.setVisible(true);
+
+		this.guideArrow.clear();
+		this.view.addChild(this.guideArrow);
+	}
+
+	/**
+	 * Commits the chosen action: surrender resolves immediately, everything
+	 * else opens hand selection for the allowed card colors.
+	 */
+	private confirmAction(action: CombatAction): void {
+		if (this.tutorialGuide && action !== this.tutorialGuide.requiredAction) {
+			void Promise.resolve(this.tutorialGuide.onWrongAction?.());
+			return;
+		}
+
+		if (this.tutorialGuide) {
+			this.clearTutorialGuide();
+		}
+
+		this.combatActionMenu.setVisible(false);
+
+		const localStats =
+			this.localHumanRole === "attacker"
+				? this.attackerState.stats
+				: this.defenderState.stats;
+
+		if (action === "surrender") {
+			void this.resolveLocalChoice({ action, stats: localStats });
+			return;
+		}
+
+		this.pendingAction = action;
+		const allowedColors = ALLOWED_COLORS[action];
+		this.localHand.enterSelectionMode((data) =>
+			allowedColors.includes(data.color),
+		);
+		this.roundText.text = `Choose a card for ${ACTION_LABELS[action]}`;
+	}
+
+	private applyTutorialGuideVisuals(): void {
+		const guide = this.tutorialGuide;
+		if (!guide) {
+			this.guideArrow.clear();
+			this.combatActionMenu.setDimmedExcept(null);
+			this.combatActionMenu.setHighlighted(null);
+			return;
+		}
+
+		if (guide.grayOthers) {
+			this.combatActionMenu.setDimmedExcept(guide.requiredAction);
+		}
+		this.combatActionMenu.setHighlighted(guide.requiredAction);
+		this.layoutGuideArrow();
+	}
+
+	private layoutGuideArrow(): void {
+		this.guideArrow.clear();
+		const guide = this.tutorialGuide;
+		if (!guide) return;
+
+		const pos = this.combatActionMenu.getButtonScreenPosition(
+			guide.requiredAction,
+		);
+		if (!pos) return;
+
+		// Arrow sits above the chip, same gold triangle as MapScene’s ui pointer.
+		const local = this.view.toLocal(pos);
+		this.guideArrow.poly([0, 0, 10, -16, -10, -16]);
+		this.guideArrow.fill(0xffd700);
+		this.guideArrow.x = local.x;
+		this.guideArrow.y = local.y - 28;
+	}
+
+	private clearTutorialGuide(): void {
+		this.tutorialGuide = null;
+		this.applyTutorialGuideVisuals();
+	}
+
 	private buildUI(): void {
 		this.backdrop.eventMode = "static";
 		this.view.addChild(this.backdrop);
@@ -289,12 +388,12 @@ export class BattleOverlay implements Overlay {
 			this.buildDefenderIndicator();
 		} else if (this.localHumanRole === "attacker") {
 			this.buildDefenderIndicator();
-			this.buildActionSelector(this.attackerTile(), "attacker");
+			this.buildActionSelector("attacker");
 			this.view.addChild(this.localHand.view);
 			this.localHand.syncFromHand(this.attackerState.hand);
 		} else {
 			this.buildAttackerIndicator();
-			this.buildActionSelector(this.defenderTile(), "defender");
+			this.buildActionSelector("defender");
 			this.view.addChild(this.localHand.view);
 			this.localHand.syncFromHand(this.defenderState.hand);
 		}
@@ -613,77 +712,6 @@ export class BattleOverlay implements Overlay {
 		this.defenderIndicator.x = pos.x;
 		this.defenderIndicator.y = pos.y - 70;
 		this.arena.addChild(this.defenderIndicator);
-	}
-
-	private buildActionSelector(
-		tile: { x: number; y: number },
-		role: "attacker" | "defender",
-	): void {
-		this.availableActions = this.allowedActionsFor(role);
-		const pos = this.arenaGridToScreen(tile.x, tile.y);
-		this.selectorContainer.x = pos.x;
-		this.selectorContainer.y = pos.y - 70;
-		this.arena.addChild(this.selectorContainer);
-
-		const leftArrow = this.buildArrow("◀", () => this.cycleSelector(-1));
-		leftArrow.x = -55;
-		this.selectorContainer.addChild(leftArrow);
-
-		const rightArrow = this.buildArrow("▶", () => this.cycleSelector(1));
-		rightArrow.x = 55;
-		this.selectorContainer.addChild(rightArrow);
-
-		this.selectorLabel = new Text({
-			text: ACTION_LABELS[this.availableActions[this.selectorIndex]],
-			style: { fill: 0xffd700, fontSize: 16, fontWeight: "bold" },
-		});
-		this.selectorLabel.anchor.set(0.5);
-		this.selectorLabel.eventMode = "static";
-		this.selectorLabel.cursor = "pointer";
-		this.selectorLabel.on("pointerdown", () => this.confirmSelector());
-		this.selectorContainer.addChild(this.selectorLabel);
-	}
-
-	private buildArrow(symbol: string, onClick: () => void): Text {
-		const t = new Text({
-			text: symbol,
-			style: { fill: 0xffffff, fontSize: 18 },
-		});
-		t.anchor.set(0.5);
-		t.eventMode = "static";
-		t.cursor = "pointer";
-		t.on("pointerdown", onClick);
-		return t;
-	}
-
-	private cycleSelector(direction: 1 | -1): void {
-		this.selectorIndex =
-			(this.selectorIndex + direction + this.availableActions.length) %
-			this.availableActions.length;
-		this.selectorLabel.text =
-			ACTION_LABELS[this.availableActions[this.selectorIndex]];
-	}
-
-	private confirmSelector(): void {
-		const action = this.availableActions[this.selectorIndex];
-		this.selectorContainer.visible = false;
-
-		const localStats =
-			this.localHumanRole === "attacker"
-				? this.attackerState.stats
-				: this.defenderState.stats;
-
-		if (action === "surrender") {
-			void this.resolveLocalChoice({ action, stats: localStats });
-			return;
-		}
-
-		this.pendingAction = action;
-		const allowedColors = ALLOWED_COLORS[action];
-		this.localHand.enterSelectionMode((data) =>
-			allowedColors.includes(data.color),
-		);
-		this.roundText.text = `Choose a card for ${ACTION_LABELS[action]}`;
 	}
 
 	private onHandCardConfirmed(card: CardData): void {
@@ -1010,10 +1038,7 @@ export class BattleOverlay implements Overlay {
 			return;
 		}
 
-		this.selectorContainer.visible = true;
-		this.selectorIndex = 0;
-		this.selectorLabel.text =
-			ACTION_LABELS[this.availableActions[this.selectorIndex]];
+		this.combatActionMenu.setVisible(true);
 	}
 
 	private describeOutcome(
@@ -1161,5 +1186,14 @@ export class BattleOverlay implements Overlay {
 		this.loserLootPanel.view.scale.set(s);
 		this.surrenderLootPanel.view.scale.set(s);
 		this.lootConfirmPopup.scale.set(s);
+
+		if (this.localHumanRole !== "none") {
+			const panel =
+				this.localHumanRole === "attacker"
+					? this.attackerPanel
+					: this.defenderPanel;
+			const panelW = uiPx(190, s);
+			this.combatActionMenu.layoutAbovePanel(panel.x, panel.y, panelW, s);
+		}
 	}
 }

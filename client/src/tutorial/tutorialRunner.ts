@@ -134,10 +134,45 @@ export class TutorialRunner {
 			}
 
 			if (segment.triggerCombat) {
-				await this.mapScene.triggerTutorialMonsterAttack(
+				const guideSpec = segment.triggerCombat.guide;
+				let readyResolve: (() => void) | null = null;
+				const ready = guideSpec
+					? new Promise<void>((r) => {
+							readyResolve = r;
+						})
+					: Promise.resolve();
+
+				const battleDone = this.mapScene.triggerTutorialMonsterAttack(
 					segment.triggerCombat.maxRounds,
 					segment.triggerCombat.availableActions,
+					guideSpec
+						? {
+								requiredAction: guideSpec.requiredAction,
+								grayOthers: guideSpec.grayOthers,
+								onWrongAction: async () => {
+									this.state.totalFailures += 1;
+									this.state.failuresBySegment[segment.id] =
+										(this.state.failuresBySegment[segment.id] ?? 0) + 1;
+
+									if (segment.failLine) {
+										await this.playDialogue(segment.failLine);
+									}
+								},
+								onReady: () => {
+									readyResolve?.();
+								},
+							}
+						: undefined,
 				);
+
+				await ready;
+				// Intro was already played before this block in the main loop —
+				// for guided fights, play a dedicated battle intro AFTER ready:
+				if (segment.battleIntro) {
+					await this.playDialogue(segment.battleIntro);
+				}
+
+				await battleDone;
 			}
 
 			if (segment.objective) {
@@ -205,11 +240,24 @@ export class TutorialRunner {
 	private async playDialogue(source: DialogueSource): Promise<void> {
 		const lines = this.resolveLines(source);
 		if (lines.length === 0) return;
-		this.mapScene.setHudVisible(false);
-		await this.game.overlays.show(this.dialogueOverlay);
+
+		const layered = this.game.overlays.isOpen;
+		if (!layered) this.mapScene.setHudVisible(false);
+
+		if (layered) {
+			await this.game.overlays.showOnTop(this.dialogueOverlay);
+		} else {
+			await this.game.overlays.show(this.dialogueOverlay);
+		}
+
 		await this.dialogueOverlay.playLines(lines);
-		this.game.overlays.hide();
-		this.mapScene.setHudVisible(true);
+
+		if (layered) {
+			this.game.overlays.hideTop();
+		} else {
+			this.game.overlays.hide();
+			this.mapScene.setHudVisible(true);
+		}
 	}
 
 	private waitForOutcome(segment: TutorialSegment): Promise<"met" | "failed"> {

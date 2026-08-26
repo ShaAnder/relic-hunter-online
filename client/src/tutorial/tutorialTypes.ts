@@ -119,6 +119,8 @@ export interface TutorialSegment {
 	targetTile?: GridCoord;
 	/** If set, a bobbing arrow points at this UI element for as long as this segment's objective is active — tracked live every frame. */
 	uiPointer?: TutorialUiPointerTarget;
+	battleIntro?: DialogueSource;
+
 	/**
 	 * Coordinates that count as a genuine wrong choice, not just "not
 	 * there yet". If a "moved" event's finalCoord lands on one of
@@ -155,7 +157,15 @@ export interface TutorialSegment {
 	 */
 	triggerCombat?: {
 		maxRounds: number;
+		/** Prefer guide over locking availableActions — show every button, gate the choice. */
 		availableActions?: ("attack" | "defend" | "run" | "surrender")[];
+		guide?: {
+			requiredAction: "attack" | "defend" | "run" | "surrender";
+			/** Dim non-required chips (still clickable so wrong-press can fail). */
+			grayOthers?: boolean;
+			/** Layered fail lines when the player presses the wrong bar action. */
+			failLine?: DialogueSource;
+		};
 	};
 	/**
 	 * If set, TutorialRunner calls MapScene.spawnTutorialMonster directly

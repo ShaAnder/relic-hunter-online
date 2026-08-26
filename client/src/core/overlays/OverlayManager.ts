@@ -2,73 +2,93 @@ import { Container } from "pixi.js";
 import type { Overlay } from "./Overlay";
 
 /**
- * Layers a single Overlay on top of the currently active scene without
- * calling into SceneManager at all — the scene underneath is never told
- * to exit, its view is never removed, its state is untouched. Scenes are
- * responsible for pausing their own update()/input handling by checking
- * `isOpen`; OverlayManager only owns the overlay's own lifecycle and
- * where it sits in the stage.
+ * Layers overlays on top of the currently active scene without calling
+ * into SceneManager at all — the scene underneath is never told to
+ * exit, its view is never removed, its state is untouched.
  *
- * Deliberately separate from SceneManager rather than folding this into
- * a full push/pop scene stack — SceneManager's single-scene, full-replace
- * design is intentional (see its own docblock), and pause/dialog/loading
- * style UI is a narrower need that doesn't require rearchitecting it.
+ * Backed by a real stack, not a single slot — `show()`/`hide()` keep
+ * their original, exclusive "replace everything" behavior exactly as
+ * before
+ *
+ * Deliberately separate from SceneManager rather than folding this
+ * into a full push/pop scene stack — SceneManager's single-scene,
+ * full-replace design is intentional
  */
 export class OverlayManager {
 	private stage: Container;
-	private current: Overlay | null = null;
+	private stack: Overlay[] = [];
 
 	constructor(stage: Container) {
 		this.stage = stage;
 	}
 
-	/** Whether an overlay is currently showing. Scenes check this to pause themselves. */
+	/** Whether ANY overlay is currently showing, at any stack depth — */
 	get isOpen(): boolean {
-		return this.current !== null;
+		return this.stack.length > 0;
 	}
 
-	/** Current overlay, if any — scenes use this for Escape policy. */
+	/** The TOPMOST overlay, if any — scenes use this for Escape policy,  */
 	get active(): Overlay | null {
-		return this.current;
+		return this.stack[this.stack.length - 1] ?? null;
 	}
 
 	/**
-	 * Show an overlay on top of the stage. Replaces any overlay already
-	 * showing.
+	 * Show an overlay exclusively — replaces the ENTIRE stack, exactly
+	 * as before. Unchanged behavior, unchanged signature; every
+	 * existing caller keeps working with no changes needed.
 	 *
-	 * The overlay's view is added to the stage — and `current` is set —
-	 * BEFORE awaiting onShow(), not after. If onShow() itself runs a long
-	 * async sequence (a loading screen doing real setup work, a cinematic
-	 * pan), the overlay needs to actually be visible and receiving update()
-	 * ticks throughout that sequence, not just once it's already finished.
-	 * Adding the view first is what makes "layer a loading screen on top
-	 * while everything resolves" actually work.
+	 * The overlay's view is added to the stage — and it's pushed onto
+	 * the stack — BEFORE awaiting onShow(), not after.
 	 */
 	async show(overlay: Overlay): Promise<void> {
-		if (this.current) this.hide();
+		this.clearStack();
 
-		this.current = overlay;
+		this.stack.push(overlay);
 		this.stage.addChild(overlay.view);
 
 		await overlay.onShow();
 	}
 
-	/** Hide the current overlay, if any. No-ops if nothing is showing. */
+	/** Hide everything — clears the entire stack */
 	hide(): void {
-		if (!this.current) return;
-
-		this.current.onHide();
-		this.stage.removeChild(this.current.view);
-		this.current = null;
+		this.clearStack();
 	}
 
-	/** Forward the per-frame tick to the current overlay, if any. */
+	/**
+	 * Layers a new overlay ON TOP of whatever's already showing,
+	 * without touching it
+	 */
+	async showOnTop(overlay: Overlay): Promise<void> {
+		this.stack.push(overlay);
+		this.stage.addChild(overlay.view);
+
+		await overlay.onShow();
+	}
+
+	/** Removes just the TOPMOST overlay, restoring whatever was underneath  */
+	hideTop(): void {
+		const top = this.stack.pop();
+		if (!top) return;
+
+		top.onHide();
+		this.stage.removeChild(top.view);
+	}
+
+	private clearStack(): void {
+		while (this.stack.length > 0) {
+			const overlay = this.stack.pop()!;
+			overlay.onHide();
+			this.stage.removeChild(overlay.view);
+		}
+	}
+
+	/** Forward the per-frame tick to the TOPMOST overlay only  */
 	update(deltaTime: number): void {
-		this.current?.update(deltaTime);
+		this.active?.update(deltaTime);
 	}
 
-	/** Forward resize events to the current overlay, if any. */
+	/** Forward resize events to the TOPMOST overlay only. */
 	onResize(width: number, height: number): void {
-		this.current?.onResize(width, height);
+		this.active?.onResize(width, height);
 	}
 }
