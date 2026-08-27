@@ -29,12 +29,9 @@ import type {
 } from "@/tutorial/tutorialTypes";
 import { MatchResultScene } from "./MatchResultScene";
 import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
-import { BagButton } from "@/ui/buttons/BagButton";
-import { ActionMenu } from "@/ui/buttons/ActionMenu";
 import { PlayZone } from "@/ui/PlayZone";
 import type { PilotedMercenary, MovableToken } from "@/types/entities";
 import { logMatchEvent } from "@/core/game/GameSession";
-import { InspectButton } from "@/ui/buttons/InspectButton";
 import {
 	HunterSummaryPanel,
 	type HunterSummaryEntry,
@@ -119,9 +116,6 @@ export class MapScene implements Scene, TutorialPort {
 	private inventoryPanel: InventoryPanel;
 
 	// UI
-	private bagButton: BagButton;
-	private buttonBar: ActionMenu;
-	private inspectButton: InspectButton;
 	private hunterSummaryPanel: HunterSummaryPanel;
 	private hud!: MapHud;
 
@@ -204,12 +198,9 @@ export class MapScene implements Scene, TutorialPort {
 	private get uiSurfaces(): Container[] {
 		return [
 			this.inventoryPanel.view,
-			this.hud.logPanelView,
+			...this.hud.interactiveSurfaces,
 			this.hunterSummaryPanel.view,
 			this.characterPanel.view,
-			this.bagButton.view,
-			this.hud.logsButtonView,
-			this.inspectButton.view,
 			this.deckTracker.view,
 			this.hand.view,
 			this.playZone.view,
@@ -308,12 +299,6 @@ export class MapScene implements Scene, TutorialPort {
 		this.deckTracker = new DeckTracker();
 		this.view.addChild(this.deckTracker.view);
 
-		this.bagButton = new BagButton();
-		this.view.addChild(this.bagButton.view);
-
-		this.inspectButton = new InspectButton();
-		this.view.addChild(this.inspectButton.view);
-
 		this.hunterSummaryPanel = new HunterSummaryPanel();
 		this.view.addChild(this.hunterSummaryPanel.view);
 
@@ -340,6 +325,12 @@ export class MapScene implements Scene, TutorialPort {
 				return this.drawLayer.toLocal(this.hand.view.getGlobalPosition());
 			},
 			onCollected: (card) => {
+				// The hand is a hard-cap invariant. The draw source should already
+				// have limited the requested draw, but keep this as the final
+				// presentation-side guard against queued/tutorial cards overflowing it.
+				if (this.localUnit.turnManager.handSize >= this.localUnit.turnManager.maxHandSize) {
+					return;
+				}
 				this.localUnit.state.hand.push(card);
 				this.tutorialConfig?.onTutorialEvent({ type: "cardCollected" });
 				this.syncUI();
@@ -350,9 +341,8 @@ export class MapScene implements Scene, TutorialPort {
 		this.game.app.stage.eventMode = "static";
 		this.game.app.stage.hitArea = this.game.app.screen;
 
-		// Top up to the full 5-card starting hand — the local unit's own
-		// TurnManager already drew 1 via its own reset()→endTurn() cascade;
-		// this draws the remaining 4. Skipped entirely for tutorials.
+		// Establish the initial five-card hand. Initial setup is not a normal
+		// turn-start draw; subsequent turns draw exactly one at startTurn().
 		if (!this.tutorialConfig) {
 			const starter = this.localUnit.turnManager.dealStartingHand();
 			// Defer present until onEnter so layer is laid out — or enqueue now:
@@ -366,17 +356,14 @@ export class MapScene implements Scene, TutorialPort {
 		// traps
 		this.boardContainer.addChild(this.trapMarkerContainer);
 
-		this.buttonBar = new ActionMenu();
-		this.buttonBar.onSubmenuToggled = (open) => {
+		this.hud = new MapHud(this.game);
+		this.hud.setActionMenuSubmenuToggled((open) => {
 			if (open) {
 				this.tutorialConfig?.onTutorialEvent({
 					type: "actionsSubmenuOpened",
 				});
 			}
-		};
-		this.view.addChild(this.buttonBar.view);
-
-		this.hud = new MapHud(this.game);
+		});
 		this.view.addChild(this.hud.view);
 
 		this.view.addChild(this.uiPointerMarker);
@@ -416,7 +403,7 @@ export class MapScene implements Scene, TutorialPort {
 	/** Tear down visuals and input listeners. */
 	onExit(): void {
 		this.moveController.exit();
-		this.buttonBar.closeMenu();
+		this.hud.closeActionMenu();
 		this.boardContainer.removeChildren();
 		this.camera.detach(this.game.app.canvas);
 		window.removeEventListener("keydown", this.handleKeyDown);
@@ -459,7 +446,6 @@ export class MapScene implements Scene, TutorialPort {
 		}
 
 		this.hand.update(deltaTime);
-		this.buttonBar.update(deltaTime);
 		this.inventoryPanel.update(deltaTime);
 
 		// PASS 4 TODO: still assumes exactly one local unit ever needs the
@@ -628,6 +614,13 @@ export class MapScene implements Scene, TutorialPort {
 	private async beginPlayerTurn(): Promise<void> {
 		this.camera.unlock();
 
+		// A normal player turn starts here. TurnManager owns the rule and
+		// returns the card for MapScene to present through CardDrawQueue.
+		const drawn = this.localUnit.turnManager.startTurn();
+		if (drawn.length > 0) {
+			this.cardDrawQueue.enqueue(drawn);
+		}
+
 		if (this.localUnit.state.currentHp <= 0) {
 			await this.camera.panTo(
 				{
@@ -639,7 +632,6 @@ export class MapScene implements Scene, TutorialPort {
 				this.game.app.screen.height,
 			);
 			this.localUnit.state.currentHp = 1;
-			this.localUnit.turnManager.refreshTurnWithoutDraw();
 			this.showFeedback("✨ You recover and get back up");
 			this.turnsTaken++;
 			this.trySpawnMonster();
@@ -650,7 +642,6 @@ export class MapScene implements Scene, TutorialPort {
 
 		if (this.localUnit.state.stunnedTurnsRemaining > 0) {
 			this.localUnit.state.stunnedTurnsRemaining -= 1;
-			this.localUnit.turnManager.refreshTurnWithoutDraw();
 			this.showFeedback("🪤 You're stunned and can't act this turn");
 			this.turnsTaken++;
 			this.trySpawnMonster();
@@ -679,54 +670,29 @@ export class MapScene implements Scene, TutorialPort {
 
 		for (const v of [
 			this.characterPanel.view,
-			this.bagButton.view,
-			this.inspectButton.view,
-			this.hud.logsButtonView,
 			this.inventoryPanel.view,
-			this.hud.logPanelView,
 			this.hunterSummaryPanel.view,
 			this.deckTracker.view,
-			this.hud.refocusView,
 			this.playZone.view,
 		]) {
 			v.scale.set(s);
 		}
-		// buttonBar + hand set scale inside their own layout/resize
 
 		const m = uiPx(16, s);
 		const panelW = this.characterPanel.panelWidth * s;
 		const panelH = this.characterPanel.panelHeight * s;
-		const btn = uiPx(40, s);
 		const gap = uiPx(8, s);
 
 		this.characterPanel.view.x = m;
 		this.characterPanel.view.y = m;
 
-		this.bagButton.view.x = m;
-		this.bagButton.view.y = m + panelH + gap;
+		this.hud.layout(w, h, s, m, this.characterPanel.panelHeight);
 
-		this.inspectButton.view.x = this.bagButton.view.x + btn + gap;
-		this.inspectButton.view.y = this.bagButton.view.y;
-
-		this.hud.layoutLogsButton(
-			this.inspectButton.view.x,
-			this.inspectButton.view.y,
-			btn,
-			gap,
-		);
-
-		this.hunterSummaryPanel.view.x = this.bagButton.view.x;
-		this.hunterSummaryPanel.view.y = this.bagButton.view.y + uiPx(56, s);
-
-		this.hud.layoutLogPanel(this.bagButton.view.x, this.bagButton.view.y, s);
+		this.hunterSummaryPanel.view.x = m;
+		this.hunterSummaryPanel.view.y = m + panelH + gap + uiPx(56, s);
 
 		this.inventoryPanel.view.x = m + panelW + gap;
 		this.inventoryPanel.view.y = m;
-
-		this.buttonBar.layout(w, h, s);
-
-		// Refocus: center-right edge
-		this.hud.layoutRefocusButton(w, h, s);
 
 		this.deckTracker.view.x = w - uiPx(88, s) - m;
 		this.deckTracker.view.y = m;
@@ -750,7 +716,7 @@ export class MapScene implements Scene, TutorialPort {
 	private handleMovePressed(): void {
 		if (this.moveController.active) {
 			this.moveController.exit();
-			this.buttonBar.setMoveActive(false);
+			this.hud.setMoveActive(false);
 			return;
 		}
 
@@ -761,7 +727,7 @@ export class MapScene implements Scene, TutorialPort {
 
 		if (this.hand.isSelecting) {
 			this.hand.exitSelectionMode();
-			this.buttonBar.setMoveActive(false);
+			this.hud.setMoveActive(false);
 			return;
 		}
 
@@ -772,8 +738,8 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.hand.enterSelectionMode((data) => data.actionType !== "attack");
 		this.tutorialConfig?.onTutorialEvent({ type: "actionMenuOpened" });
-		this.buttonBar.setMoveActive(true);
-		this.buttonBar.closeMenu();
+		this.hud.setMoveActive(true);
+		this.hud.closeActionMenu();
 	}
 
 	private handlePointerDown = (event: PointerEvent): void => {
@@ -792,7 +758,7 @@ export class MapScene implements Scene, TutorialPort {
 			const before = this.moveController.active;
 			this.moveController.onPointerDown(tile);
 			if (before && !this.moveController.active) {
-				this.buttonBar.setMoveActive(false);
+				this.hud.setMoveActive(false);
 			}
 			// If still active, they re-pathed / started a new drag
 			if (this.moveController.isDragging) {
@@ -860,7 +826,7 @@ export class MapScene implements Scene, TutorialPort {
 				? truncatedPath[truncatedPath.length - 1]
 				: local.state.coord;
 		local.turnManager.commitMove(truncatedPath.length);
-		this.buttonBar.setMoveActive(false);
+		this.hud.setMoveActive(false);
 		this.moveController.exit();
 
 		if (ignoresZoc) {
@@ -894,11 +860,11 @@ export class MapScene implements Scene, TutorialPort {
 	/** Hide player controls while AI resolves overworld turns. */
 	private setPlayerControlsVisible(visible: boolean): void {
 		this.hand.view.visible = visible;
-		this.buttonBar.view.visible = visible;
+		this.hud.setActionMenuVisible(visible);
 		if (!visible) {
 			this.hand.exitSelectionMode();
-			this.buttonBar.closeMenu();
-			this.buttonBar.setMoveActive(false);
+			this.hud.closeActionMenu();
+			this.hud.setMoveActive(false);
 			this.moveController.exit();
 		}
 	}
@@ -1187,19 +1153,18 @@ export class MapScene implements Scene, TutorialPort {
 
 			let isFirst = true;
 			for (const unit of this.aiUnits) {
-				if (unit.state.currentHp <= 0) {
-					if (!isFirst) await this.delay(BETWEEN_AI_MS);
-					isFirst = false;
-					await this.processRecoveryTurn(unit);
-					continue;
-				}
-
 				if (!isFirst) {
 					await this.delay(BETWEEN_AI_MS);
 				}
 				isFirst = false;
-				const drawn = unit.turnManager.endTurn();
+				// Every AI turn begins through the same lifecycle as the local player.
+				// TurnManager refreshes the turn and returns only cards the hand can hold.
+				const drawn = unit.turnManager.startTurn();
 				unit.state.hand.push(...drawn);
+				if (unit.state.currentHp <= 0) {
+					await this.processRecoveryTurn(unit);
+					continue;
+				}
 				await this.processOneEnemyTurn(unit);
 				this.trySpawnMonster();
 			}
@@ -1437,7 +1402,6 @@ export class MapScene implements Scene, TutorialPort {
 		);
 
 		unit.state.currentHp = 1;
-		unit.turnManager.refreshTurnWithoutDraw();
 		this.showFeedback(
 			`✨ ${this.getUnitLabel(unit)} recovers and gets back up`,
 		);
@@ -2266,7 +2230,7 @@ export class MapScene implements Scene, TutorialPort {
 	private handleDisengagePressed(): void {
 		if (this.moveController.active) {
 			this.moveController.exit();
-			this.buttonBar.setMoveActive(false);
+			this.hud.setMoveActive(false);
 			return;
 		}
 
@@ -2275,8 +2239,8 @@ export class MapScene implements Scene, TutorialPort {
 		if (!this.localUnit.turnManager.beginDisengage()) return;
 
 		this.moveController.enter(this.localUnit.state.stats.movement, true);
-		this.buttonBar.setMoveActive(true);
-		this.buttonBar.closeMenu();
+		this.hud.setMoveActive(true);
+		this.hud.closeActionMenu();
 	}
 
 	private handleSpecialPressed(): void {
@@ -2305,10 +2269,9 @@ export class MapScene implements Scene, TutorialPort {
 		this.moveController.exit();
 		this.hand.exitSelectionMode();
 		this.exitTargetingMode();
-		this.buttonBar.setMoveActive(false);
-		this.buttonBar.closeMenu();
-		const drawn = this.localUnit.turnManager.endTurn();
-		this.cardDrawQueue.enqueue(drawn);
+		this.hud.setMoveActive(false);
+		this.hud.closeActionMenu();
+		this.localUnit.turnManager.endTurn();
 		this.turnsTaken++;
 		this.tutorialConfig?.onTutorialEvent({ type: "turnEnded" });
 		this.trySpawnMonster();
@@ -2331,11 +2294,11 @@ export class MapScene implements Scene, TutorialPort {
 				if (this.targetingActive) {
 					this.exitTargetingMode();
 				} else if (this.moveController.active) {
-					this.buttonBar.setMoveActive(false);
+					this.hud.setMoveActive(false);
 				} else if (this.hand.isSelecting) {
 					this.hand.exitSelectionMode();
-					this.buttonBar.setMoveActive(false);
-					this.buttonBar.closeMenu();
+					this.hud.setMoveActive(false);
+					this.hud.closeActionMenu();
 				} else {
 					this.openPauseMenu();
 				}
@@ -2358,7 +2321,7 @@ export class MapScene implements Scene, TutorialPort {
 			case " ":
 				if (this.moveController.isPreviewLocked) {
 					if (this.moveController.confirm()) {
-						this.buttonBar.setMoveActive(false);
+						this.hud.setMoveActive(false);
 					}
 					break;
 				}
@@ -2386,9 +2349,9 @@ export class MapScene implements Scene, TutorialPort {
 		}
 
 		const { screenX, screenY } = this.getScreenPoint(event);
-		const action = this.buttonBar.handleClick(screenX, screenY);
+		const action = this.hud.handleActionClick(screenX, screenY);
 
-		if (this.bagButton.hitTest(screenX, screenY)) {
+		if (this.hud.hitTestBag(screenX, screenY)) {
 			this.inventoryPanel.toggle();
 			return;
 		}
@@ -2397,7 +2360,7 @@ export class MapScene implements Scene, TutorialPort {
 			return;
 		}
 
-		if (this.inspectButton.hitTest(screenX, screenY)) {
+		if (this.hud.hitTestInspect(screenX, screenY)) {
 			this.hunterSummaryPanel.toggle();
 			return;
 		}
@@ -2438,7 +2401,7 @@ export class MapScene implements Scene, TutorialPort {
 				if (this.moveController.isPreviewLocked) {
 					const tile = this.screenPointToGrid(screenX, screenY);
 					if (this.moveController.onPrimary(tile)) {
-						this.buttonBar.setMoveActive(false);
+						this.hud.setMoveActive(false);
 					}
 				}
 				break;
@@ -2468,7 +2431,7 @@ export class MapScene implements Scene, TutorialPort {
 		logMatchEvent(this.game.session, message);
 		this.hud.syncLogPanel(this.game.session.matchLog ?? []);
 	}
-	/** Sync all UI to the local unit's TurnManager state. Guarded — fires before buttonBar exists during construction. */
+	/** Sync all UI to the local unit's TurnManager state. */
 	/**
 	 * Pushes a specific card directly into the local player's hand,
 	 * bypassing the deck entirely. Deliberately generic, not shaped
@@ -2476,6 +2439,7 @@ export class MapScene implements Scene, TutorialPort {
 	 * item-card can reuse this exactly as-is.
 	 */
 	giveCard(card: RH.CardData): void {
+		if (this.localUnit.turnManager.handCapacity <= 0) return;
 		this.cardDrawQueue.enqueue(card);
 	}
 
@@ -2492,7 +2456,9 @@ export class MapScene implements Scene, TutorialPort {
 	 * CardDrawQueue's own API is already built to accept correctly.
 	 */
 	giveCards(cards: RH.CardData[]): void {
-		this.cardDrawQueue.enqueue(cards);
+		const allowed = cards.slice(0, this.localUnit.turnManager.handCapacity);
+		if (allowed.length === 0) return;
+		this.cardDrawQueue.enqueue(allowed);
 	}
 
 	/**
@@ -2543,11 +2509,12 @@ export class MapScene implements Scene, TutorialPort {
 	setHudVisible(isVisible: boolean): void {
 		this.characterPanel.view.visible = isVisible;
 		this.deckTracker.view.visible = isVisible;
-		this.bagButton.view.visible = isVisible;
-		this.buttonBar.view.visible = isVisible;
+		this.hud.setBagVisible(isVisible);
+		this.hud.setActionMenuVisible(isVisible);
+		this.hud.view.visible = isVisible;
 		this.hud.setRefocusVisible(isVisible);
 		this.hud.setLogsChromeVisible(isVisible);
-		this.inspectButton.view.visible = isVisible;
+		this.hud.setInspectVisible(isVisible);
 		this.hand.view.visible = isVisible;
 
 		if (!isVisible) {
@@ -2862,7 +2829,7 @@ export class MapScene implements Scene, TutorialPort {
 	): { x: number; y: number } | null {
 		switch (target.kind) {
 			case "actionButton":
-				return this.buttonBar.getButtonScreenPosition(target.key);
+				return this.hud.getActionButtonScreenPosition(target.key);
 			case "handCard":
 				return this.hand.getCardScreenPosition(target.cardId);
 			case "cardDrawStack":
@@ -2875,9 +2842,9 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	private syncUI(): void {
-		if (!this.buttonBar || this.units.length === 0) return;
+		if (!this.hud || this.units.length === 0) return;
 		const local = this.localUnit;
-		this.buttonBar.sync(
+		this.hud.syncActions(
 			local.turnManager,
 			RH.getClassSpecial(local.state.characterClass),
 		);
@@ -2931,7 +2898,7 @@ export class MapScene implements Scene, TutorialPort {
 		this.syncUI();
 
 		this.moveController.requestEnter();
-		this.buttonBar.setMoveActive(this.moveController.active);
+		this.hud.setMoveActive(this.moveController.active);
 
 		if (card.actionType === "stun") {
 			// TEMPORARY: routed through the Move flow because there's no
@@ -2940,7 +2907,7 @@ export class MapScene implements Scene, TutorialPort {
 			this.placeTrap(card);
 			if (!local.turnManager.beginMovement("none", 0)) return;
 			this.moveController.requestEnter();
-			this.buttonBar.setMoveActive(this.moveController.active);
+			this.hud.setMoveActive(this.moveController.active);
 			return;
 		}
 	}
@@ -3200,8 +3167,8 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.moveController.exit();
 		this.hand.exitSelectionMode();
-		this.buttonBar.setMoveActive(false);
-		this.buttonBar.closeMenu();
+		this.hud.setMoveActive(false);
+		this.hud.closeActionMenu();
 		this.exitTargetingMode();
 
 		this.mapSeed = Math.floor(Math.random() * 1_000_000);
@@ -3245,8 +3212,8 @@ export class MapScene implements Scene, TutorialPort {
 		this.moveController.exit();
 		this.exitTargetingMode();
 		this.hand.exitSelectionMode();
-		this.buttonBar.setMoveActive(false);
-		this.buttonBar.closeMenu();
+		this.hud.setMoveActive(false);
+		this.hud.closeActionMenu();
 	}
 
 	/** Convert a mouse event to canvas-local screen coordinates. */
