@@ -1,7 +1,7 @@
 import { Container, Graphics, Text } from "pixi.js";
 import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
-import { Camera } from "@/core/cameras/Camera";
+import { CameraController } from "@/core/cameras/CameraController";
 import {
 	gridToScreen,
 	screenToGrid,
@@ -71,7 +71,7 @@ export class MapScene implements Scene, TutorialPort {
 	private mercenaryContainer = new Container();
 
 	// Systems
-	private camera: Camera;
+	private camera: CameraController;
 	private moveController: MoveController;
 
 	// Entities — one array, pilot type is the only thing distinguishing them
@@ -250,7 +250,7 @@ export class MapScene implements Scene, TutorialPort {
 			const ui = computeUiScale(sw, sh);
 			// Mobile / narrow: start more zoomed out so the board is readable
 			const mobile = ui < 0.85 || Math.min(sw, sh) < 500;
-			this.camera = new Camera(this.boardContainer, {
+			this.camera = new CameraController(this.boardContainer, {
 				initialZoom: mobile ? 1.05 : 1.75,
 				minZoom: mobile ? 1.05 : 1.4,
 				maxZoom: 4,
@@ -328,7 +328,10 @@ export class MapScene implements Scene, TutorialPort {
 				// The hand is a hard-cap invariant. The draw source should already
 				// have limited the requested draw, but keep this as the final
 				// presentation-side guard against queued/tutorial cards overflowing it.
-				if (this.localUnit.turnManager.handSize >= this.localUnit.turnManager.maxHandSize) {
+				if (
+					this.localUnit.turnManager.handSize >=
+					this.localUnit.turnManager.maxHandSize
+				) {
 					return;
 				}
 				this.localUnit.state.hand.push(card);
