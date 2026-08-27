@@ -46,8 +46,8 @@ import { MonsterToken } from "@/entities/Monster";
 import type { MonsterEntity } from "@/types/entities";
 import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
 import { AudioController } from "@/core/audio/audioController";
-import { Ticker } from "pixi.js";
 import { CardDrawQueue } from "@/ui/CardDrawQueue";
+import { MapHud } from "@/hud/MapHud";
 import { DialogueOverlay } from "@/ui/overlay/DialogueOverlay";
 import type { TutorialPort } from "@/tutorial/tutorialPort";
 import type { DialogueLine } from "@/tutorial/dialogue";
@@ -131,7 +131,7 @@ export class MapScene implements Scene, TutorialPort {
 	private hunterSummaryPanel: HunterSummaryPanel;
 	private feedbackText: Text;
 	private feedbackTimer = 0;
-	private bossAlertText!: Text;
+	private hud!: MapHud;
 
 	// Item pickup popup — floats above the mercenary's head, placeholder
 	// icon until real item sprites exist
@@ -400,13 +400,8 @@ export class MapScene implements Scene, TutorialPort {
 		this.feedbackText.visible = false;
 		this.view.addChild(this.feedbackText);
 
-		this.bossAlertText = new Text({
-			text: "⚠ ALERT ⚠",
-			style: { fill: 0xff2222, fontSize: 72, fontWeight: "bold" },
-		});
-		this.bossAlertText.anchor.set(0.5);
-		this.bossAlertText.visible = false;
-		this.view.addChild(this.bossAlertText);
+		this.hud = new MapHud(this.game);
+		this.view.addChild(this.hud.view);
 
 		this.view.addChild(this.uiPointerMarker);
 	}
@@ -771,30 +766,6 @@ export class MapScene implements Scene, TutorialPort {
 		this.drawLayer.x = w / 2;
 		this.drawLayer.y = h * 0.42;
 		this.drawLayer.scale.set(s);
-	}
-
-	/** Flashing red alert, centered on screen, for durationMs. Resolves once it's done and hidden again. */
-	private showBossAlert(durationMs: number): Promise<void> {
-		return new Promise((resolve) => {
-			this.bossAlertText.x = this.game.app.screen.width / 2;
-			this.bossAlertText.y = this.game.app.screen.height / 2;
-			this.bossAlertText.visible = true;
-			const startTime = performance.now();
-
-			const tick = (): void => {
-				const elapsedMs = performance.now() - startTime;
-				if (elapsedMs >= durationMs) {
-					this.bossAlertText.visible = false;
-					Ticker.shared.remove(tick);
-					resolve();
-					return;
-				}
-				this.bossAlertText.alpha =
-					0.4 + Math.abs(Math.sin(elapsedMs / 500)) * 0.6;
-			};
-
-			Ticker.shared.add(tick);
-		});
 	}
 
 	// ---------- Move ----------
@@ -1578,7 +1549,7 @@ export class MapScene implements Scene, TutorialPort {
 
 		const SHAKE_MS = 5000;
 		await Promise.all([
-			this.showBossAlert(SHAKE_MS),
+			this.hud.showBossAlert(SHAKE_MS),
 			Promise.race([
 				this.camera.shake(SHAKE_MS, 24),
 				this.delay(SHAKE_MS + 500),
@@ -2567,12 +2538,7 @@ export class MapScene implements Scene, TutorialPort {
 		this.syncUI();
 	}
 
-	/**
-	 * Shows dialogue, layered on top of an already-open overlay (a
-	 * live battle) or exclusively otherwise — fading/restoring the HUD
-	 * only in the exclusive case, since a layered battle's own HUD
-	 * stays exactly as it was.
-	 */
+	/** Layers over an open overlay (a live battle) or shows exclusively, fading the HUD only in the exclusive case. */
 	async playDialogue(lines: DialogueLine[]): Promise<void> {
 		if (lines.length === 0) return;
 		this.dialogueOverlay ??= new DialogueOverlay(this.game);
