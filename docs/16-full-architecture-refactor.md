@@ -1,10 +1,12 @@
 # Full Architecture Refactor — Relic Hunter Online
 
-**Status:** Revised master plan  
-**Date:** 2026-08-26  
+**Status:** Revised master plan + responsive HUD/input routing update  
+**Date:** 2026-08-27  
 **Scope:** Entire monorepo (`client/`, `shared/`, `server/`, `docs/`)  
 **Supersedes:** Earlier map/tutorial-only architecture drafts where they conflict  
 **Primary goal:** Finish the separation already emerging in the codebase without replacing one god object with another.
+
+> This copy incorporates the agreed responsive HUD, panel scrolling, touch/drag, and camera/input ownership design. It is intended to replace the previous architecture-plan copy in the repository.
 
 ---
 
@@ -19,14 +21,15 @@ Relic Hunter Online already has several strong architectural foundations:
 - `OverlayManager` already provides a stack-based global overlay policy.
 - The game is intentionally preparing for Colyseus, but multiplayer authority is not part of this refactor.
 
-The main remaining problem is **responsibility concentration in the client**, especially around `MapScene`, combat presentation/orchestration, and session/match state.
+The main remaining problem is **responsibility concentration in the client**, especially around `MapScene`, combat presentation/orchestration, session/match state, and local input routing.
 
-The refactor therefore has four architectural outcomes:
+The refactor therefore has five architectural outcomes:
 
 1. **Thin scene shells.**
 2. **Explicit state ownership.**
 3. **Commands/orchestration separated from presentation.**
 4. **A stable shared domain that can later run on the server.**
+5. **Explicit input ownership between HUD surfaces and the camera.**
 
 The most important rule is:
 
@@ -34,10 +37,10 @@ The most important rule is:
 
 ---
 
-# 2. Goals
+## 2. Goals
 
 1. Keep `shared/` pure and runnable without Pixi, DOM, or tutorial code.
-2. Keep `client/` responsible for presentation, local input, and local orchestration.
+2. Keep `client/` responsible for presentation, local input, camera, and local orchestration.
 3. Keep future server authority isolated from Pixi and client UI.
 4. Reduce `MapScene` to a scene shell and binding/orchestration role.
 5. Prevent `MapWorld` or another extracted class from becoming a replacement god object.
@@ -45,13 +48,16 @@ The most important rule is:
 7. Make combat orchestration independent from `BattleOverlay`.
 8. Make tutorial scripts depend only on a capability-based `TutorialPort`.
 9. Give the map HUD one root so map chrome can be hidden/shown in one operation.
-10. Preserve normal non-tutorial behavior after every refactor phase.
-11. Prefer incremental, reviewable PRs over a big-bang rewrite.
-12. Make future multiplayer a continuation of the architecture, not a second rewrite.
+10. Make HUD layout responsive to available viewport dimensions.
+11. Make scrollable HUD panels consume their own wheel/touch/drag input.
+12. Route map gestures to the camera only when no HUD surface owns the gesture.
+13. Preserve normal non-tutorial behavior after every refactor phase.
+14. Prefer incremental, reviewable PRs over a big-bang rewrite.
+15. Make future multiplayer a continuation of the architecture, not a second rewrite.
 
 ---
 
-# 3. Non-goals
+## 3. Non-goals
 
 - Combat-rules redesign.
 - Full Colyseus implementation.
@@ -62,25 +68,19 @@ The most important rule is:
 - Creating one global UI god object.
 - Reorganizing folders for aesthetic reasons before ownership boundaries exist.
 - Rewriting healthy shared systems merely because they are not in the new folder tree.
+- Making every HUD panel scrollable regardless of whether its content needs it.
+- Putting gameplay authority into `MapHud`.
+- Making the camera responsible for deciding the internal behavior of individual HUD widgets.
 
 ---
 
-# 4. Architectural principles
+## 4. Architectural principles
 
-## 4.1 Architecture is dependency direction, not folders
+### 4.1 Architecture is dependency direction, not folders
 
 Folders are a consequence of ownership.
 
 A file should move when its responsibility has a clear home, not simply because a new folder exists.
-
-Bad:
-
-```text
-Create world/
-Move 20 files
-Fix imports
-Hope the architecture improved
-```
 
 Good:
 
@@ -96,9 +96,7 @@ Prove behavior unchanged
 Move file if the resulting ownership warrants it
 ```
 
----
-
-## 4.2 Shared is domain, not infrastructure
+### 4.2 Shared is domain, not infrastructure
 
 `shared/` must remain usable by both client and future server.
 
@@ -137,38 +135,33 @@ shared ──────► server     NEVER
 client ──────► server     NEVER
 ```
 
-The client may communicate with a future server through an explicit network/protocol boundary, never by importing server implementation code.
-
 ---
 
-# 5. State ownership
+## 5. State ownership
 
-This section is mandatory architectural guidance.
+| State / concern                 | Owner                                      |
+| ------------------------------- | ------------------------------------------ |
+| Combat rules                    | `shared`                                   |
+| Movement rules                  | `shared`                                   |
+| AI decisions                    | `shared`                                   |
+| Targeting / ZoC rules           | `shared`                                   |
+| World-generation rules          | `shared`                                   |
+| Actual match/game state         | `MatchState` / future authoritative server |
+| Application/session concerns    | `GameSession`                              |
+| Pixi display objects            | `client`                                   |
+| Camera state                    | `client`                                   |
+| Local input mode                | `client`                                   |
+| HUD visibility/layout           | `client` / `MapHud`                        |
+| HUD scroll position             | `client` / scrollable HUD component        |
+| Tutorial progress               | `TutorialRunner`                           |
+| Tutorial prose/data             | tutorial scripts                           |
+| Overlay lifecycle               | `OverlayManager`                           |
+| Network connection              | `client`                                   |
+| Authoritative multiplayer state | future `server`                            |
 
-| State / concern | Owner |
-|---|---|
-| Combat rules | `shared` |
-| Movement rules | `shared` |
-| AI decisions | `shared` |
-| Targeting / ZoC rules | `shared` |
-| World-generation rules | `shared` |
-| Actual match/game state | `MatchState` / future authoritative server |
-| Application/session concerns | `GameSession` |
-| Pixi display objects | `client` |
-| Camera state | `client` |
-| Local input mode | `client` |
-| HUD visibility/layout | `client` |
-| Tutorial progress | `TutorialRunner` |
-| Tutorial prose/data | tutorial scripts |
-| Overlay lifecycle | `OverlayManager` |
-| Network connection | `client` |
-| Authoritative multiplayer state | future `server` |
-
-### Important distinction
+Important distinction:
 
 `GameSession` is not the same thing as the game's authoritative state.
-
-The target concept is:
 
 ```text
 GameSession
@@ -195,51 +188,54 @@ Do not let `GameSession` become a general-purpose mutable bucket for gameplay.
 
 ---
 
-# 6. Target runtime architecture
+## 6. Target runtime architecture
 
 ```text
                     PLAYER INPUT
-                         |
-                         v
-                +------------------+
-                |  MapController   |
-                | orchestration    |
-                +--------+---------+
-                         |
-              commands / intent
-                         |
-        +----------------+----------------+
-        |                |                |
-        v                v                v
-   movement         combat request     turn request
-        |                |                |
-        v                v                v
-     shared          BattleHost       TurnRunner
-     rules               |
-                         v
-                  BattleController
-                         |
-                         v
-                     shared
-                   combat rules
-                         |
-                         v
-                    BattleResult
-                         |
-                         v
-                 MatchState update
-                         |
-                         v
-                 presentation/events
-                    /          \
-                   v            v
-                Map view      MapHud
+                          |
+                          v
+                 +------------------+
+                 |  Input ownership |
+                 |     routing      |
+                 +--------+---------+
+                          |
+             +------------+------------+
+             |                         |
+             v                         v
+        HUD surface?                 map
+             |                         |
+             v                         v
+       consume gesture            Camera / MapInput
+             |
+             v
+        HUD behavior
+```
+
+For gameplay commands:
+
+```text
+PLAYER INPUT
+     |
+     v
+MapController
+     |
+     | commands / intent
+     v
++----+-----------+-----------+
+|                |           |
+v                v           v
+movement      combat      turn
+|             request      request
+v                |           v
+shared        BattleHost  TurnRunner
+rules
 ```
 
 The key flow is:
 
 ```text
 input
+  -> ownership decision
   -> command/intent
   -> controller/orchestrator
   -> domain/state operation
@@ -258,29 +254,13 @@ Pixi button
 
 ---
 
-# 7. Target client structure
+## 7. Target client structure
 
-This is a conceptual target. Do not perform a mass move just to match this tree.
+Conceptual target:
 
 ```text
 client/src/
-  main.ts
-
   core/
-    game/
-      Game.ts
-      GameSession.ts
-    scenes/
-      Scene.ts
-      SceneManager.ts
-    overlays/
-      Overlay.ts
-      OverlayManager.ts
-    cameras/
-      Camera.ts
-      TurnCamera.ts
-    audio/
-
   match/
     MatchState.ts
     MatchController.ts
@@ -305,17 +285,22 @@ client/src/
 
   hud/
     MapHud.ts
+    ScrollablePanel.ts
     TutorialMarkers.ts
 
-  entities/
-    Mercenary.ts
-    Monster.ts
-    Card.ts
-    ...
+  camera/
+    CameraController.ts
 
-  systems/
-    TurnManager.ts
-    MoveController.ts
+  input/
+    InputRouter.ts
+    GestureRouter.ts
+
+  tutorial/
+    TutorialPort.ts
+    TutorialRunner.ts
+    tutorialTypes.ts
+    dialogue.ts
+    scripts/
 
   ui/
     generics/
@@ -327,48 +312,24 @@ client/src/
     CharacterPanel.ts
     ...
 
-  tutorial/
-    TutorialPort.ts
-    TutorialRunner.ts
-    tutorialTypes.ts
-    dialogue.ts
-    scripts/
-      movementScript.ts
-      combatScript.ts
-
-  math/
-  assets/
-  portraits/
-  icons/
-
   scenes/
     MapScene.ts
-    TutorialScene.ts
-    MainMenuScene.ts
-    CharacterCreationScene.ts
-    LobbyScene.ts
-    MissionSelectScene.ts
-    LoadGameScene.ts
-    MatchResultScene.ts
     ...
-
-  debug/
-  types/
 ```
 
-### Important
+This is conceptual. Do not mass-move files just to match the tree.
 
-`MapController` is orchestration. It is not the new world god object.
+`MapController` is orchestration, not the new world god object.
 
 `MatchState` contains state.
 
-Map systems operate on the relevant state.
+Map systems operate on relevant state.
 
 `MapScene` binds Pixi lifecycle to these components.
 
 ---
 
-# 8. MapScene policy
+## 8. MapScene policy
 
 Every scene should:
 
@@ -380,6 +341,7 @@ Every scene should:
 6. Avoid owning combat resolution.
 7. Avoid owning tutorial scripts.
 8. Avoid becoming a mutable global state store.
+9. Avoid becoming the global owner of HUD input routing.
 
 Target:
 
@@ -393,15 +355,9 @@ MapScene
   -> forwards lifecycle
 ```
 
-Target size:
-
-**~800–1000 lines or less is a guideline, not a success criterion by itself.**
-
-The real success criterion is that its remaining lines are mostly lifecycle, wiring, and scene-specific presentation.
-
 ---
 
-# 9. MapController
+## 9. MapController
 
 `MapController` is the orchestration seam that prevents `MapScene` and `MapWorld` from becoming god objects.
 
@@ -421,24 +377,12 @@ It should NOT:
 - duplicate shared combat/movement rules
 - become the authoritative multiplayer server
 - contain tutorial prose
-
-Conceptually:
-
-```ts
-MapController
-  -> move
-  -> requestCombat
-  -> endTurn
-  -> inspect
-  -> interactWithChest
-  -> triggerMapEvent
-```
-
-The controller should delegate rules to the appropriate domain/system code.
+- own camera rendering
+- own the internal scrolling behavior of HUD panels
 
 ---
 
-# 10. Map systems
+## 10. Map systems
 
 Candidate systems:
 
@@ -453,26 +397,7 @@ map/systems/
 
 A system should have a narrow reason to change.
 
-For example:
-
-```text
-ChestSystem
-  chest discovery
-  chest interaction
-  chest-related state changes
-```
-
-It should not own:
-
-```text
-camera
-HUD
-tutorial dialogue
-combat overlay
-global session state
-```
-
-## Important anti-god-object rule
+Anti-god-object rule:
 
 If `MapController` starts accumulating hundreds of lines of actual game rules, stop and extract the rule.
 
@@ -480,7 +405,7 @@ If `MapWorld` starts accumulating hundreds of lines of orchestration, stop and i
 
 ---
 
-# 11. Turn architecture
+## 11. Turn architecture
 
 The current project already has a useful generic `TurnManager`.
 
@@ -488,9 +413,7 @@ Preserve that strength.
 
 Do not create separate state models for human and AI hunters unless the domain actually requires them.
 
-The current architecture deliberately treats human and AI hunters as the same shape, distinguished by `pilot`.
-
-The new orchestration should therefore distinguish:
+The new orchestration should distinguish:
 
 ```text
 who provides the command
@@ -516,9 +439,7 @@ AI decision-making remains in `shared`.
 
 ---
 
-# 12. Combat architecture
-
-## 12.1 Responsibilities
+## 12. Combat architecture
 
 ### `BattleHost`
 
@@ -566,9 +487,7 @@ It should not be responsible for changing arbitrary map state.
 
 ### `shared/combat`
 
-Pure domain rules.
-
-Responsibilities:
+Pure domain rules:
 
 - combat resolution
 - targeting
@@ -578,61 +497,7 @@ Responsibilities:
 
 ---
 
-# 13. Battle flow
-
-Target:
-
-```text
-MapController
-     |
-     | request battle
-     v
-BattleHost
-     |
-     +----> BattleController
-                 |
-                 +----> shared combat
-                 |
-                 +----> BattleResult
-     |
-     v
-BattleOverlay
-     |
-     | presentation/input
-     v
-BattleResult
-     |
-     v
-MapController / MatchState
-```
-
-Invariant:
-
-```text
-new BattleOverlay()
-```
-
-must exist only inside `BattleHost`.
-
-Invariant:
-
-```text
-BattleOverlay
-```
-
-must not import tutorial scripts or `MapScene`.
-
-Invariant:
-
-```text
-BattleController
-```
-
-must be usable without Pixi-specific rendering concerns.
-
----
-
-# 14. Tutorial architecture
+## 13. Tutorial architecture
 
 ```text
 Tutorial scripts
@@ -645,40 +510,10 @@ TutorialPort
        |
        v
 Map adapter
-  /     |      \
-MapHud MapController BattleHost
+  /     |      MapHud MapController BattleHost
 ```
 
-### Scripts
-
-Contain:
-
-- tutorial data
-- dialogue
-- segment definitions
-- expected actions
-- failure lines
-
-They must not import:
-
-- `MapScene`
-- `BattleOverlay`
-- concrete Pixi widgets
-
-### Runner
-
-Owns:
-
-- segment sequencing
-- dialogue sequencing
-- exclusive vs `showOnTop` dialogue
-- failure counters
-- waiting for combat completion
-- calling the port
-
-### Port
-
-Capability-oriented API.
+Tutorial scripts must request capabilities rather than concrete scene/UI objects.
 
 Good:
 
@@ -694,16 +529,14 @@ waitForMove(...)
 Bad:
 
 ```ts
-getMapScene()
-getBattleOverlay()
-getHud()
+getMapScene();
+getBattleOverlay();
+getHud();
 ```
-
-The tutorial asks for capabilities, not objects.
 
 ---
 
-# 15. MapHud
+## 14. MapHud
 
 `MapHud` owns the map's presentation chrome under one root.
 
@@ -724,14 +557,8 @@ Responsibilities:
 - visibility
 - resize
 - map-specific presentation updates
-
-API should allow:
-
-```ts
-setChromeVisible(...)
-setLayerVisible(...)
-resize(...)
-```
+- responsive/compact layout decisions
+- exposing HUD interaction surfaces to the input-routing layer
 
 The tutorial should be able to hide map chrome without knowing which individual widgets exist.
 
@@ -739,22 +566,227 @@ Do not make `MapHud` a global UI class shared by unrelated scenes.
 
 ---
 
-# 16. OverlayManager
+# 15. Responsive HUD + Input Ownership
 
-Keep the existing global stack policy.
+This section is a deliberate addition to the architecture plan.
+
+## 15.1 Problem
+
+Small screens have less vertical space.
+
+Panels such as:
+
+- Match Log
+- Hunter/Character panels
+- Inventory
+- other content-heavy HUD surfaces
+
+must become **size-aware** rather than simply shrinking indefinitely.
+
+When a panel's available height becomes constrained:
+
+```text
+available viewport
+      |
+      v
+responsive panel layout
+      |
+      +--> compact dimensions
+      |
+      +--> constrained content area
+      |
+      +--> scrolling when content exceeds bounds
+```
+
+The goal is to preserve usability rather than force the entire HUD to scale down.
+
+## 15.2 Input ownership rule
+
+The core rule is:
+
+> **The component receiving the gesture owns the gesture.**
+
+A wheel, touch, or drag gesture must be routed to the most specific interactive surface under the pointer.
 
 Conceptually:
 
 ```text
-show()
-hide()
-showOnTop()
-hideTop()
+Pointer / wheel / touch
+          |
+          v
+     Input Router
+          |
+     +----+----+
+     |         |
+ HUD surface  no HUD surface
+     |         |
+     v         v
+consume      camera/map
 ```
 
-However, overlay visibility must not automatically imply simulation pause.
+Examples:
 
-Each overlay should eventually declare or expose policy such as:
+```text
+Wheel over Match Log
+    -> Match Log scrolls
+    -> camera does not move
+```
+
+```text
+Wheel over map
+    -> camera responds
+```
+
+```text
+Touch drag inside Match Log
+    -> Match Log scrolls
+```
+
+```text
+Touch drag on map
+    -> camera pans
+```
+
+The camera must not blindly consume all wheel/touch/drag events.
+
+## 15.3 Do not hard-code panel rectangles in the camera
+
+Avoid logic such as:
+
+```ts
+if (mouseX > log.x && mouseX < log.right) {
+	// scroll log
+}
+```
+
+The camera should not know the geometry or internal behavior of individual HUD panels.
+
+Instead, scrollable surfaces should expose a capability-oriented interaction contract.
+
+Conceptually:
+
+```ts
+interface ScrollSurface {
+	hitTest(x: number, y: number): boolean;
+	handleWheel(delta: number): boolean;
+	handleDrag(deltaX: number, deltaY: number): boolean;
+}
+```
+
+Exact interfaces should be designed after inspecting the existing input/camera implementation; do not introduce abstractions without demonstrated ownership benefit.
+
+## 15.4 Shared scroll behavior
+
+Potentially scrollable HUD panels should use one common interaction model:
+
+```text
+ScrollablePanel
+  ├── wheel
+  ├── pointer/touch drag
+  ├── bounds/clamping
+  └── gesture consumption
+```
+
+Likely candidates include:
+
+```text
+LogPanel
+HunterSummaryPanel
+InventoryPanel
+```
+
+but only panels that genuinely need overflow handling should adopt it.
+
+Do not create separate custom scrolling implementations for every panel.
+
+## 15.5 Mobile interaction
+
+The client should support:
+
+```text
+drag inside scrollable HUD panel
+    -> panel scroll
+
+drag on map
+    -> camera pan
+```
+
+The implementation must prevent the same gesture from propagating from the panel to the camera.
+
+This is an input-routing concern, not a gameplay-state concern.
+
+## 15.6 Camera ownership
+
+Camera state remains client-local.
+
+The camera owns:
+
+- position
+- zoom
+- viewport/bounds
+- map panning
+- camera animation/interpolation
+
+The camera does **not** own:
+
+- Match Log scroll position
+- Inventory scroll position
+- Hunter panel scroll position
+- HUD layout
+- gameplay state
+
+## 15.7 Recommended implementation boundary
+
+The eventual client structure may use:
+
+```text
+input/
+  InputRouter.ts
+  GestureRouter.ts
+
+camera/
+  CameraController.ts
+
+hud/
+  MapHud.ts
+  ScrollablePanel.ts
+```
+
+These are proposed seams, not mandatory files.
+
+The existing implementation should be inspected before creating them.
+
+## 15.8 Responsive layout rule
+
+`MapHud` should calculate layout from available viewport dimensions.
+
+Conceptually:
+
+```text
+viewport dimensions
+        |
+        v
+MapHud.resize(...)
+        |
+        +--> normal layout
+        |
+        +--> compact layout
+                  |
+                  +--> constrained panel height
+                  +--> scroll enabled where required
+```
+
+Do not make gameplay state depend on HUD dimensions.
+
+---
+
+## 16. OverlayManager
+
+Keep the existing global stack policy.
+
+Overlay visibility must not automatically imply simulation pause.
+
+Each overlay should eventually expose policy such as:
 
 ```text
 blocksInput
@@ -764,19 +796,15 @@ pausesSimulation
 Examples:
 
 ```text
-Battle    -> blocks input, pauses local map simulation
-Pause     -> blocks input, pauses simulation
-Dialogue  -> blocks relevant input, may pause simulation
-Notification -> may not pause simulation
+Battle        -> blocks input, pauses local map simulation
+Pause         -> blocks input, pauses simulation
+Dialogue      -> blocks relevant input, may pause simulation
+Notification  -> may not pause simulation
 ```
-
-This becomes important for multiplayer.
 
 ---
 
-# 17. GameSession vs MatchState
-
-This is a deliberate refactor seam.
+## 17. GameSession vs MatchState
 
 ### `GameSession`
 
@@ -807,7 +835,7 @@ The future server should be able to own `MatchState` without importing client co
 
 ---
 
-# 18. Shared architecture
+## 18. Shared architecture
 
 Current shared structure is already healthy:
 
@@ -828,28 +856,9 @@ Do not rewrite it simply to satisfy a folder diagram.
 
 Protect it first.
 
-Rules:
-
-- no Pixi
-- no DOM
-- no tutorial
-- no client session types
-- no overlay types
-- no browser-only APIs
-- deliberate `index.ts` public API
-
-Later, if needed, introduce clearer conceptual separation such as:
-
-```text
-domain/
-rules/
-```
-
-but only when real ownership pressure justifies it.
-
 ---
 
-# 19. Server boundary
+## 19. Server boundary
 
 For this refactor:
 
@@ -864,8 +873,6 @@ is enough.
 
 Do not implement multiplayer here.
 
-The server milestone begins when authoritative state is ready.
-
 Future direction:
 
 ```text
@@ -875,34 +882,32 @@ server
   -> never imports client
 ```
 
-The client communicates through an explicit protocol/network adapter.
+---
+
+## 20. Dependency rules
+
+| From             | To                            | Allowed |
+| ---------------- | ----------------------------- | ------- |
+| client           | shared                        | Yes     |
+| server           | shared                        | Yes     |
+| shared           | client                        | No      |
+| shared           | server                        | No      |
+| client           | server implementation         | No      |
+| tutorial scripts | MapScene                      | No      |
+| tutorial scripts | BattleOverlay                 | No      |
+| BattleOverlay    | tutorial scripts              | No      |
+| BattleOverlay    | MapScene                      | No      |
+| shared           | Pixi/DOM                      | No      |
+| camera           | HUD implementation details    | No      |
+| HUD panel        | camera implementation details | No      |
+
+The last two rules are intentional: interaction ownership should be mediated by the input-routing boundary rather than by mutual knowledge.
 
 ---
 
-# 20. Dependency rules
+## 21. Refactor phases
 
-| From | To | Allowed |
-|---|---|---|
-| client | shared | Yes |
-| server | shared | Yes |
-| shared | client | No |
-| shared | server | No |
-| client | server implementation | No |
-| tutorial scripts | MapScene | No |
-| tutorial scripts | BattleOverlay | No |
-| BattleOverlay | tutorial scripts | No |
-| BattleOverlay | MapScene | No |
-| shared | Pixi/DOM | No |
-
-These should eventually be enforced by tooling.
-
-Start with convention and tests; add lint/path restrictions once the structure stabilizes.
-
----
-
-# 21. Refactor phases
-
-## Phase A — Baseline and invariants
+### Phase A — Baseline and invariants
 
 Before changing behavior:
 
@@ -915,21 +920,7 @@ Before changing behavior:
 - confirm `OverlayManager`
 - confirm normal battle behavior
 
-Deliverable:
-
-```text
-pre-full-architecture-refactor
-```
-
-Acceptance:
-
-- baseline build passes
-- baseline play loop works
-- no gameplay changes
-
----
-
-## Phase B — State ownership seam
+### Phase B — State ownership seam
 
 Before large extraction:
 
@@ -938,15 +929,7 @@ Before large extraction:
 - document ownership
 - do not perform a giant rewrite
 
-Deliverable:
-
-- state ownership table
-- candidate `MatchState` interface
-- no gameplay behavior change
-
----
-
-## Phase C — TutorialPort
+### Phase C — TutorialPort
 
 Implement:
 
@@ -956,22 +939,13 @@ TutorialRunner
 MapScene adapter
 ```
 
-Requirements:
+First success criterion:
 
-- scripts import no scene/UI implementation
-- failure text remains script-owned
-- combat waits through the port
-- tutorial calls capabilities rather than objects
+```text
+TutorialRunner can run without importing MapScene.
+```
 
-Acceptance:
-
-- tutorial completes
-- wrong-action failure behavior remains correct
-- normal match remains unchanged
-
----
-
-## Phase D — MapHud
+### Phase D — MapHud
 
 Extract map chrome into one root.
 
@@ -982,60 +956,20 @@ Requirements:
 - one-call chrome visibility
 - tutorial can hide/show it
 - resize remains correct
+- remaining map buttons and `ActionMenu` belong to the HUD
+- HUD owns presentation/layout, while gameplay consequences remain outside the HUD
 
-Acceptance:
-
-- map looks identical
-- dialogue can hide chrome
-- normal controls remain functional
-
----
-
-## Phase E — BattleController + BattleHost
+### Phase E — BattleController + BattleHost
 
 First centralize battle construction.
 
 Then separate battle orchestration from presentation.
 
-Requirements:
-
-- only `BattleHost` constructs `BattleOverlay`
-- battle result is explicit
-- overlay does not mutate arbitrary map state
-- tutorial uses the same host seam
-
-Acceptance:
-
-- hunter vs hunter works
-- hunter vs monster works
-- monster defeat behavior unchanged
-- loot/surrender behavior unchanged
-- tutorial combat works
-
----
-
-## Phase F — MapController
+### Phase F — MapController
 
 Create the orchestration seam before extracting every system.
 
-Requirements:
-
-- scene sends commands to controller
-- controller coordinates map systems
-- scene stops owning large game-flow branches
-- no new world god object
-
-Acceptance:
-
-- movement works
-- turn progression works
-- combat entry works
-- chests/traps/exits still work
-- AI/monster turns work
-
----
-
-## Phase G — Map systems
+### Phase G — Map systems
 
 Extract one narrow responsibility per PR:
 
@@ -1046,16 +980,7 @@ Extract one narrow responsibility per PR:
 5. `ZoneQuery`
 6. turn orchestration cleanup
 
-Each extraction:
-
-- no unrelated logic changes
-- typecheck
-- build
-- smoke-test affected behavior
-
----
-
-## Phase H — Folder hygiene
+### Phase H — Folder hygiene
 
 Only now:
 
@@ -1067,9 +992,7 @@ Only now:
 
 No logic changes in pure move PRs.
 
----
-
-## Phase I — Shared API freeze
+### Phase I — Shared API freeze
 
 Audit:
 
@@ -1079,9 +1002,7 @@ Audit:
 - server-safe functions
 - battle/AI entry points
 
----
-
-## Phase J — Server skeleton
+### Phase J — Server skeleton
 
 Only after the above:
 
@@ -1092,7 +1013,47 @@ Only after the above:
 
 ---
 
-# 22. PR cadence
+# 22. Camera/Input Rework — dedicated sub-phase
+
+The responsive HUD work belongs with the broader camera/input rework, but should be treated as an explicit sub-phase rather than hidden inside camera movement.
+
+Recommended order:
+
+```text
+Camera/Input Rework
+│
+├── 1. Camera movement
+├── 2. Camera bounds
+├── 3. Zoom / responsive viewport
+├── 4. Pointer/touch gesture interpretation
+└── 5. Scroll ownership / gesture routing
+      ├── HUD scroll
+      ├── camera scroll
+      ├── panel drag-to-scroll
+      └── mobile drag-to-pan
+```
+
+The important architectural separation is:
+
+```text
+MapHud
+    -> owns HUD presentation and panel interaction
+
+InputRouter / GestureRouter
+    -> determines who owns the current gesture
+
+CameraController
+    -> owns camera movement
+
+MapController
+    -> owns gameplay commands
+```
+
+This work should **not** be implemented as ad-hoc camera checks against specific panel rectangles.
+
+---
+
+## 23. PR cadence
 
 Recommended:
 
@@ -1101,23 +1062,24 @@ Recommended:
 3. `refactor(session): document and isolate match state ownership`
 4. `feat(tutorial): introduce TutorialPort`
 5. `refactor(map): extract MapHud`
-6. `refactor(combat): introduce BattleHost`
-7. `refactor(combat): separate BattleController from BattleOverlay`
-8. `refactor(map): introduce MapController`
-9. `refactor(map): extract ChestSystem`
-10. `refactor(map): extract MonsterSystem`
-11. `refactor(map): extract TrapSystem`
-12. `refactor(map): extract ExitRelicSystem`
-13. `refactor(map): extract ZoneQuery and turn orchestration`
-14. `chore(client): folder hygiene`
-15. `chore(shared): freeze public API`
-16. `chore(server): add authority boundary`
+6. `refactor(input): responsive HUD and gesture ownership`
+7. `refactor(combat): introduce BattleHost`
+8. `refactor(combat): separate BattleController from BattleOverlay`
+9. `refactor(map): introduce MapController`
+10. `refactor(map): extract ChestSystem`
+11. `refactor(map): extract MonsterSystem`
+12. `refactor(map): extract TrapSystem`
+13. `refactor(map): extract ExitRelicSystem`
+14. `refactor(map): extract ZoneQuery and turn orchestration`
+15. `chore(client): folder hygiene`
+16. `chore(shared): freeze public API`
+17. `chore(server): add authority boundary`
 
 Keep each PR reviewable.
 
 ---
 
-# 23. Definition of done for an extraction
+## 24. Definition of done for an extraction
 
 Every extraction PR should answer:
 
@@ -1145,15 +1107,24 @@ Every extraction PR should answer:
 
 - Could the same domain operation eventually be invoked by a server?
 
+For input work, additionally answer:
+
+### Gesture ownership
+
+- Which surface owns wheel input?
+- Which surface owns drag input?
+- What happens when the pointer is over no HUD surface?
+- Can the gesture leak from a HUD panel to the camera?
+
 If these questions cannot be answered, the extraction is probably premature.
 
 ---
 
-# 24. Testing strategy
+## 25. Testing strategy
 
 The refactor needs two kinds of tests.
 
-## Domain tests
+### Domain tests
 
 For `shared` and pure client logic:
 
@@ -1167,7 +1138,7 @@ For `shared` and pure client logic:
 
 These should not require Pixi.
 
-## Smoke tests
+### Client smoke tests
 
 After every client extraction:
 
@@ -1181,29 +1152,42 @@ After every client extraction:
 8. run AI/monster phase
 9. test tutorial path where relevant
 10. resize window
+11. test compact viewport
+12. scroll Match Log
+13. scroll any other constrained HUD panel
+14. drag inside a HUD panel on mobile/touch
+15. drag on map to pan camera
+16. verify HUD gestures never move the camera
+17. verify map gestures never scroll a HUD panel
 
 ---
 
-# 25. Risk register
+## 26. Risk register
 
-| Risk | Mitigation |
-|---|---|
-| MapWorld becomes new god object | Use `MapController` + narrow systems + explicit state |
-| MapController becomes new god object | Keep rules in shared/systems; controller only orchestrates |
-| GameSession becomes global mutable state | Explicit MatchState ownership |
-| BattleHost becomes combat god object | Split BattleController from presentation |
-| Tutorial regresses | TutorialPort before major MapScene extraction |
-| UI breaks during extraction | MapHud first; visual smoke tests |
-| AI regresses | Extract late; preserve shared AI; smoke-test full enemy phase |
-| Import cycles | Move logic first, folders later |
-| Folder churn hides behavior changes | Separate move-only PRs |
-| Multiplayer requires another rewrite | Keep MatchState and shared domain server-safe |
-| Over-abstraction | Every abstraction must have a concrete ownership/dependency benefit |
-| Combat rework sneaks in | Keep combat rules unchanged during architecture work |
+| Risk                                      | Mitigation                                                          |
+| ----------------------------------------- | ------------------------------------------------------------------- |
+| MapWorld becomes new god object           | Use `MapController` + narrow systems + explicit state               |
+| MapController becomes new god object      | Keep rules in shared/systems; controller only orchestrates          |
+| GameSession becomes global mutable state  | Explicit MatchState ownership                                       |
+| BattleHost becomes combat god object      | Split BattleController from presentation                            |
+| Tutorial regresses                        | TutorialPort before major MapScene extraction                       |
+| UI breaks during extraction               | MapHud first; visual smoke tests                                    |
+| AI regresses                              | Extract late; preserve shared AI; smoke-test full enemy phase       |
+| Import cycles                             | Move logic first, folders later                                     |
+| Folder churn hides behavior changes       | Separate move-only PRs                                              |
+| Multiplayer requires another rewrite      | Keep MatchState and shared domain server-safe                       |
+| Over-abstraction                          | Every abstraction must have a concrete ownership/dependency benefit |
+| Combat rework sneaks in                   | Keep combat rules unchanged during architecture work                |
+| HUD becomes unusable on small screens     | Responsive height constraints + scrolling                           |
+| HUD scroll moves camera                   | Explicit gesture ownership/input routing                            |
+| Mobile panel drag pans camera             | Panel consumes the gesture before camera                            |
+| Camera learns HUD internals               | Route through input/gesture boundary                                |
+| Multiple custom scrolling implementations | Common scroll interaction model                                     |
+| Responsive layout changes gameplay        | Keep viewport/layout state client-local                             |
 
 ---
 
-# 26. Success metrics
+## 27. Success metrics
 
 The refactor is successful when:
 
@@ -1219,168 +1203,96 @@ The refactor is successful when:
 - Normal non-tutorial gameplay remains behaviorally unchanged.
 - A future server can consume shared rules without moving client UI code.
 - No new god object replaces `MapScene`.
+- Compact viewport HUD remains usable.
+- Scrollable HUD surfaces consume their own wheel/drag gestures.
+- Map dragging pans the camera only when no HUD surface owns the gesture.
+- HUD drag never accidentally pans the camera.
+- Camera code does not contain hard-coded knowledge of individual HUD panels.
 
 ---
 
-# 27. Immediate execution plan
+## 28. Immediate execution plan
 
-## Step 1 — Create the architecture branch
+The current work has already reached the MapHud extraction stage.
 
-Create a branch from the current working baseline:
-
-```bash
-git switch -c refactor/full-architecture
-```
-
-Do not make gameplay changes yet.
-
----
-
-## Step 2 — Baseline
-
-Run:
-
-```bash
-npm install
-npm run build
-```
-
-Also run the project's available test/typecheck commands if present.
-
-Then manually verify:
-
-- map loads
-- movement works
-- combat opens
-- combat resolves
-- monster behavior works
-- tutorial path works if applicable
-- resize works
-
-Record the starting commit.
-
----
-
-## Step 3 — Establish architecture checks
-
-Before extracting code, add lightweight checks for:
-
-- shared must not import client
-- shared must not import Pixi
-- tutorial scripts must not import scenes
-- tutorial scripts must not import BattleOverlay
-- BattleOverlay must not import tutorial scripts
-- client must not import server
-
-Start with the simplest mechanism available in the project. Do not over-engineer linting before the structure settles.
-
----
-
-## Step 4 — State audit
-
-Make a short inventory of `GameSession`:
+### Current checkpoint
 
 ```text
-FIELD
-CURRENT OWNER
-ACTUAL SEMANTIC OWNER
-CLIENT-ONLY?
-GAMEPLAY STATE?
-FUTURE SERVER STATE?
+State ownership audit
+        ✓
+Tutorial/architecture planning
+        ✓
+MapHud root
+        ✓
+Common HUD extraction
+        ✓
+Remaining map controls
+        ← current completion target
+ActionMenu
+        ← current completion target
+Final MapHud cleanup
+        ↓
+Camera/Input Rework
+        ↓
+Responsive HUD + gesture ownership
+        ↓
+BattleHost
+        ↓
+BattleController
+        ↓
+MapController
+        ↓
+Map systems
 ```
 
-Do not move fields blindly.
+### Next implementation step
 
-The goal is to identify the eventual `MatchState` seam.
+Finish the current MapHud extraction completely before starting camera/input work.
+
+Specifically:
+
+1. Verify the remaining map buttons are owned by `MapHud`.
+2. Verify `ActionMenu` is owned by `MapHud`.
+3. Verify gameplay callbacks remain outside `MapHud`.
+4. Verify HUD interactive surfaces are exposed through the HUD boundary.
+5. Run architecture/type/build checks.
+6. Complete the MapHud smoke test.
+
+Only after that should the camera/input rework begin.
 
 ---
 
-## Step 5 — TutorialPort
+## 29. First camera/input checkpoint
 
-Implement the smallest useful interface.
-
-Do not extract unrelated MapScene code.
-
-The first success criterion is:
+Before implementing gesture routing:
 
 ```text
-TutorialRunner can run without importing MapScene.
+Audit current camera input
+        ↓
+Audit current Pixi pointer/wheel listeners
+        ↓
+Audit LogPanel / Hunter panel / Inventory interaction
+        ↓
+Define gesture ownership
+        ↓
+Define smallest necessary interface
+        ↓
+Implement panel scroll
+        ↓
+Implement camera fallback
+        ↓
+Implement mobile drag
+        ↓
+Test event consumption
 ```
 
-The scene supplies the port implementation.
+Do not start by creating a large generic input framework.
+
+Start from the actual current event flow and extract only the boundary that is demonstrated to be necessary.
 
 ---
 
-## Step 6 — MapHud
-
-Extract the existing map chrome without changing visual behavior.
-
-First move ownership.
-
-Then improve the internal structure if needed.
-
----
-
-## Step 7 — BattleHost
-
-Find every construction site of `BattleOverlay`.
-
-Make one host responsible for construction.
-
-Do not redesign combat rules in this PR.
-
----
-
-# 28. First implementation checkpoint
-
-After the first three implementation PRs, the architecture should look approximately like:
-
-```text
-MapScene
-  |
-  +--> TutorialPort adapter
-  |
-  +--> MapHud
-  |
-  +--> BattleHost
-  |
-  +--> existing healthy systems
-```
-
-Not yet:
-
-```text
-MapScene
-  |
-  +--> 14 new abstractions
-  +--> MapWorld
-  +--> MapController
-  +--> 8 systems
-  +--> 5 adapters
-```
-
-The first milestone is **better seams**, not maximum decomposition.
-
----
-
-# 29. Current architectural baseline
-
-The repository already establishes several principles worth preserving:
-
-- composition-based entities
-- shared AI/combat logic
-- generic `TurnManager`
-- unified hunter representation for human and AI
-- shared battle presentation for hunter/monster combat
-- state-aware camera behavior
-- planned Colyseus networking
-- npm workspace separation between client/shared/server
-
-The refactor should build on these strengths rather than replacing them.
-
----
-
-# 30. Final rule
+## 30. Final rule
 
 > Extract responsibility, not lines.
 
@@ -1392,6 +1304,8 @@ The purpose is to make it obvious:
 - where game state lives,
 - where orchestration lives,
 - where presentation lives,
+- where input ownership lives,
+- where camera state lives,
 - where tutorial behavior lives,
 - and where future server authority will live.
 
