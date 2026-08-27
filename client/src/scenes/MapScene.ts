@@ -31,11 +31,8 @@ import { MatchResultScene } from "./MatchResultScene";
 import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
 import { BagButton } from "@/ui/buttons/BagButton";
 import { ActionMenu } from "@/ui/buttons/ActionMenu";
-import { RefocusButton } from "@/ui/buttons/RefocusButton";
 import { PlayZone } from "@/ui/PlayZone";
 import type { PilotedMercenary, MovableToken } from "@/types/entities";
-import { LogsButton } from "@/ui/buttons/LogButton";
-import { LogPanel } from "@/ui/LogPanel";
 import { logMatchEvent } from "@/core/game/GameSession";
 import { InspectButton } from "@/ui/buttons/InspectButton";
 import {
@@ -124,13 +121,8 @@ export class MapScene implements Scene, TutorialPort {
 	// UI
 	private bagButton: BagButton;
 	private buttonBar: ActionMenu;
-	private refocusButton: RefocusButton;
-	private logsButton: LogsButton;
-	private logPanel: LogPanel;
 	private inspectButton: InspectButton;
 	private hunterSummaryPanel: HunterSummaryPanel;
-	private feedbackText: Text;
-	private feedbackTimer = 0;
 	private hud!: MapHud;
 
 	// Item pickup popup — floats above the mercenary's head, placeholder
@@ -212,11 +204,11 @@ export class MapScene implements Scene, TutorialPort {
 	private get uiSurfaces(): Container[] {
 		return [
 			this.inventoryPanel.view,
-			this.logPanel.view,
+			this.hud.logPanelView,
 			this.hunterSummaryPanel.view,
 			this.characterPanel.view,
 			this.bagButton.view,
-			this.logsButton.view,
+			this.hud.logsButtonView,
 			this.inspectButton.view,
 			this.deckTracker.view,
 			this.hand.view,
@@ -319,12 +311,6 @@ export class MapScene implements Scene, TutorialPort {
 		this.bagButton = new BagButton();
 		this.view.addChild(this.bagButton.view);
 
-		this.logsButton = new LogsButton();
-		this.view.addChild(this.logsButton.view);
-
-		this.logPanel = new LogPanel();
-		this.view.addChild(this.logPanel.view);
-
 		this.inspectButton = new InspectButton();
 		this.view.addChild(this.inspectButton.view);
 
@@ -389,16 +375,6 @@ export class MapScene implements Scene, TutorialPort {
 			}
 		};
 		this.view.addChild(this.buttonBar.view);
-
-		this.refocusButton = new RefocusButton();
-		this.view.addChild(this.refocusButton.view);
-
-		this.feedbackText = new Text({
-			text: "",
-			style: { fill: 0xffd700, fontSize: 16, fontWeight: "bold" },
-		});
-		this.feedbackText.visible = false;
-		this.view.addChild(this.feedbackText);
 
 		this.hud = new MapHud(this.game);
 		this.view.addChild(this.hud.view);
@@ -520,12 +496,7 @@ export class MapScene implements Scene, TutorialPort {
 			this.camera.unlock();
 		}
 
-		if (this.feedbackTimer > 0) {
-			this.feedbackTimer -= deltaTime;
-			if (this.feedbackTimer <= 0) {
-				this.feedbackText.visible = false;
-			}
-		}
+		this.hud.update(deltaTime);
 
 		if (this.itemPopupTimer > 0) {
 			this.itemPopupTimer -= deltaTime;
@@ -710,12 +681,12 @@ export class MapScene implements Scene, TutorialPort {
 			this.characterPanel.view,
 			this.bagButton.view,
 			this.inspectButton.view,
-			this.logsButton.view,
+			this.hud.logsButtonView,
 			this.inventoryPanel.view,
-			this.logPanel.view,
+			this.hud.logPanelView,
 			this.hunterSummaryPanel.view,
 			this.deckTracker.view,
-			this.refocusButton.view,
+			this.hud.refocusView,
 			this.playZone.view,
 		]) {
 			v.scale.set(s);
@@ -737,14 +708,17 @@ export class MapScene implements Scene, TutorialPort {
 		this.inspectButton.view.x = this.bagButton.view.x + btn + gap;
 		this.inspectButton.view.y = this.bagButton.view.y;
 
-		this.logsButton.view.x = this.inspectButton.view.x + btn + gap;
-		this.logsButton.view.y = this.inspectButton.view.y;
+		this.hud.layoutLogsButton(
+			this.inspectButton.view.x,
+			this.inspectButton.view.y,
+			btn,
+			gap,
+		);
 
 		this.hunterSummaryPanel.view.x = this.bagButton.view.x;
 		this.hunterSummaryPanel.view.y = this.bagButton.view.y + uiPx(56, s);
 
-		this.logPanel.view.x = this.bagButton.view.x;
-		this.logPanel.view.y = this.bagButton.view.y + uiPx(56, s);
+		this.hud.layoutLogPanel(this.bagButton.view.x, this.bagButton.view.y, s);
 
 		this.inventoryPanel.view.x = m + panelW + gap;
 		this.inventoryPanel.view.y = m;
@@ -752,8 +726,7 @@ export class MapScene implements Scene, TutorialPort {
 		this.buttonBar.layout(w, h, s);
 
 		// Refocus: center-right edge
-		this.refocusButton.view.x = w - uiPx(28, s);
-		this.refocusButton.view.y = h / 2;
+		this.hud.layoutRefocusButton(w, h, s);
 
 		this.deckTracker.view.x = w - uiPx(88, s) - m;
 		this.deckTracker.view.y = m;
@@ -2419,8 +2392,8 @@ export class MapScene implements Scene, TutorialPort {
 			this.inventoryPanel.toggle();
 			return;
 		}
-		if (this.logsButton.hitTest(screenX, screenY)) {
-			this.logPanel.toggle();
+		if (this.hud.hitTestLogsButton(screenX, screenY)) {
+			this.hud.toggleLogPanel();
 			return;
 		}
 
@@ -2429,7 +2402,7 @@ export class MapScene implements Scene, TutorialPort {
 			return;
 		}
 
-		if (this.refocusButton.hitTest(screenX, screenY)) {
+		if (this.hud.hitTestRefocus(screenX, screenY)) {
 			this.camera.centerOn(
 				{
 					x: this.localUnit.mercenary.view.x,
@@ -2488,17 +2461,12 @@ export class MapScene implements Scene, TutorialPort {
 
 	// ---------- UI ----------
 
-	/** Show a temporary top-of-screen message, auto-hides after ~2.5s. */
+	/** Shows a transient message via the HUD, plus logs it to match history. */
 	private showFeedback(message: string): void {
-		this.feedbackText.text = message;
-		this.feedbackText.visible = true;
-		this.feedbackText.x =
-			(this.game.app.screen.width - this.feedbackText.width) / 2;
-		this.feedbackText.y = 60;
-		this.feedbackTimer = 150;
+		this.hud.showFeedbackMessage(message);
 
 		logMatchEvent(this.game.session, message);
-		this.logPanel.sync(this.game.session.matchLog ?? []);
+		this.hud.syncLogPanel(this.game.session.matchLog ?? []);
 	}
 	/** Sync all UI to the local unit's TurnManager state. Guarded — fires before buttonBar exists during construction. */
 	/**
@@ -2577,14 +2545,14 @@ export class MapScene implements Scene, TutorialPort {
 		this.deckTracker.view.visible = isVisible;
 		this.bagButton.view.visible = isVisible;
 		this.buttonBar.view.visible = isVisible;
-		this.refocusButton.view.visible = isVisible;
-		this.logsButton.view.visible = isVisible;
+		this.hud.setRefocusVisible(isVisible);
+		this.hud.setLogsChromeVisible(isVisible);
 		this.inspectButton.view.visible = isVisible;
 		this.hand.view.visible = isVisible;
 
 		if (!isVisible) {
 			if (this.inventoryPanel.isOpen) this.inventoryPanel.close();
-			if (this.logPanel.isOpen) this.logPanel.toggle();
+			this.hud.closeLogPanelIfOpen();
 			if (this.hunterSummaryPanel.isOpen) this.hunterSummaryPanel.toggle();
 			this.playZone.hide();
 		} else if (this.hand.isSelecting) {
