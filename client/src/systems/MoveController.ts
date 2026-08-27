@@ -2,12 +2,12 @@ import { Container, Graphics } from "pixi.js";
 import type { Grid, GridCoord, MovementRangeEntry } from "@relic-hunter/shared";
 import { computeMovementRange, coordKey } from "@relic-hunter/shared";
 import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
-import type { Camera } from "@/core/cameras/Camera";
+import type { CameraController } from "@/core/cameras/CameraController";
 import type { Mercenary } from "@/entities/Mercenary";
 
 interface MoveControllerOptions {
 	grid: Grid;
-	camera: Camera;
+	camera: CameraController;
 	mercenary: Mercenary;
 	getMercenaryCoord: () => GridCoord;
 	getMovementRemaining: () => number;
