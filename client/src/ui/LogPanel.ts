@@ -1,5 +1,7 @@
 import { Container, Graphics, Text } from "pixi.js";
 import type { MatchLogEntry } from "@/core/game/GameSession";
+import { pointInContainer } from "@/rendering/HitTest";
+import type { ScrollSurface } from "@/input/GestureRouter";
 
 const PANEL_W = 280;
 const PANEL_H = 320;
@@ -10,14 +12,17 @@ const VISIBLE_ROWS = Math.floor((PANEL_H - PAD * 2 - 30) / ROW_H);
 /**
  * Scrollable match log — every event GameSession.matchLog has recorded,
  * newest at top. Hidden by default, toggled via the Logs button.
+ * Implements ScrollSurface — GestureRouter owns dispatch, not Pixi's
+ * own event system, so the camera can never receive a gesture this
+ * panel already claimed.
  * @author ShaAnder
  */
-export class LogPanel {
+export class LogPanel implements ScrollSurface {
 	readonly view = new Container();
-	private clipMask = new Graphics();
 	private bg = new Graphics();
 	private titleText: Text;
 	private rowsContainer = new Container();
+	private clipMask = new Graphics();
 	private scrollOffset = 0;
 	private open = false;
 	private currentEntries: MatchLogEntry[] = [];
@@ -26,7 +31,6 @@ export class LogPanel {
 		this.bg.roundRect(0, 0, PANEL_W, PANEL_H, 8);
 		this.bg.fill({ color: 0x1a1a1a, alpha: 0.95 });
 		this.bg.stroke({ width: 1, color: 0x555555 });
-		this.bg.eventMode = "static";
 		this.view.addChild(this.bg);
 
 		this.titleText = new Text({
@@ -47,15 +51,29 @@ export class LogPanel {
 		this.view.addChild(this.clipMask);
 		this.rowsContainer.mask = this.clipMask;
 
-		this.bg.on("wheel", (e: WheelEvent) => {
-			this.scrollOffset = Math.max(
-				0,
-				this.scrollOffset + (e.deltaY > 0 ? 1 : -1),
-			);
-			this.renderRows();
-		});
-
 		this.view.visible = false;
+	}
+
+	/** False when closed — a hidden panel must never claim a gesture just because the pointer happens to be where it would render. */
+	hitTest(screenX: number, screenY: number): boolean {
+		if (!this.open) return false;
+		return pointInContainer(screenX, screenY, this.view);
+	}
+
+	/** Wheel-down (positive deltaY) moves further into the log — same convention the old handler used.
+	 * Always consumes; GestureRouter only calls this once hitTest already passed. */
+	handleWheel(deltaY: number): boolean {
+		this.scrollOffset = Math.max(0, this.scrollOffset + Math.sign(deltaY));
+		this.renderRows();
+		return true;
+	}
+
+	/** Content follows the finger — dragging up (negative deltaY) scrolls further into the log,
+	 * the opposite sign from handleWheel's native deltaY convention. */
+	handleDrag(_deltaX: number, deltaY: number): boolean {
+		this.scrollOffset = Math.max(0, this.scrollOffset - Math.sign(deltaY));
+		this.renderRows();
+		return true;
 	}
 
 	sync(entries: MatchLogEntry[]): void {

@@ -41,7 +41,9 @@ const DEFAULTS: Required<CameraOptions> = {
  * - centering
  * - cinematic pan
  * - camera shake
- * - keyboard / wheel camera input
+ * - keyboard camera input (WASD, self-attached)
+ * - zoom/drag-pan math (zoomAt/panByScreenDelta — triggered externally,
+ *   only once GestureRouter confirms no HUD surface owns the gesture)
  *
  * This class deliberately knows nothing about:
  * - maps
@@ -50,6 +52,7 @@ const DEFAULTS: Required<CameraOptions> = {
  * - gameplay rules
  * - turns
  * - entities
+ * - gesture ownership/routing (that's GestureRouter's job)
  *
  * Map-specific bounds are supplied through setWorldClamp().
  *
@@ -103,24 +106,18 @@ export class CameraController {
 		};
 	}
 
-	attach(canvas: HTMLCanvasElement): void {
+	attach(_canvas: HTMLCanvasElement): void {
 		window.addEventListener("keydown", this.handleKeyDown);
 		window.addEventListener("keyup", this.handleKeyUp);
-
-		canvas.addEventListener("wheel", this.handleWheel, {
-			passive: false,
-		});
 
 		window.addEventListener("contextmenu", this.handleContextMenu);
 
 		window.addEventListener("blur", this.handleWindowBlur);
 	}
 
-	detach(canvas: HTMLCanvasElement): void {
+	detach(_canvas: HTMLCanvasElement): void {
 		window.removeEventListener("keydown", this.handleKeyDown);
 		window.removeEventListener("keyup", this.handleKeyUp);
-
-		canvas.removeEventListener("wheel", this.handleWheel);
 
 		window.removeEventListener("contextmenu", this.handleContextMenu);
 
@@ -330,14 +327,13 @@ export class CameraController {
 		this.heldKeys.delete(event.key.toLowerCase());
 	};
 
-	private handleWheel = (event: WheelEvent): void => {
-		event.preventDefault();
-
+	/** Zoom centered on the current viewport — called by the owner of the canvas's single wheel listener once it's confirmed no HUD surface claimed the gesture. */
+	zoomAt(deltaY: number): void {
 		if (this.inputLocked) return;
 
 		const oldScale = this.target.scale.x;
 
-		const zoomDelta = -event.deltaY * this.options.zoomSpeed;
+		const zoomDelta = -deltaY * this.options.zoomSpeed;
 
 		const newScale = clamp(
 			oldScale + oldScale * zoomDelta,
@@ -360,7 +356,17 @@ export class CameraController {
 		this.target.y = centerY - worldY * newScale;
 
 		this.applyWorldClamp();
-	};
+	}
+
+	/** Screen-space drag delta, applied directly to camera position — the mobile/touch pan gesture, distinct from WASD's per-frame applyPan. */
+	panByScreenDelta(deltaX: number, deltaY: number): void {
+		if (this.inputLocked) return;
+
+		this.target.x += deltaX;
+		this.target.y += deltaY;
+
+		this.applyWorldClamp();
+	}
 }
 
 function clamp(val: number, min: number, max: number): number {
