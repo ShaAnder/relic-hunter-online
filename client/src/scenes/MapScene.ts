@@ -730,6 +730,12 @@ export class MapScene implements Scene, TutorialPort {
 
 		if (this.isPointOverUiSurface(screenX, screenY)) return;
 
+		if (this.targetingActive) {
+			// A click-to-target gesture, not a drag — don't start a camera
+			// pan or claim it, just let it reach the click handler.
+			return;
+		}
+
 		if (!this.moveController.active) {
 			// Nothing claimed it — drag pans the camera (mobile/touch pan).
 			this.cameraDragActive = true;
