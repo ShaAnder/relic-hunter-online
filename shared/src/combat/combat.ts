@@ -232,12 +232,15 @@ function computeCaughtRunDamage(
  * subtracted — per `04-card-system-design.md`.
  */
 function computeAttackValue(baseAttack: number, card?: CardData): number {
-	if (!card) return baseAttack;
+	if (!card || card.color !== "red") return baseAttack;
+
 	if (card.value === "A") return baseAttack * 2;
 	if (card.value === "C") return baseAttack * 1.5;
-	if (card.color === "red" && typeof card.value === "number") {
+
+	if (typeof card.value === "number") {
 		return baseAttack + card.value;
 	}
+
 	return baseAttack;
 }
 
@@ -249,10 +252,24 @@ function computeHedgeDefense(
 	baseDefense: number,
 	card?: CardData,
 ): { value: number; nullified: boolean } {
-	if (card?.value === "A") return { value: Infinity, nullified: true };
-	if (card?.value === "C") return { value: baseDefense * 2, nullified: false };
-	const numeric = typeof card?.value === "number" ? card.value : 0;
-	return { value: baseDefense + numeric / 2, nullified: false };
+	if (!card || card.color !== "yellow") {
+		return { value: baseDefense, nullified: false };
+	}
+
+	if (card.value === "A") {
+		return { value: Infinity, nullified: true };
+	}
+
+	if (card.value === "C") {
+		return { value: baseDefense * 2, nullified: false };
+	}
+
+	const numeric = typeof card.value === "number" ? card.value : 0;
+
+	return {
+		value: baseDefense + numeric / 2,
+		nullified: false,
+	};
 }
 
 /**
@@ -263,10 +280,24 @@ function computeFullDefense(
 	baseDefense: number,
 	card?: CardData,
 ): { value: number; nullified: boolean } {
-	if (card?.value === "A") return { value: Infinity, nullified: true };
-	if (card?.value === "C") return { value: baseDefense * 2, nullified: false };
-	const numeric = typeof card?.value === "number" ? card.value : 0;
-	return { value: baseDefense + numeric, nullified: false };
+	if (!card || card.color !== "yellow") {
+		return { value: baseDefense, nullified: false };
+	}
+
+	if (card.value === "A") {
+		return { value: Infinity, nullified: true };
+	}
+
+	if (card.value === "C") {
+		return { value: baseDefense * 2, nullified: false };
+	}
+
+	const numeric = typeof card.value === "number" ? card.value : 0;
+
+	return {
+		value: baseDefense + numeric,
+		nullified: false,
+	};
 }
 
 /** Blue card bonus — only relevant if this side chose Attack (speed hedge) or Run. */

@@ -15,7 +15,10 @@ import type {
 } from "@relic-hunter/shared";
 import { PlayZone } from "@/ui/PlayZone";
 import { InventoryPanel } from "@/ui/InventoryPanel";
-import { BattleController, type LootSequenceRequest } from "@/combat/BattleController";
+import {
+	BattleController,
+	type LootSequenceRequest,
+} from "@/combat/BattleController";
 import {
 	decideLootChoice,
 	decideSurrenderChoice,
@@ -714,9 +717,17 @@ export class BattleOverlay implements Overlay {
 
 		if (this.pendingAction === "attack" && chosenCard) {
 			const v = chosenCard.value;
-			if (typeof v === "number" || v === "A" || v === "C") {
+
+			if (
+				chosenCard.color === "red" &&
+				(typeof v === "number" || v === "A" || v === "C")
+			) {
 				localState.temporaryStatBonus.attack = v;
+			} else {
+				localState.temporaryStatBonus.attack = 0;
 			}
+		} else {
+			localState.temporaryStatBonus.attack = 0;
 		}
 		this.syncStatDisplay();
 
