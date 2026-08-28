@@ -1,4 +1,9 @@
-import type { CardData, GridCoord, MonsterTier, CombatAction } from "@relic-hunter/shared";
+import type {
+	CardData,
+	GridCoord,
+	MonsterTier,
+	CombatAction,
+} from "@relic-hunter/shared";
 import type { DialogueLine } from "./dialogue";
 import type { TutorialUiPointerTarget } from "./tutorialTypes";
 

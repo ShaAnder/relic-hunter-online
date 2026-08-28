@@ -39,7 +39,10 @@ import { CardDrawQueue } from "@/ui/CardDrawQueue";
 import { MapHud } from "@/hud/MapHud";
 import { GestureRouter, type ScrollSurface } from "@/input/GestureRouter";
 import { DialogueOverlay } from "@/ui/overlay/DialogueOverlay";
-import type { TutorialPort } from "@/tutorial/tutorialPort";
+import type {
+	TutorialPort,
+	TutorialCombatGuide,
+} from "@/tutorial/tutorialPort";
 import type { DialogueLine } from "@/tutorial/dialogue";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
@@ -2700,12 +2703,7 @@ export class MapScene implements Scene, TutorialPort {
 	triggerTutorialMonsterAttack(
 		maxRounds?: number,
 		availableActions?: RH.CombatAction[],
-		guide?: {
-			requiredAction: RH.CombatAction;
-			grayOthers?: boolean;
-			onWrongAction?: () => void | Promise<void>;
-			onReady?: () => void | Promise<void>;
-		},
+		guide?: TutorialCombatGuide,
 	): Promise<void> {
 		const monster = this.tutorialMonster;
 		if (!monster) return Promise.resolve();
@@ -2720,48 +2718,64 @@ export class MapScene implements Scene, TutorialPort {
 		});
 
 		return new Promise((resolve) => {
-			void this.game.overlays.show(
-				new BattleOverlay(
-					this.game,
-					monsterAsState,
-					target.state,
-					async (result) => {
-						monster.state.currentHp = monsterAsState.currentHp;
-						if (result.attackerMonsterDied) this.removeMonster(monster);
-						if (result.defenderNeedsTeleport) {
-							this.teleportEntity(target.state, target.mercenary);
-						}
-						this.tutorialConfig?.onTutorialEvent({
-							type: "combatEnded",
-							won: !result.defenderNeedsTeleport,
-						});
-						this.syncUI();
-						resolve();
-					},
-					0x8b0000,
-					tierLabel,
-					0x4a9eff,
-					"You",
-					"balanced",
-					"balanced",
-					"defender",
-					monster.state.coord,
-					target.state.coord,
-					false,
-					availableActions,
-					true,
-					false,
-					maxRounds ?? 3,
-					guide
-						? {
-								requiredAction: guide.requiredAction,
-								grayOthers: guide.grayOthers,
-								onWrongAction: guide.onWrongAction,
-								onReady: guide.onReady,
-							}
-						: null,
-				),
+			const overlay = new BattleOverlay(
+				this.game,
+				monsterAsState,
+				target.state,
+				async (result) => {
+					monster.state.currentHp = monsterAsState.currentHp;
+					if (result.attackerMonsterDied) this.removeMonster(monster);
+					if (result.defenderNeedsTeleport) {
+						this.teleportEntity(target.state, target.mercenary);
+					}
+					this.tutorialConfig?.onTutorialEvent({
+						type: "combatEnded",
+						won: !result.defenderNeedsTeleport,
+					});
+					this.syncUI();
+					resolve();
+				},
+				0x8b0000,
+				tierLabel,
+				0x4a9eff,
+				"You",
+				"balanced",
+				"balanced",
+				"defender",
+				monster.state.coord,
+				target.state.coord,
+				false,
+				availableActions,
+				true,
+				false,
+				maxRounds ?? 3,
 			);
+
+			// The guide is entirely external — BattleOverlay only ever sees
+			// the generic gate/highlight/dim/pointer capabilities below, never
+			// a tutorial-shaped concept. See docs/16, section 12.
+			if (guide) {
+				overlay.setOnReady(() => {
+					overlay.highlightAction(guide.requiredAction);
+					if (guide.grayOthers) {
+						overlay.dimActionsExcept(guide.requiredAction);
+					}
+					overlay.showPointerAt(guide.requiredAction);
+					void guide.onReady?.();
+				});
+				overlay.setActionGate((action) => {
+					if (action !== guide.requiredAction) {
+						void Promise.resolve(guide.onWrongAction?.());
+						return false;
+					}
+					overlay.highlightAction(null);
+					overlay.dimActionsExcept(null);
+					overlay.showPointerAt(null);
+					return true;
+				});
+			}
+
+			void this.game.overlays.show(overlay);
 		});
 	}
 
