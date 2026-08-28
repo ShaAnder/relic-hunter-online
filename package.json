@@ -13,7 +13,7 @@
 		"dev": "npm run dev:client",
 		"architecture:check": "node scripts/check-architecture.mjs",
 		"test:shared": "npm run test --workspace=@relic-hunter/shared",
-		"prepare": "husky"
+		"prepare": "husky || true"
 	},
 	"devDependencies": {
 		"husky": "^9.1.7"

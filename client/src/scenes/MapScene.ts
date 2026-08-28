@@ -2,6 +2,7 @@ import { Container, Graphics, Text } from "pixi.js";
 import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
 import { CameraController } from "@/core/cameras/CameraController";
+import { MapRenderer } from "@/rendering/MapRenderer";
 import {
 	gridToScreen,
 	screenToGrid,
@@ -14,14 +15,11 @@ import { Chest } from "@/entities/Chest";
 
 import * as RH from "@relic-hunter/shared";
 
-import { DeckTracker } from "@/ui/DeckTracker";
-import { InventoryPanel } from "@/ui/InventoryPanel";
 import { PauseOverlay } from "@/ui/overlay/PauseOverlay";
 import { BattleOverlay, type BattleResult } from "@/ui/overlay/BattleOverlay";
 import { MoveController } from "@/systems/MoveController";
 import { TurnManager } from "@/systems/TurnManager";
 import { Hand } from "@/ui/Hand";
-import { CharacterPanel } from "@/ui/CharacterPanel";
 import { HunterScoreEntry, TEST_MAP_DIMENSIONS } from "@/core/game/GameSession";
 import type {
 	TutorialConfig,
@@ -32,10 +30,7 @@ import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
 import { PlayZone } from "@/ui/PlayZone";
 import type { PilotedMercenary, MovableToken } from "@/types/entities";
 import { logMatchEvent } from "@/core/game/GameSession";
-import {
-	HunterSummaryPanel,
-	type HunterSummaryEntry,
-} from "@/ui/HunterSummaryPanel";
+import type { HunterSummaryEntry } from "@/ui/HunterSummaryPanel";
 import { MonsterToken } from "@/entities/Monster";
 import type { MonsterEntity } from "@/types/entities";
 import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
@@ -73,6 +68,7 @@ export class MapScene implements Scene, TutorialPort {
 
 	// Systems
 	private camera: CameraController;
+	private mapRenderer!: MapRenderer;
 	private moveController: MoveController;
 
 	// Entities — one array, pilot type is the only thing distinguishing them
@@ -117,13 +113,7 @@ export class MapScene implements Scene, TutorialPort {
 	private activeAi: PilotedMercenary | null = null;
 	private activeMonster: MonsterEntity | null = null;
 
-	// Character panel (top-right)
-	private characterPanel: CharacterPanel;
-	private deckTracker: DeckTracker;
-	private inventoryPanel: InventoryPanel;
-
 	// UI
-	private hunterSummaryPanel: HunterSummaryPanel;
 	private hud!: MapHud;
 
 	// Item pickup popup — floats above the mercenary's head, placeholder
@@ -174,12 +164,6 @@ export class MapScene implements Scene, TutorialPort {
 	private uiPointerElapsedMs = 0;
 	private activeUiPointerTarget: TutorialUiPointerTarget | null = null;
 
-	private readonly TILE_COLORS: Record<RH.TileType, number> = {
-		[RH.TileType.Floor]: 0x3a3a3a,
-		[RH.TileType.Wall]: 0x1a1a1a,
-		[RH.TileType.Exit]: 0xd4af37,
-	};
-
 	private audio = new AudioController();
 
 	private fpsAccumulator = 0;
@@ -204,11 +188,7 @@ export class MapScene implements Scene, TutorialPort {
 	/** Every UI surface hover/click should never reach board interaction through. Add a new panel here once — nothing else needs updating. */
 	private get uiSurfaces(): Container[] {
 		return [
-			this.inventoryPanel.view,
 			...this.hud.interactiveSurfaces,
-			this.hunterSummaryPanel.view,
-			this.characterPanel.view,
-			this.deckTracker.view,
 			this.hand.view,
 			this.playZone.view,
 		];
@@ -265,6 +245,13 @@ export class MapScene implements Scene, TutorialPort {
 			});
 		}
 
+		this.mapRenderer = new MapRenderer(
+			this.tilesContainer,
+			this.boardContainer,
+			this.camera,
+			this.game,
+		);
+
 		this.applyCameraBounds();
 
 		this.spawnLocalUnit();
@@ -292,22 +279,6 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.tutorialTargetMarker.visible = false;
 		this.mercenaryContainer.addChild(this.tutorialTargetMarker);
-
-		this.characterPanel = new CharacterPanel();
-		this.view.addChild(this.characterPanel.view);
-
-		this.inventoryPanel = new InventoryPanel();
-		this.inventoryPanel.setOnDrop((index) => {
-			this.localUnit.state.items[index] = null;
-			this.syncUI();
-		});
-		this.view.addChild(this.inventoryPanel.view);
-
-		this.deckTracker = new DeckTracker();
-		this.view.addChild(this.deckTracker.view);
-
-		this.hunterSummaryPanel = new HunterSummaryPanel();
-		this.view.addChild(this.hunterSummaryPanel.view);
 
 		this.playZone = new PlayZone();
 		this.view.addChild(this.playZone.view);
@@ -374,17 +345,20 @@ export class MapScene implements Scene, TutorialPort {
 				});
 			}
 		});
+		this.hud.setInventoryOnDrop((index) => {
+			this.localUnit.state.items[index] = null;
+			this.syncUI();
+		});
 		this.view.addChild(this.hud.view);
 
 		this.hud.registerScrollSurfaces(this.gestureRouter);
-		this.gestureRouter.register(this.hunterSummaryPanel);
 
 		this.view.addChild(this.uiPointerMarker);
 	}
 
 	/** Render the map, center the camera, and wire up input. */
 	onEnter(): void {
-		this.renderMap();
+		this.mapRenderer.build(this.grid, 0);
 		this.centerCameraOnActiveHunter();
 		this.camera.attach(this.game.app.canvas);
 		this.hand.syncFromHand(this.localUnit.state.hand);
@@ -463,7 +437,6 @@ export class MapScene implements Scene, TutorialPort {
 		}
 
 		this.hand.update(deltaTime);
-		this.inventoryPanel.update(deltaTime);
 
 		// PASS 4 TODO: still assumes exactly one local unit ever needs the
 		// camera to follow it — real judgment call, deferred deliberately.
@@ -685,34 +658,11 @@ export class MapScene implements Scene, TutorialPort {
 		const h = this.game.app.screen.height;
 		const s = computeUiScale(w, h);
 
-		for (const v of [
-			this.characterPanel.view,
-			this.inventoryPanel.view,
-			this.hunterSummaryPanel.view,
-			this.deckTracker.view,
-			this.playZone.view,
-		]) {
-			v.scale.set(s);
-		}
-
 		const m = uiPx(16, s);
-		const panelW = this.characterPanel.panelWidth * s;
-		const panelH = this.characterPanel.panelHeight * s;
-		const gap = uiPx(8, s);
 
-		this.characterPanel.view.x = m;
-		this.characterPanel.view.y = m;
+		this.hud.layout(w, h, s, m);
 
-		this.hud.layout(w, h, s, m, this.characterPanel.panelHeight);
-
-		this.hunterSummaryPanel.view.x = m;
-		this.hunterSummaryPanel.view.y = m + panelH + gap + uiPx(56, s);
-
-		this.inventoryPanel.view.x = m + panelW + gap;
-		this.inventoryPanel.view.y = m;
-
-		this.deckTracker.view.x = w - uiPx(88, s) - m;
-		this.deckTracker.view.y = m;
+		this.playZone.view.scale.set(s);
 
 		// Hand owns its scale + left anchor inside resize
 		this.hand.resize(w, h, s);
@@ -1140,7 +1090,7 @@ export class MapScene implements Scene, TutorialPort {
 			this.game.session.relicFound = true;
 			this.triggerFrenzy();
 			this.spawnExitFarFrom(coord);
-			this.renderMap();
+			this.mapRenderer.build(this.grid, 0);
 			this.showFeedback(
 				isLocal
 					? `🎯 Found the target: ${placed.plan.item.name}! The Exit has revealed itself.`
@@ -1248,7 +1198,7 @@ export class MapScene implements Scene, TutorialPort {
 				this.trySpawnMonster();
 			}
 
-			this.deckTracker.sync(this.localUnit.turnManager);
+			this.hud.syncDeckTracker(this.localUnit.turnManager);
 			await this.checkDeckExhaustion();
 			await this.processMonsterTurns();
 
@@ -2431,7 +2381,7 @@ export class MapScene implements Scene, TutorialPort {
 		const action = this.hud.handleActionClick(screenX, screenY);
 
 		if (this.hud.hitTestBag(screenX, screenY)) {
-			this.inventoryPanel.toggle();
+			this.hud.toggleInventoryPanel();
 			return;
 		}
 		if (this.hud.hitTestLogsButton(screenX, screenY)) {
@@ -2440,7 +2390,7 @@ export class MapScene implements Scene, TutorialPort {
 		}
 
 		if (this.hud.hitTestInspect(screenX, screenY)) {
-			this.hunterSummaryPanel.toggle();
+			this.hud.toggleHunterSummaryPanel();
 			return;
 		}
 
@@ -2586,8 +2536,8 @@ export class MapScene implements Scene, TutorialPort {
 	 * On hide, close them so nothing peeks under the overlay.
 	 */
 	setHudVisible(isVisible: boolean): void {
-		this.characterPanel.view.visible = isVisible;
-		this.deckTracker.view.visible = isVisible;
+		this.hud.setCharacterPanelVisible(isVisible);
+		this.hud.setDeckTrackerVisible(isVisible);
 		this.hud.setBagVisible(isVisible);
 		this.hud.setActionMenuVisible(isVisible);
 		this.hud.view.visible = isVisible;
@@ -2597,9 +2547,9 @@ export class MapScene implements Scene, TutorialPort {
 		this.hand.view.visible = isVisible;
 
 		if (!isVisible) {
-			if (this.inventoryPanel.isOpen) this.inventoryPanel.close();
+			this.hud.closeInventoryIfOpen();
 			this.hud.closeLogPanelIfOpen();
-			if (this.hunterSummaryPanel.isOpen) this.hunterSummaryPanel.toggle();
+			this.hud.closeHunterSummaryIfOpen();
 			this.playZone.hide();
 		} else if (this.hand.isSelecting) {
 			// Dialogue hid the zone; selection is still active — put it back
@@ -2928,18 +2878,18 @@ export class MapScene implements Scene, TutorialPort {
 			RH.getClassSpecial(local.state.characterClass),
 		);
 		this.hand.syncFromHand(local.state.hand);
-		this.deckTracker.sync(local.turnManager);
-		this.inventoryPanel.sync(local.state.items);
-		this.inventoryPanel.setTargetItemId(
+		this.hud.syncDeckTracker(local.turnManager);
+		this.hud.syncInventoryPanel(local.state.items);
+		this.hud.setInventoryTargetItemId(
 			this.game.session.chestPlan?.targetItem?.id ?? null,
 		);
-		this.characterPanel.setFromState(
+		this.hud.syncCharacterPanel(
 			this.game.session.character,
 			local.state,
 			local.turnManager.apRemaining,
 			local.turnManager.baseAP,
 		);
-		this.hunterSummaryPanel.sync(this.buildHunterSummaryEntries());
+		this.hud.syncHunterSummary(this.buildHunterSummaryEntries());
 	}
 
 	// ---------- Cards ----------
@@ -3281,8 +3231,8 @@ export class MapScene implements Scene, TutorialPort {
 		this.moveController = this.createMoveController();
 		this.boardContainer.addChild(this.moveController.view);
 
-		this.renderMap();
-		this.centerCameraOnMap();
+		this.mapRenderer.build(this.grid, 0);
+		this.mapRenderer.centerCamera();
 		this.syncUI();
 	}
 
@@ -3354,50 +3304,5 @@ export class MapScene implements Scene, TutorialPort {
 			maxHp: 20,
 			ap: 3,
 		});
-	}
-
-	/** Draw every tile diamond. */
-	private renderMap(): void {
-		this.tilesContainer.removeChildren();
-
-		for (let x = 0; x < this.grid.width; x++) {
-			for (let y = 0; y < this.grid.height; y++) {
-				const tile = this.grid.getTile({ x, y });
-				if (!tile) continue;
-				const screenPos = gridToScreen(tile.coord);
-				const diamond = this.drawTileDiamond(this.TILE_COLORS[tile.type]);
-				diamond.x = screenPos.x;
-				diamond.y = screenPos.y;
-				this.tilesContainer.addChild(diamond);
-			}
-		}
-	}
-
-	/** Build one iso diamond tile graphic in the given color. */
-	private drawTileDiamond(color: number): Graphics {
-		const g = new Graphics();
-		g.poly([
-			0,
-			-TILE_HEIGHT / 2,
-			TILE_WIDTH / 2,
-			0,
-			0,
-			TILE_HEIGHT / 2,
-			-TILE_WIDTH / 2,
-			0,
-		]);
-		g.fill(color);
-		g.stroke({ width: 1, color: 0x000000, alpha: 0.3 });
-		return g;
-	}
-
-	/** Snap the camera to the centre of the map. */
-	private centerCameraOnMap(): void {
-		const bounds = this.boardContainer.getLocalBounds();
-		this.camera.centerOn(
-			{ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
-			this.game.app.screen.width,
-			this.game.app.screen.height,
-		);
 	}
 }
