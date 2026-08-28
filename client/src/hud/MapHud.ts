@@ -6,9 +6,21 @@ import { LogsButton } from "@/ui/buttons/LogButton";
 import { BagButton } from "@/ui/buttons/BagButton";
 import { InspectButton } from "@/ui/buttons/InspectButton";
 import { ActionMenu } from "@/ui/buttons/ActionMenu";
+import { CharacterPanel } from "@/ui/CharacterPanel";
+import { DeckTracker } from "@/ui/DeckTracker";
+import { InventoryPanel } from "@/ui/InventoryPanel";
+import {
+	HunterSummaryPanel,
+	type HunterSummaryEntry,
+} from "@/ui/HunterSummaryPanel";
 import { LogPanel } from "@/ui/LogPanel";
 import type { GestureRouter } from "@/input/GestureRouter";
 import type { MatchLogEntry } from "@/core/game/GameSession";
+import type {
+	MercenaryState,
+	ItemData,
+	CharacterData,
+} from "@relic-hunter/shared";
 import type { TurnManager } from "@/systems/TurnManager";
 import { uiPx } from "@/math/uiScale";
 
@@ -34,6 +46,10 @@ export class MapHud {
 	private bagButton: BagButton;
 	private inspectButton: InspectButton;
 	private actionMenu: ActionMenu;
+	private characterPanel: CharacterPanel;
+	private deckTracker: DeckTracker;
+	private inventoryPanel: InventoryPanel;
+	private hunterSummaryPanel: HunterSummaryPanel;
 
 	constructor(private game: Game) {
 		this.bossAlertText = new Text({
@@ -75,11 +91,29 @@ export class MapHud {
 
 		this.actionMenu = new ActionMenu();
 		this.view.addChild(this.actionMenu.view);
+
+		this.characterPanel = new CharacterPanel();
+		this.view.addChild(this.characterPanel.view);
+
+		this.deckTracker = new DeckTracker();
+		this.view.addChild(this.deckTracker.view);
+
+		this.inventoryPanel = new InventoryPanel();
+		this.view.addChild(this.inventoryPanel.view);
+
+		this.hunterSummaryPanel = new HunterSummaryPanel();
+		this.view.addChild(this.hunterSummaryPanel.view);
 	}
 
-	/** MapScene owns the router (and any scroll surfaces still local to it); this just adds MapHud's own. */
+	/** The item-drop consequence (clearing the source slot) is gameplay state — MapScene supplies it. */
+	setInventoryOnDrop(handler: (index: number) => void): void {
+		this.inventoryPanel.setOnDrop(handler);
+	}
+
+	/** MapScene owns the router; this just adds MapHud's own scroll surfaces. */
 	registerScrollSurfaces(router: GestureRouter): void {
 		router.register(this.logPanel);
+		router.register(this.hunterSummaryPanel);
 	}
 
 	/** All HUD roots that should block board click-through. */
@@ -91,6 +125,10 @@ export class MapHud {
 			this.logPanel.view,
 			this.refocusButton.view,
 			this.actionMenu.view,
+			this.characterPanel.view,
+			this.deckTracker.view,
+			this.inventoryPanel.view,
+			this.hunterSummaryPanel.view,
 		];
 	}
 
@@ -143,32 +181,61 @@ export class MapHud {
 		this.actionMenu.sync(turnManager, special);
 	}
 
+	syncCharacterPanel(
+		character: CharacterData | null,
+		state: MercenaryState | null,
+		apRemaining: number,
+		baseAP: number,
+	): void {
+		this.characterPanel.setFromState(character, state, apRemaining, baseAP);
+	}
+
+	syncDeckTracker(turnManager: TurnManager): void {
+		this.deckTracker.sync(turnManager);
+	}
+
+	syncInventoryPanel(items: (ItemData | null)[]): void {
+		this.inventoryPanel.sync(items);
+	}
+
+	setInventoryTargetItemId(id: string | null): void {
+		this.inventoryPanel.setTargetItemId(id);
+	}
+
+	syncHunterSummary(entries: HunterSummaryEntry[]): void {
+		this.hunterSummaryPanel.sync(entries);
+	}
+
 	setActionMenuSubmenuToggled(callback: (open: boolean) => void): void {
 		this.actionMenu.onSubmenuToggled = callback;
 	}
 
-	/** Layout all button/action/log chrome that MapScene no longer owns. */
-	layout(
-		w: number,
-		h: number,
-		s: number,
-		margin: number,
-		characterPanelHeight: number,
-	): void {
+	/** Layout all HUD chrome. margin/w/h/s are the same values MapScene's own layout already computes. */
+	layout(w: number, h: number, s: number, margin: number): void {
 		for (const v of [
 			this.bagButton.view,
 			this.inspectButton.view,
 			this.logsButton.view,
 			this.logPanel.view,
 			this.refocusButton.view,
+			this.characterPanel.view,
+			this.deckTracker.view,
+			this.inventoryPanel.view,
+			this.hunterSummaryPanel.view,
 		]) {
 			v.scale.set(s);
 		}
 
 		const gap = uiPx(8, s);
 		const btn = uiPx(40, s);
+		const panelW = this.characterPanel.panelWidth * s;
+		const panelH = this.characterPanel.panelHeight * s;
+
+		this.characterPanel.view.x = margin;
+		this.characterPanel.view.y = margin;
+
 		const bagX = margin;
-		const bagY = margin + characterPanelHeight * s + gap;
+		const bagY = margin + panelH + gap;
 
 		this.bagButton.view.x = bagX;
 		this.bagButton.view.y = bagY;
@@ -181,6 +248,15 @@ export class MapHud {
 
 		this.logPanel.view.x = bagX;
 		this.logPanel.view.y = bagY + uiPx(56, s);
+
+		this.hunterSummaryPanel.view.x = margin;
+		this.hunterSummaryPanel.view.y = bagY + uiPx(56, s);
+
+		this.inventoryPanel.view.x = margin + panelW + gap;
+		this.inventoryPanel.view.y = margin;
+
+		this.deckTracker.view.x = w - uiPx(88, s) - margin;
+		this.deckTracker.view.y = margin;
 
 		this.actionMenu.layout(w, h, s);
 
@@ -212,6 +288,22 @@ export class MapHud {
 		if (this.logPanel.isOpen) this.logPanel.toggle();
 	}
 
+	toggleInventoryPanel(): void {
+		this.inventoryPanel.toggle();
+	}
+
+	closeInventoryIfOpen(): void {
+		if (this.inventoryPanel.isOpen) this.inventoryPanel.close();
+	}
+
+	toggleHunterSummaryPanel(): void {
+		this.hunterSummaryPanel.toggle();
+	}
+
+	closeHunterSummaryIfOpen(): void {
+		if (this.hunterSummaryPanel.isOpen) this.hunterSummaryPanel.toggle();
+	}
+
 	syncLogPanel(matchLog: MatchLogEntry[]): void {
 		this.logPanel.sync(matchLog);
 	}
@@ -228,6 +320,14 @@ export class MapHud {
 		this.inspectButton.view.visible = visible;
 	}
 
+	setCharacterPanelVisible(visible: boolean): void {
+		this.characterPanel.view.visible = visible;
+	}
+
+	setDeckTrackerVisible(visible: boolean): void {
+		this.deckTracker.view.visible = visible;
+	}
+
 	hitTestRefocus(screenX: number, screenY: number): boolean {
 		return this.refocusButton.hitTest(screenX, screenY);
 	}
@@ -236,9 +336,10 @@ export class MapHud {
 		this.refocusButton.view.visible = visible;
 	}
 
-	/** Ticks the feedback message's auto-hide timer. */
+	/** Ticks the feedback message's auto-hide timer, plus any owned widgets that need a per-frame tick. */
 	update(deltaTime: number): void {
 		this.actionMenu.update(deltaTime);
+		this.inventoryPanel.update(deltaTime);
 
 		if (this.feedbackTimer > 0) {
 			this.feedbackTimer -= deltaTime;
