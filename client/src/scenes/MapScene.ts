@@ -37,7 +37,7 @@ import { PlayZone } from "@/ui/PlayZone";
 import type { PilotedMercenary, MovableToken } from "@/types/entities";
 import { logMatchEvent } from "@/core/game/GameSession";
 import type { HunterSummaryEntry } from "@/ui/HunterSummaryPanel";
-import { MonsterToken } from "@/entities/Monster";
+import { MonsterSystem } from "@/systems/MonsterSystem";
 import type { MonsterEntity } from "@/types/entities";
 import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
 import { AudioController } from "@/core/audio/audioController";
@@ -84,15 +84,7 @@ export class MapScene implements Scene, TutorialPort {
 	private units: PilotedMercenary[] = [];
 	private placedChests: PlacedChest[] = [];
 
-	// Monster Entities
-	private monsters: MonsterEntity[] = [];
-	private boss: MonsterEntity | null = null;
-	private static readonly MONSTER_TIERS: RH.MonsterTier[] = [
-		"light",
-		"medium",
-		"heavy",
-	];
-	private monsterSpawnIndex = 0;
+	private monsterSystem!: MonsterSystem;
 
 	// True during the Exit card's two-flight teleport sequence — blocks
 	// End Turn / regenerate from interrupting mid-sequence, same role
@@ -241,6 +233,8 @@ export class MapScene implements Scene, TutorialPort {
 		this.boardContainer.addChild(this.chestContainer);
 		this.boardContainer.addChild(this.mercenaryContainer);
 		this.view.addChild(this.boardContainer);
+
+		this.monsterSystem = new MonsterSystem(this.mercenaryContainer);
 
 		{
 			const sw = this.game.app.screen.width;
@@ -444,7 +438,7 @@ export class MapScene implements Scene, TutorialPort {
 			unit.mercenary.update(deltaTime);
 			unit.mercenary.view.alpha = unit.state.currentHp <= 0 ? 0.4 : 1;
 		}
-		for (const monster of this.monsters) {
+		for (const monster of this.monsterSystem.all) {
 			monster.token.update(deltaTime);
 		}
 
@@ -1127,7 +1121,7 @@ export class MapScene implements Scene, TutorialPort {
 	 * it's already the endgame threat, frenzy doesn't apply on top of it.
 	 */
 	private triggerFrenzy(): void {
-		RH.applyFrenzy(this.monsters.map((m) => m.state));
+		RH.applyFrenzy(this.monsterSystem.all.map((m) => m.state));
 	}
 
 	/**
@@ -1143,7 +1137,7 @@ export class MapScene implements Scene, TutorialPort {
 		for (const u of this.units) {
 			if (u.state.currentHp > 0) blocked.add(RH.coordKey(u.state.coord));
 		}
-		for (const m of this.monsters) {
+		for (const m of this.monsterSystem.all) {
 			if (m.state.currentHp > 0) blocked.add(RH.coordKey(m.state.coord));
 		}
 
@@ -1220,9 +1214,12 @@ export class MapScene implements Scene, TutorialPort {
 			await this.checkDeckExhaustion();
 			await this.processMonsterTurns();
 
-			if (this.boss && this.boss.state.currentHp > 0) {
+			if (
+				this.monsterSystem.bossEntity &&
+				this.monsterSystem.bossEntity.state.currentHp > 0
+			) {
 				await this.delay(400);
-				await this.processOneMonsterTurn(this.boss);
+				await this.processOneMonsterTurn(this.monsterSystem.bossEntity);
 			}
 		} finally {
 			this.processingEnemyTurns = false;
@@ -1543,22 +1540,17 @@ export class MapScene implements Scene, TutorialPort {
 		const used = new Set<string>(
 			this.units.map((u) => RH.coordKey(u.state.coord)),
 		);
-		for (const m of this.monsters) used.add(RH.coordKey(m.state.coord));
+		for (const key of this.monsterSystem.occupiedCoordKeys()) used.add(key);
 		const coord = this.pickEnemySpawnTile(used);
 		if (!coord) return;
 
-		const state = RH.createMonster(`boss_${Date.now()}`, "boss", coord);
-		const token = new MonsterToken(coord, "boss");
-		this.mercenaryContainer.addChild(token.view);
-
-		this.boss = { state, token };
-		this.monsters.push(this.boss);
+		const boss = this.monsterSystem.spawnBoss(coord);
 		this.showFeedback("👹 The boss has entered the map.");
 
 		const PAN_MS = 900;
 		await Promise.race([
 			this.camera.panTo(
-				{ x: token.view.x, y: token.view.y },
+				{ x: boss.token.view.x, y: boss.token.view.y },
 				PAN_MS,
 				this.game.app.screen.width,
 				this.game.app.screen.height,
@@ -1574,7 +1566,7 @@ export class MapScene implements Scene, TutorialPort {
 		let isFirst = true;
 
 		for (const monster of this.livingMonsters()) {
-			if (monster === this.boss) continue;
+			if (monster === this.monsterSystem.bossEntity) continue;
 			if (!isFirst) await this.delay(MONSTER_DELAY_MS);
 			isFirst = false;
 			await this.processOneMonsterTurn(monster);
@@ -1855,49 +1847,33 @@ export class MapScene implements Scene, TutorialPort {
 
 	private trySpawnMonster(): void {
 		if (this.tutorialConfig && !this.tutorialConfig.spawnMonsters) return;
-		if (!RH.shouldSpawnMonster(this.monsters.length)) return;
+		if (!this.monsterSystem.shouldSpawn()) return;
 
 		const used = new Set<string>(
 			this.units.map((u) => RH.coordKey(u.state.coord)),
 		);
-		for (const m of this.monsters) used.add(RH.coordKey(m.state.coord));
+		for (const key of this.monsterSystem.occupiedCoordKeys()) used.add(key);
 
 		const coord = this.pickEnemySpawnTile(used);
 		if (!coord) return;
 
-		const tier =
-			MapScene.MONSTER_TIERS[
-				this.monsterSpawnIndex % MapScene.MONSTER_TIERS.length
-			];
-		this.monsterSpawnIndex++;
-
-		const state = RH.createMonster(
-			`monster_${Date.now()}_${this.monsterSpawnIndex}`,
-			tier,
-			coord,
-		);
-		const token = new MonsterToken(coord, tier);
-		this.mercenaryContainer.addChild(token.view);
-
-		this.monsters.push({ state, token });
-		this.showFeedback(`👹 A ${tier} monster appears!`);
+		const tier = this.monsterSystem.trySpawn(coord);
+		if (tier) {
+			this.showFeedback(`👹 A ${tier} monster appears!`);
+		}
 	}
 
 	private livingMonsterCoords(): RH.GridCoord[] {
-		return this.livingMonsters().map((m) => m.state.coord);
+		return this.monsterSystem.livingMonsterCoords();
 	}
 
 	private livingMonsters(): MonsterEntity[] {
-		return this.monsters.filter((m) => m.state.currentHp > 0);
+		return this.monsterSystem.livingMonsters();
 	}
 
 	/** Removes a dead monster from the board entirely — array entry and visual token both, not just letting HP sit at 0 forever. */
 	private removeMonster(monster: MonsterEntity): void {
-		const index = this.monsters.indexOf(monster);
-		if (index !== -1) this.monsters.splice(index, 1);
-		if (monster === this.boss) this.boss = null;
-		this.mercenaryContainer.removeChild(monster.token.view);
-		monster.token.view.destroy({ children: true });
+		this.monsterSystem.remove(monster);
 	}
 
 	private pickEnemySpawnTile(used: Set<string>): RH.GridCoord | null {
@@ -2608,17 +2584,16 @@ export class MapScene implements Scene, TutorialPort {
 	/**
 	 * Spawns one specific, controlled, genuinely killable monster —
 	 * deliberately separate from trySpawnMonster's random-position
-	 * logic. Added to the real this.monsters array (not a decorative
-	 * token), so it's a real MonsterEntity a player can actually fight
-	 * and defeat through the normal Attack flow.
+	 * logic. A real MonsterEntity in MonsterSystem's own array (not a
+	 * decorative token), so it's genuinely fightable through the
+	 * normal Attack flow.
 	 */
 	spawnTutorialMonster(coord: RH.GridCoord, tier: RH.MonsterTier): void {
-		const state = RH.createMonster(`tutorial_monster_${tier}`, tier, coord);
-		const token = new MonsterToken(coord, tier);
-		this.mercenaryContainer.addChild(token.view);
-
-		const entity: MonsterEntity = { state, token };
-		this.monsters.push(entity);
+		const entity = this.monsterSystem.spawnSpecific(
+			`tutorial_monster_${tier}`,
+			tier,
+			coord,
+		);
 		this.tutorialMonster = entity;
 	}
 
