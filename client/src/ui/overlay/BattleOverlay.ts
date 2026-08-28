@@ -65,14 +65,6 @@ export interface BattleResult {
 	defenderMonsterDied?: boolean;
 }
 
-export interface TutorialCombatGuide {
-	requiredAction: CombatAction;
-	grayOthers?: boolean;
-	onWrongAction?: () => void | Promise<void>;
-	/** Fires once after buildUI + first layout — runner plays layered intro here. */
-	onReady?: () => void | Promise<void>;
-}
-
 /**
  * Iso arena. Orientation and slot assignment both follow the real map
  * direction the fight is happening along — north/south-dominant fights
@@ -108,6 +100,11 @@ export class BattleOverlay implements Overlay {
 	private localHand!: Hand;
 	private localPlayZone = new PlayZone();
 	private pendingAction: CombatAction | null = null;
+
+	/** Optional gate checked before an action commits — return false to block it. The gate owns showing feedback for a rejection; this class never knows why one was rejected. */
+	private actionGate: ((action: CombatAction) => boolean) | null = null;
+	/** Fires once, right after the overlay has actually built and laid out — the right moment for an external watcher to act on real button positions. */
+	private readyCallback: (() => void) | null = null;
 
 	// combat resolution - rounds
 	private currentRound = 1;
@@ -156,8 +153,7 @@ export class BattleOverlay implements Overlay {
 		private isAttackerMonster: boolean = false,
 		private isDefenderMonster: boolean = false,
 		private readonly maxRounds: number = 3,
-		private tutorialGuide: TutorialCombatGuide | null = null,
-		private guideArrow = new Graphics(),
+		private pointerArrow = new Graphics(),
 	) {
 		this.localHand = new Hand(this.game.app.stage, this.localPlayZone, (card) =>
 			this.onHandCardConfirmed(card),
@@ -191,8 +187,7 @@ export class BattleOverlay implements Overlay {
 		this.buildUI();
 		this.combatActionMenu.onAction = (action) => this.confirmAction(action);
 		this.layout(this.game.app.screen.width, this.game.app.screen.height);
-		this.applyTutorialGuideVisuals();
-		void this.tutorialGuide?.onReady?.();
+		this.readyCallback?.();
 	}
 
 	onHide(): void {
@@ -289,8 +284,8 @@ export class BattleOverlay implements Overlay {
 		this.view.addChild(this.combatActionMenu.view);
 		this.combatActionMenu.setVisible(true);
 
-		this.guideArrow.clear();
-		this.view.addChild(this.guideArrow);
+		this.pointerArrow.clear();
+		this.view.addChild(this.pointerArrow);
 	}
 
 	/**
@@ -298,13 +293,8 @@ export class BattleOverlay implements Overlay {
 	 * else opens hand selection for the allowed card colors.
 	 */
 	private confirmAction(action: CombatAction): void {
-		if (this.tutorialGuide && action !== this.tutorialGuide.requiredAction) {
-			void Promise.resolve(this.tutorialGuide.onWrongAction?.());
+		if (this.actionGate && !this.actionGate(action)) {
 			return;
-		}
-
-		if (this.tutorialGuide) {
-			this.clearTutorialGuide();
 		}
 
 		this.combatActionMenu.setVisible(false);
@@ -327,43 +317,47 @@ export class BattleOverlay implements Overlay {
 		this.roundText.text = `Choose a card for ${ACTION_LABELS[action]}`;
 	}
 
-	private applyTutorialGuideVisuals(): void {
-		const guide = this.tutorialGuide;
-		if (!guide) {
-			this.guideArrow.clear();
-			this.combatActionMenu.setDimmedExcept(null);
-			this.combatActionMenu.setHighlighted(null);
-			return;
-		}
-
-		if (guide.grayOthers) {
-			this.combatActionMenu.setDimmedExcept(guide.requiredAction);
-		}
-		this.combatActionMenu.setHighlighted(guide.requiredAction);
-		this.layoutGuideArrow();
+	/** Optional gate checked before an action commits — return false to block it (and show whatever feedback the caller wants). Pass null to clear. */
+	setActionGate(gate: ((action: CombatAction) => boolean) | null): void {
+		this.actionGate = gate;
 	}
 
-	private layoutGuideArrow(): void {
-		this.guideArrow.clear();
-		const guide = this.tutorialGuide;
-		if (!guide) return;
+	/** Fires once, right after the overlay has built and laid out. Pass null to clear. */
+	setOnReady(callback: (() => void) | null): void {
+		this.readyCallback = callback;
+	}
 
-		const pos = this.combatActionMenu.getButtonScreenPosition(
-			guide.requiredAction,
-		);
+	/** Screen position of a specific action button, or null if it isn't currently shown. */
+	getActionButtonScreenPosition(
+		action: CombatAction,
+	): { x: number; y: number } | null {
+		return this.combatActionMenu.getButtonScreenPosition(action);
+	}
+
+	/** Highlights one action button. Pass null to clear. */
+	highlightAction(action: CombatAction | null): void {
+		this.combatActionMenu.setHighlighted(action);
+	}
+
+	/** Dims every action button except one. Pass null to clear. */
+	dimActionsExcept(action: CombatAction | null): void {
+		this.combatActionMenu.setDimmedExcept(action);
+	}
+
+	/** Points an arrow at a specific action button. Pass null to clear. */
+	showPointerAt(action: CombatAction | null): void {
+		this.pointerArrow.clear();
+		if (!action) return;
+
+		const pos = this.combatActionMenu.getButtonScreenPosition(action);
 		if (!pos) return;
 
-		// Arrow sits above the chip, same gold triangle as MapScene’s ui pointer.
+		// Same gold triangle as MapScene's own ui pointer.
 		const local = this.view.toLocal(pos);
-		this.guideArrow.poly([0, 0, 10, -16, -10, -16]);
-		this.guideArrow.fill(0xffd700);
-		this.guideArrow.x = local.x;
-		this.guideArrow.y = local.y - 28;
-	}
-
-	private clearTutorialGuide(): void {
-		this.tutorialGuide = null;
-		this.applyTutorialGuideVisuals();
+		this.pointerArrow.poly([0, 0, 10, -16, -10, -16]);
+		this.pointerArrow.fill(0xffd700);
+		this.pointerArrow.x = local.x;
+		this.pointerArrow.y = local.y - 28;
 	}
 
 	private buildUI(): void {
