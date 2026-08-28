@@ -1,5 +1,7 @@
 import { Container, Graphics, Text } from "pixi.js";
 import type { ItemData } from "@relic-hunter/shared";
+import { pointInContainer } from "@/rendering/HitTest";
+import type { ScrollSurface } from "@/input/GestureRouter";
 
 const CARD_W = 220;
 const CARD_GAP = 8;
@@ -11,6 +13,8 @@ const SLOT = 18;
 const SLOT_GAP = 3;
 const ROW2_Y = PAD + PORTRAIT_SIZE + 6;
 const CARD_H = ROW2_Y + SLOT + PAD;
+/** ~2.5 cards visible at once — enough to feel useful without overflowing small screens. */
+const VIEWPORT_H = 190;
 
 export interface HunterSummaryEntry {
 	id: string;
@@ -25,16 +29,26 @@ export interface HunterSummaryEntry {
  * Drop-down of individual, self-backed hunter cards — no shared panel
  * background, each hunter is its own compact card: small portrait, name
  * + HP bar on one line, 6-slot public inventory below. Toggled via
- * InspectButton, same open/close pattern as LogPanel.
+ * InspectButton, same open/close pattern as LogPanel. Implements
+ * ScrollSurface — see LogPanel for why gestures route this way rather
+ * than through Pixi's own event system.
  * @author ShaAnder
  */
-export class HunterSummaryPanel {
+export class HunterSummaryPanel implements ScrollSurface {
 	readonly view = new Container();
 
 	private cardsContainer = new Container();
+	private clipMask = new Graphics();
+	private scrollOffset = 0;
+	private contentHeight = 0;
 	private open = false;
 
 	constructor() {
+		this.clipMask.rect(0, 0, CARD_W, VIEWPORT_H);
+		this.clipMask.fill(0xffffff);
+		this.view.addChild(this.clipMask);
+		this.cardsContainer.mask = this.clipMask;
+
 		this.view.addChild(this.cardsContainer);
 		this.view.visible = false;
 	}
@@ -47,6 +61,36 @@ export class HunterSummaryPanel {
 			card.y = i * (CARD_H + CARD_GAP);
 			this.cardsContainer.addChild(card);
 		});
+
+		this.contentHeight =
+			entries.length * CARD_H + Math.max(0, entries.length - 1) * CARD_GAP;
+		this.clampScroll();
+	}
+
+	/** False when closed — a hidden panel must never claim a gesture just because the pointer happens to be where it would render. */
+	hitTest(screenX: number, screenY: number): boolean {
+		if (!this.open) return false;
+		return pointInContainer(screenX, screenY, this.view);
+	}
+
+	/** Same convention as LogPanel: wheel-down (positive deltaY) moves further down the list. */
+	handleWheel(deltaY: number): boolean {
+		this.scrollOffset += Math.sign(deltaY) * (CARD_H / 3);
+		this.clampScroll();
+		return true;
+	}
+
+	/** Content follows the finger — dragging up (negative deltaY) scrolls further down the list. */
+	handleDrag(_deltaX: number, deltaY: number): boolean {
+		this.scrollOffset -= deltaY;
+		this.clampScroll();
+		return true;
+	}
+
+	private clampScroll(): void {
+		const maxOffset = Math.max(0, this.contentHeight - VIEWPORT_H);
+		this.scrollOffset = Math.min(maxOffset, Math.max(0, this.scrollOffset));
+		this.cardsContainer.y = -this.scrollOffset;
 	}
 
 	private buildCard(entry: HunterSummaryEntry): Container {
@@ -152,6 +196,10 @@ export class HunterSummaryPanel {
 	toggle(): void {
 		this.open = !this.open;
 		this.view.visible = this.open;
+		if (this.open) {
+			this.scrollOffset = 0;
+			this.clampScroll();
+		}
 	}
 
 	get isOpen(): boolean {

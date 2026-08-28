@@ -23,6 +23,6 @@
 			"@relic-hunter/shared/*": ["../shared/*"]
 		}
 	},
-	"include": ["src", "vite-env.d.ts"],
+	"include": ["src", "vite-env.d.ts", "src/input/.ts"],
 	"exclude": ["node_modules", "dist"]
 }

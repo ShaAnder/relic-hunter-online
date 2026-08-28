@@ -42,6 +42,7 @@ import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
 import { AudioController } from "@/core/audio/audioController";
 import { CardDrawQueue } from "@/ui/CardDrawQueue";
 import { MapHud } from "@/hud/MapHud";
+import { GestureRouter, type ScrollSurface } from "@/input/GestureRouter";
 import { DialogueOverlay } from "@/ui/overlay/DialogueOverlay";
 import type { TutorialPort } from "@/tutorial/tutorialPort";
 import type { DialogueLine } from "@/tutorial/dialogue";
@@ -102,6 +103,12 @@ export class MapScene implements Scene, TutorialPort {
 
 	private movePointerDragging = false;
 	private suppressNextClick = false;
+
+	/** Owns wheel/drag arbitration between HUD panels and the camera — see docs/16, section 15. */
+	private gestureRouter = new GestureRouter();
+	private activeDragSurface: ScrollSurface | null = null;
+	private cameraDragActive = false;
+	private lastDragScreenPos: { x: number; y: number } | null = null;
 
 	// Which AI unit is mid-fight, so onBattleComplete knows who to update
 	private activeCombatUnit: PilotedMercenary | null = null;
@@ -369,6 +376,9 @@ export class MapScene implements Scene, TutorialPort {
 		});
 		this.view.addChild(this.hud.view);
 
+		this.hud.registerScrollSurfaces(this.gestureRouter);
+		this.gestureRouter.register(this.hunterSummaryPanel);
+
 		this.view.addChild(this.uiPointerMarker);
 	}
 
@@ -401,6 +411,9 @@ export class MapScene implements Scene, TutorialPort {
 			"contextmenu",
 			this.handleContextMenu,
 		);
+		this.game.app.canvas.addEventListener("wheel", this.handleWheel, {
+			passive: false,
+		});
 	}
 
 	/** Tear down visuals and input listeners. */
@@ -429,6 +442,7 @@ export class MapScene implements Scene, TutorialPort {
 			"contextmenu",
 			this.handleContextMenu,
 		);
+		this.game.app.canvas.removeEventListener("wheel", this.handleWheel);
 	}
 
 	/** Per-frame tick: camera, animation, camera follow, stats. */
@@ -749,10 +763,26 @@ export class MapScene implements Scene, TutorialPort {
 		if (this.game.overlays.isOpen) return;
 		if (this.processingEnemyTurns) return;
 		if (event.button !== 0) return;
-		if (!this.moveController.active) return;
 
 		const { screenX, screenY } = this.getScreenPoint(event);
+
+		// A HUD scroll surface always owns the gesture over itself,
+		// move-mode included — see docs/16, section 15.2.
+		const owner = this.gestureRouter.findOwnerAt(screenX, screenY);
+		if (owner) {
+			this.activeDragSurface = owner;
+			this.lastDragScreenPos = { x: screenX, y: screenY };
+			return;
+		}
+
 		if (this.isPointOverUiSurface(screenX, screenY)) return;
+
+		if (!this.moveController.active) {
+			// Nothing claimed it — drag pans the camera (mobile/touch pan).
+			this.cameraDragActive = true;
+			this.lastDragScreenPos = { x: screenX, y: screenY };
+			return;
+		}
 
 		const tile = this.screenPointToGrid(screenX, screenY);
 
@@ -788,6 +818,22 @@ export class MapScene implements Scene, TutorialPort {
 			screenY > this.game.app.screen.height - uiPx(180, hs);
 		this.hand.setHovered(nearHand);
 
+		if (this.activeDragSurface && this.lastDragScreenPos) {
+			const dx = screenX - this.lastDragScreenPos.x;
+			const dy = screenY - this.lastDragScreenPos.y;
+			this.activeDragSurface.handleDrag(dx, dy);
+			this.lastDragScreenPos = { x: screenX, y: screenY };
+			return;
+		}
+
+		if (this.cameraDragActive && this.lastDragScreenPos) {
+			const dx = screenX - this.lastDragScreenPos.x;
+			const dy = screenY - this.lastDragScreenPos.y;
+			this.camera.panByScreenDelta(dx, dy);
+			this.lastDragScreenPos = { x: screenX, y: screenY };
+			return;
+		}
+
 		if (!this.moveController.active) return;
 		if (this.isPointOverUiSurface(screenX, screenY)) return;
 
@@ -798,11 +844,41 @@ export class MapScene implements Scene, TutorialPort {
 	};
 
 	private handlePointerUp = (_event: PointerEvent): void => {
+		if (this.activeDragSurface) {
+			this.activeDragSurface = null;
+			this.lastDragScreenPos = null;
+			this.suppressNextClick = true;
+			return;
+		}
+
+		if (this.cameraDragActive) {
+			this.cameraDragActive = false;
+			this.lastDragScreenPos = null;
+			this.suppressNextClick = true;
+			return;
+		}
+
 		if (!this.movePointerDragging) return;
 		this.movePointerDragging = false;
 		if (!this.moveController.active) return;
 		this.moveController.onPointerUp();
 		this.suppressNextClick = true;
+	};
+
+	/** Routes to whichever HUD surface owns the gesture; only zooms the camera when none does. */
+	private handleWheel = (event: WheelEvent): void => {
+		if (this.game.overlays.isOpen) return;
+		event.preventDefault();
+
+		const { screenX, screenY } = this.getScreenPoint(event);
+		const consumed = this.gestureRouter.routeWheel(
+			screenX,
+			screenY,
+			event.deltaY,
+		);
+		if (!consumed) {
+			this.camera.zoomAt(event.deltaY);
+		}
 	};
 
 	private handleContextMenu = (event: MouseEvent): void => {

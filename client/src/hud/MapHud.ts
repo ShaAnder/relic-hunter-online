@@ -7,6 +7,7 @@ import { BagButton } from "@/ui/buttons/BagButton";
 import { InspectButton } from "@/ui/buttons/InspectButton";
 import { ActionMenu } from "@/ui/buttons/ActionMenu";
 import { LogPanel } from "@/ui/LogPanel";
+import type { GestureRouter } from "@/input/GestureRouter";
 import type { MatchLogEntry } from "@/core/game/GameSession";
 import type { TurnManager } from "@/systems/TurnManager";
 import { uiPx } from "@/math/uiScale";
@@ -74,6 +75,11 @@ export class MapHud {
 
 		this.actionMenu = new ActionMenu();
 		this.view.addChild(this.actionMenu.view);
+	}
+
+	/** MapScene owns the router (and any scroll surfaces still local to it); this just adds MapHud's own. */
+	registerScrollSurfaces(router: GestureRouter): void {
+		router.register(this.logPanel);
 	}
 
 	/** All HUD roots that should block board click-through. */
