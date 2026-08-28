@@ -16,7 +16,7 @@ import { Chest } from "@/entities/Chest";
 import * as RH from "@relic-hunter/shared";
 
 import { PauseOverlay } from "@/ui/overlay/PauseOverlay";
-import { BattleOverlay, type BattleResult } from "@/ui/overlay/BattleOverlay";
+import { BattleHost, type BattleHostResult } from "@/combat/BattleHost";
 import { MoveController } from "@/systems/MoveController";
 import { TurnManager } from "@/systems/TurnManager";
 import { Hand } from "@/ui/Hand";
@@ -39,10 +39,7 @@ import { CardDrawQueue } from "@/ui/CardDrawQueue";
 import { MapHud } from "@/hud/MapHud";
 import { GestureRouter, type ScrollSurface } from "@/input/GestureRouter";
 import { DialogueOverlay } from "@/ui/overlay/DialogueOverlay";
-import type {
-	TutorialPort,
-	TutorialCombatGuide,
-} from "@/tutorial/tutorialPort";
+import type { TutorialPort } from "@/tutorial/tutorialPort";
 import type { DialogueLine } from "@/tutorial/dialogue";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
@@ -150,28 +147,30 @@ export class MapScene implements Scene, TutorialPort {
 	private tutorialConfig: TutorialConfig | null;
 	/** Lazily constructed — only tutorials ever need dialogue. */
 	private dialogueOverlay: DialogueOverlay | null = null;
-	/** Set by handleCardConfirmed right before a move starts — read once, in onMoveCommitted, to know whether the move that's about to fire actually spent a card. */
+	/** Set by handleCardConfirmed right before a move starts */
 	private pendingMoveUsedCard = false;
 	private tutorialTargetMarker = new Container();
 	private tutorialTargetElapsedMs = 0;
-	/** Whether the target marker is logically "on" right now — tracked separately from tutorialTargetMarker.visible itself, since setHudVisible also toggles that same property and reading it back would corrupt the real state. */
+	/** Whether the target marker is logically "on" right now */
 	private tutorialTargetActive = false;
-	/** Static actor tokens keyed by label, so a specific one (e.g. "Kessler") can be found again and animated — spawnStaticActors builds this, moveStaticActor reads it. */
+	/** Static actor tokens keyed by label */
 	private tutorialActorTokens: Map<string, Container> = new Map();
-	/** Each static actor's current grid coord, kept in sync as moveStaticActor animates it — needed to compute a real path for the NEXT move. */
+	/** Each static actor's current grid coord,  */
 	private tutorialActorCoords: Map<string, RH.GridCoord> = new Map();
-	/** The one controlled, killable monster a combat tutorial spawns — deliberately separate from the normal random-spawn pool in this.monsters (though still added there too, so it's a genuine, targetable entity). */
+	/** The one controlled, killable monster a combat tutorial spawns */
 	private tutorialMonster: MonsterEntity | null = null;
 
 	private uiPointerMarker = new Container();
 	private uiPointerElapsedMs = 0;
 	private activeUiPointerTarget: TutorialUiPointerTarget | null = null;
 
+	private battleHost: BattleHost;
+
 	private audio = new AudioController();
 
 	private fpsAccumulator = 0;
 
-	/** The one human-piloted unit. Assumes exactly one exists — the flagged multiplayer-identity debt this whole migration is paying down. */
+	/** The one human-piloted unit. Assumes exactly one exists */
 	private get localUnit(): PilotedMercenary {
 		const unit = this.units.find((u) => u.pilot === "local");
 		if (!unit) throw new Error("MapScene: no local unit found");
@@ -261,8 +260,9 @@ export class MapScene implements Scene, TutorialPort {
 		if (!this.tutorialConfig || this.tutorialConfig.spawnAiHunters) {
 			this.spawnEnemyHunters();
 		}
-		this.spawnStaticActors();
 
+		this.spawnStaticActors();
+		this.battleHost = new BattleHost(this.game);
 		// Item popup rides along as a child of the mercenary's own view,
 		// so it moves with the token automatically — no manual per-frame
 		// position syncing needed.
@@ -1660,116 +1660,130 @@ export class MapScene implements Scene, TutorialPort {
 		target: PilotedMercenary,
 	): Promise<void> {
 		const monsterAsState = RH.monsterAsMercenaryState(monster.state);
+
 		const tierLabel = `${monster.state.tier[0].toUpperCase()}${monster.state.tier.slice(1)} Monster`;
 
-		await new Promise<void>((resolve) => {
-			void this.game.overlays.show(
-				new BattleOverlay(
-					this.game,
-					monsterAsState,
-					target.state,
-					async (result) => {
-						monster.state.currentHp = monsterAsState.currentHp;
-						if (result.attackerMonsterDied) {
-							this.removeMonster(monster);
-						}
-						if (result.defenderNeedsTeleport) {
-							this.teleportEntity(target.state, target.mercenary);
-						}
-						resolve();
-					},
-					0x8b0000,
-					tierLabel,
-					target.pilot === "local"
-						? 0x4a9eff
-						: RH.ARCHETYPE_COLORS[target.archetype!],
-					target.pilot === "local" ? "You" : target.state.name,
-					"balanced",
-					target.archetype ?? "balanced",
-					target.pilot === "local" ? "defender" : "none",
-					monster.state.coord,
-					target.state.coord,
-					false,
-					undefined,
-					true,
-				),
-			);
+		await this.battleHost.run({
+			attackerState: monsterAsState,
+			defenderState: target.state,
+
+			attackerColor: 0x8b0000,
+			attackerLabel: tierLabel,
+
+			defenderColor:
+				target.pilot === "local"
+					? 0x4a9eff
+					: RH.ARCHETYPE_COLORS[target.archetype!],
+
+			defenderLabel: target.pilot === "local" ? "You" : target.state.name,
+
+			attackerArchetype: "balanced",
+			defenderArchetype: target.archetype ?? "balanced",
+
+			localHumanRole: target.pilot === "local" ? "defender" : "none",
+
+			attackerMapCoord: monster.state.coord,
+			defenderMapCoord: target.state.coord,
+
+			isRangedInitiated: false,
+
+			isAttackerMonster: true,
+			isDefenderMonster: false,
+
+			onComplete: async (result) => {
+				monster.state.currentHp = monsterAsState.currentHp;
+
+				if (result.attackerMonsterDied) {
+					this.removeMonster(monster);
+				}
+
+				if (result.defenderNeedsTeleport) {
+					this.teleportEntity(target.state, target.mercenary);
+				}
+			},
 		});
 	}
 
-	/** Player is defender — existing interactive BattleOverlay. */
 	private async aiInitiateCombat(
 		attacker: PilotedMercenary,
 		defender: PilotedMercenary,
 	): Promise<void> {
 		this.activeCombatUnit = defender;
 
-		await new Promise<void>((resolve) => {
-			void this.game.overlays.show(
-				new BattleOverlay(
-					this.game,
-					attacker.state,
-					defender.state,
-					async (result) => {
-						if (result.attackerNeedsTeleport) {
-							this.teleportEntity(attacker.state, attacker.mercenary);
-						}
-						if (result.defenderNeedsTeleport) {
-							this.teleportEntity(defender.state, defender.mercenary);
-						}
-						resolve();
-					},
-					RH.ARCHETYPE_COLORS[attacker.archetype!],
-					attacker.state.name,
-					0x4a9eff,
-					"You",
-					attacker.archetype!,
-					"balanced",
-					"defender",
-					attacker.state.coord,
-					defender.state.coord,
-					!RH.isAdjacent(attacker.state.coord, defender.state.coord),
-				),
-			);
+		const result = await this.battleHost.run({
+			attackerState: attacker.state,
+			defenderState: defender.state,
+
+			attackerColor: RH.ARCHETYPE_COLORS[attacker.archetype!],
+			attackerLabel: attacker.state.name,
+
+			defenderColor: 0x4a9eff,
+			defenderLabel: "You",
+
+			attackerArchetype: attacker.archetype!,
+			defenderArchetype: "balanced",
+
+			localHumanRole: "defender",
+
+			attackerMapCoord: attacker.state.coord,
+			defenderMapCoord: defender.state.coord,
+
+			isRangedInitiated: !RH.isAdjacent(
+				attacker.state.coord,
+				defender.state.coord,
+			),
+
+			isAttackerMonster: false,
+			isDefenderMonster: false,
 		});
+
+		if (result.attackerNeedsTeleport) {
+			this.teleportEntity(attacker.state, attacker.mercenary);
+		}
+
+		if (result.defenderNeedsTeleport) {
+			this.teleportEntity(defender.state, defender.mercenary);
+		}
 	}
 
-	/**
-	 * AI vs AI: both sides auto-pick via chooseCombatAction, resolve through
-	 * shared combat, apply HP/loot. Same BattleOverlay pipeline, spectator mode.
-	 */
 	private async resolveAiVsAi(
 		attacker: PilotedMercenary,
 		defender: PilotedMercenary,
 	): Promise<void> {
-		await new Promise<void>((resolve) => {
-			void this.game.overlays.show(
-				new BattleOverlay(
-					this.game,
-					attacker.state,
-					defender.state,
-					async (result) => {
-						if (result.attackerNeedsTeleport) {
-							this.teleportEntity(attacker.state, attacker.mercenary);
-						}
-						if (result.defenderNeedsTeleport) {
-							this.teleportEntity(defender.state, defender.mercenary);
-						}
-						resolve();
-					},
-					RH.ARCHETYPE_COLORS[attacker.archetype!],
-					attacker.state.name,
-					RH.ARCHETYPE_COLORS[defender.archetype!],
-					defender.state.name,
-					attacker.archetype!,
-					defender.archetype!,
-					"none",
-					attacker.state.coord,
-					defender.state.coord,
-					!RH.isAdjacent(attacker.state.coord, defender.state.coord),
-				),
-			);
+		const result = await this.battleHost.run({
+			attackerState: attacker.state,
+			defenderState: defender.state,
+
+			attackerColor: RH.ARCHETYPE_COLORS[attacker.archetype!],
+			attackerLabel: attacker.state.name,
+
+			defenderColor: RH.ARCHETYPE_COLORS[defender.archetype!],
+			defenderLabel: defender.state.name,
+
+			attackerArchetype: attacker.archetype!,
+			defenderArchetype: defender.archetype!,
+
+			localHumanRole: "none",
+
+			attackerMapCoord: attacker.state.coord,
+			defenderMapCoord: defender.state.coord,
+
+			isRangedInitiated: !RH.isAdjacent(
+				attacker.state.coord,
+				defender.state.coord,
+			),
+
+			isAttackerMonster: false,
+			isDefenderMonster: false,
 		});
+
+		if (result.attackerNeedsTeleport) {
+			this.teleportEntity(attacker.state, attacker.mercenary);
+		}
+
+		if (result.defenderNeedsTeleport) {
+			this.teleportEntity(defender.state, defender.mercenary);
+		}
 	}
 
 	// ---------- Spawn ----------
@@ -2103,7 +2117,6 @@ export class MapScene implements Scene, TutorialPort {
 		this.targetReticle.visible = false;
 	}
 
-	/** Range-checks the target, spends AP, opens BattleOverlay if valid. */
 	private tryStartCombat(unit: PilotedMercenary): void {
 		if (!unit || unit.state.currentHp <= 0) return;
 
@@ -2114,43 +2127,56 @@ export class MapScene implements Scene, TutorialPort {
 			this.showFeedback("⚔ Target out of range");
 			return;
 		}
+
 		if (!this.localUnit.turnManager.spendAttack()) return;
 
 		this.exitTargetingMode();
 		this.activeCombatUnit = unit;
 
-		void this.game.overlays.show(
-			new BattleOverlay(
-				this.game,
-				local,
-				unit.state,
-				(result) => this.onBattleComplete(result),
-				0x4a9eff,
-				"You",
-				RH.ARCHETYPE_COLORS[unit.archetype!],
-				unit.state.name,
-				"balanced",
-				unit.archetype!,
-				"attacker",
-				local.coord,
-				unit.state.coord,
-				!RH.isAdjacent(local.coord, unit.state.coord),
-			),
-		);
+		void this.battleHost.run({
+			attackerState: local,
+			defenderState: unit.state,
+
+			attackerColor: 0x4a9eff,
+			attackerLabel: "You",
+
+			defenderColor: RH.ARCHETYPE_COLORS[unit.archetype!],
+			defenderLabel: unit.state.name,
+
+			attackerArchetype: "balanced",
+			defenderArchetype: unit.archetype!,
+
+			localHumanRole: "attacker",
+
+			attackerMapCoord: local.coord,
+			defenderMapCoord: unit.state.coord,
+
+			isRangedInitiated: !RH.isAdjacent(local.coord, unit.state.coord),
+
+			isAttackerMonster: false,
+			isDefenderMonster: false,
+
+			onComplete: (result) => {
+				this.onBattleComplete(result);
+			},
+		});
 	}
 
 	private tryStartCombatVsMonster(monster: MonsterEntity): void {
 		const local = this.localUnit.state;
 		const inRange = RH.isAdjacent(local.coord, monster.state.coord);
+
 		if (!inRange) {
 			this.showFeedback("⚔ Target out of range");
 			return;
 		}
+
 		if (!this.localUnit.turnManager.spendAttack()) return;
 
 		this.exitTargetingMode();
 
 		const monsterAsState = RH.monsterAsMercenaryState(monster.state);
+
 		const tierLabel = `${monster.state.tier[0].toUpperCase()}${monster.state.tier.slice(1)} Monster`;
 
 		this.tutorialConfig?.onTutorialEvent({
@@ -2158,38 +2184,48 @@ export class MapScene implements Scene, TutorialPort {
 			opponentType: "monster",
 		});
 
-		void this.game.overlays.show(
-			new BattleOverlay(
-				this.game,
-				local,
-				monsterAsState,
-				(result) => {
-					monster.state.currentHp = monsterAsState.currentHp;
-					if (result.defenderMonsterDied) this.removeMonster(monster);
-					if (result.attackerNeedsTeleport) {
-						this.teleportEntity(this.localUnit.state, this.localUnit.mercenary);
-					}
-					this.tutorialConfig?.onTutorialEvent({
-						type: "combatEnded",
-						won: !!result.defenderMonsterDied,
-					});
-					this.syncUI();
-				},
-				0x4a9eff,
-				"You",
-				0x8b0000,
-				tierLabel,
-				"balanced",
-				"balanced",
-				"attacker",
-				local.coord,
-				monster.state.coord,
-				!RH.isAdjacent(local.coord, monster.state.coord),
-				undefined,
-				false,
-				true,
-			),
-		);
+		void this.battleHost.run({
+			attackerState: local,
+			defenderState: monsterAsState,
+
+			attackerColor: 0x4a9eff,
+			attackerLabel: "You",
+
+			defenderColor: 0x8b0000,
+			defenderLabel: tierLabel,
+
+			attackerArchetype: "balanced",
+			defenderArchetype: "balanced",
+
+			localHumanRole: "attacker",
+
+			attackerMapCoord: local.coord,
+			defenderMapCoord: monster.state.coord,
+
+			isRangedInitiated: !RH.isAdjacent(local.coord, monster.state.coord),
+
+			isAttackerMonster: false,
+			isDefenderMonster: true,
+
+			onComplete: (result) => {
+				monster.state.currentHp = monsterAsState.currentHp;
+
+				if (result.defenderMonsterDied) {
+					this.removeMonster(monster);
+				}
+
+				if (result.attackerNeedsTeleport) {
+					this.teleportEntity(this.localUnit.state, this.localUnit.mercenary);
+				}
+
+				this.tutorialConfig?.onTutorialEvent({
+					type: "combatEnded",
+					won: !!result.defenderMonsterDied,
+				});
+
+				this.syncUI();
+			},
+		});
 	}
 
 	/**
@@ -2238,7 +2274,7 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	/** Enemy defeat/teleport are BattleOverlay's job via shared state; this handles the rest. */
-	private async onBattleComplete(result: BattleResult): Promise<void> {
+	private async onBattleComplete(result: BattleHostResult): Promise<void> {
 		const unit = this.activeCombatUnit;
 		this.activeCombatUnit = null;
 
@@ -2697,19 +2733,15 @@ export class MapScene implements Scene, TutorialPort {
 		await monster.token.moveAlongPath(path);
 	}
 
-	/**
-	 * Forces the tutorial monster to attack the local player right now
-	 * — bypasses RH.decideMonsterTarget entirely, since a scripted
-	 * tutorial beat needs this to happen on cue, not whenever real AI
-	 * decision logic would normally choose to engage. maxRounds is
-	 * passed straight through to BattleOverlay (default 3 if omitted)
-	 * — a tutorial's guided single-card rounds pass 1 here specifically.
-	 * Fires combatStarted/combatEnded so TutorialRunner can gate on them.
-	 */
 	triggerTutorialMonsterAttack(
 		maxRounds?: number,
 		availableActions?: RH.CombatAction[],
-		guide?: TutorialCombatGuide,
+		guide?: {
+			requiredAction: RH.CombatAction;
+			grayOthers?: boolean;
+			onWrongAction?: () => void | Promise<void>;
+			onReady?: () => void | Promise<void>;
+		},
 	): Promise<void> {
 		const monster = this.tutorialMonster;
 		if (!monster) return Promise.resolve();
@@ -2723,66 +2755,66 @@ export class MapScene implements Scene, TutorialPort {
 			opponentType: "monster",
 		});
 
-		return new Promise((resolve) => {
-			const overlay = new BattleOverlay(
-				this.game,
-				monsterAsState,
-				target.state,
-				async (result) => {
-					monster.state.currentHp = monsterAsState.currentHp;
-					if (result.attackerMonsterDied) this.removeMonster(monster);
-					if (result.defenderNeedsTeleport) {
-						this.teleportEntity(target.state, target.mercenary);
-					}
-					this.tutorialConfig?.onTutorialEvent({
-						type: "combatEnded",
-						won: !result.defenderNeedsTeleport,
-					});
-					this.syncUI();
-					resolve();
-				},
-				0x8b0000,
-				tierLabel,
-				0x4a9eff,
-				"You",
-				"balanced",
-				"balanced",
-				"defender",
-				monster.state.coord,
-				target.state.coord,
-				false,
-				availableActions,
-				true,
-				false,
-				maxRounds ?? 3,
-			);
+		return this.battleHost
+			.run({
+				attackerState: monsterAsState,
+				defenderState: target.state,
 
-			// The guide is entirely external — BattleOverlay only ever sees
-			// the generic gate/highlight/dim/pointer capabilities below, never
-			// a tutorial-shaped concept. See docs/16, section 12.
-			if (guide) {
-				overlay.setOnReady(() => {
-					overlay.highlightAction(guide.requiredAction);
-					if (guide.grayOthers) {
-						overlay.dimActionsExcept(guide.requiredAction);
-					}
-					overlay.showPointerAt(guide.requiredAction);
-					void guide.onReady?.();
-				});
-				overlay.setActionGate((action) => {
-					if (action !== guide.requiredAction) {
-						void Promise.resolve(guide.onWrongAction?.());
-						return false;
-					}
-					overlay.highlightAction(null);
-					overlay.dimActionsExcept(null);
-					overlay.showPointerAt(null);
-					return true;
-				});
-			}
+				attackerColor: 0x8b0000,
+				attackerLabel: tierLabel,
 
-			void this.game.overlays.show(overlay);
-		});
+				defenderColor: 0x4a9eff,
+				defenderLabel: "You",
+
+				attackerArchetype: "balanced",
+				defenderArchetype: "balanced",
+
+				localHumanRole: "defender",
+
+				attackerMapCoord: monster.state.coord,
+				defenderMapCoord: target.state.coord,
+
+				isRangedInitiated: false,
+				isAttackerMonster: true,
+				isDefenderMonster: false,
+
+				maxRounds: maxRounds ?? 3,
+
+				tutorial: guide
+					? {
+							availableActions,
+							actionGate: (action) => {
+								if (action !== guide.requiredAction) {
+									void Promise.resolve(guide.onWrongAction?.());
+									return false;
+								}
+
+								return true;
+							},
+							onReady: guide.onReady,
+						}
+					: {
+							availableActions,
+						},
+			})
+			.then(async (result) => {
+				monster.state.currentHp = monsterAsState.currentHp;
+
+				if (result.attackerMonsterDied) {
+					this.removeMonster(monster);
+				}
+
+				if (result.defenderNeedsTeleport) {
+					await this.teleportEntity(target.state, target.mercenary);
+				}
+
+				this.tutorialConfig?.onTutorialEvent({
+					type: "combatEnded",
+					won: !result.defenderNeedsTeleport,
+				});
+
+				this.syncUI();
+			});
 	}
 
 	/**
