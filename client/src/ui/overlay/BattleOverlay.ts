@@ -13,13 +13,9 @@ import type {
 	MercenaryState,
 	AiArchetype,
 } from "@relic-hunter/shared";
-import {
-	resolveCombatRound,
-	resolveDefeat,
-	resolveSurrender,
-} from "@relic-hunter/shared";
 import { PlayZone } from "@/ui/PlayZone";
 import { InventoryPanel } from "@/ui/InventoryPanel";
+import { BattleController, type LootSequenceRequest } from "@/combat/BattleController";
 import {
 	decideLootChoice,
 	decideSurrenderChoice,
@@ -933,20 +929,15 @@ export class BattleOverlay implements Overlay {
 		if (this.roundInProgress) return;
 		this.roundInProgress = true;
 
-		if (attackerChoice.card) {
-			const idx = this.attackerState.hand.findIndex(
-				(c) => c.id === attackerChoice.card!.id,
-			);
-			if (idx !== -1) this.attackerState.hand.splice(idx, 1);
-		}
-		if (defenderChoice.card) {
-			const idx = this.defenderState.hand.findIndex(
-				(c) => c.id === defenderChoice.card!.id,
-			);
-			if (idx !== -1) this.defenderState.hand.splice(idx, 1);
-		}
-
-		const result = resolveCombatRound(attackerChoice, defenderChoice);
+		const resolution = BattleController.resolveRound(
+			this.attackerState,
+			this.defenderState,
+			attackerChoice,
+			defenderChoice,
+			this.currentRound,
+			this.maxRounds,
+		);
+		const result = resolution.result;
 
 		// Both sides get locked in blind, showing them is simultaneous since nothing left to hide
 		// and neither can change their mind
@@ -969,13 +960,9 @@ export class BattleOverlay implements Overlay {
 			this.syncHpDisplay();
 		};
 
-		const bothAttacking =
-			attackerChoice.action === "attack" && defenderChoice.action === "attack";
-
-		if (bothAttacking) {
+		if (resolution.bothAttacking) {
 			// this is our sequential combat case, two real hits, coin flip decides who goes first
-			const attackerFirst = Math.random() < 0.5;
-			if (attackerFirst) {
+			if (resolution.attackerFirst) {
 				applyAttackerDamage();
 				await this.delay(SEQUENTIAL_HIT_GAP_MS);
 				applyDefenderDamage();
@@ -1000,16 +987,7 @@ export class BattleOverlay implements Overlay {
 			result.b,
 		);
 
-		const battleOver =
-			this.attackerState.currentHp <= 0 ||
-			this.defenderState.currentHp <= 0 ||
-			attackerChoice.action === "surrender" ||
-			defenderChoice.action === "surrender" ||
-			result.a.escaped === true ||
-			result.b.escaped === true ||
-			this.currentRound >= this.maxRounds;
-
-		if (battleOver) {
+		if (resolution.battleOver) {
 			void this.finishBattle(attackerChoice, defenderChoice);
 			return;
 		}
@@ -1059,95 +1037,47 @@ export class BattleOverlay implements Overlay {
 		attackerChoice: CombatChoice,
 		defenderChoice: CombatChoice,
 	): Promise<void> {
-		let attackerNeedsTeleport = false;
-		let defenderNeedsTeleport = false;
-		let attackerMonsterDied = false;
-		let defenderMonsterDied = false;
+		const decision = BattleController.resolveBattleEnd(
+			this.attackerState,
+			this.defenderState,
+			attackerChoice,
+			defenderChoice,
+			this.isAttackerMonster,
+			this.isDefenderMonster,
+			this.localHumanRole,
+		);
 
-		if (
-			attackerChoice.action === "surrender" ||
-			defenderChoice.action === "surrender"
-		) {
-			const surrenderer =
-				attackerChoice.action === "surrender" ? "attacker" : "defender";
-			const giverState =
-				surrenderer === "attacker" ? this.attackerState : this.defenderState;
-			const receiverState =
-				surrenderer === "attacker" ? this.defenderState : this.attackerState;
-
-			const receiverIsMonster =
-				(surrenderer === "attacker" && this.isDefenderMonster) ||
-				(surrenderer === "defender" && this.isAttackerMonster);
-
-			const consequence = resolveSurrender(
-				giverState.items.filter((i) => i !== null).length,
-			);
-			if (consequence.itemGiven && !receiverIsMonster) {
-				await this.runSurrenderGiveSequence(
-					giverState,
-					receiverState,
-					(surrenderer === "attacker" && this.localHumanRole === "attacker") ||
-						(surrenderer === "defender" && this.localHumanRole === "defender"),
-				);
-			}
-
-			if (surrenderer === "attacker") attackerNeedsTeleport = true;
-			else defenderNeedsTeleport = true;
-		} else {
-			if (this.attackerState.currentHp <= 0) {
-				if (this.isAttackerMonster) {
-					attackerMonsterDied = true;
-				} else {
-					const defeatedByHunter = !this.isDefenderMonster;
-					const consequence = resolveDefeat(
-						this.attackerState.stats,
-						defeatedByHunter,
-					);
-					this.attackerState.hpCeiling = consequence.hpCeiling;
-					if (consequence.itemStolen && defeatedByHunter) {
-						await this.runLootSequence(
-							this.defenderState,
-							this.attackerState,
-							this.localHumanRole === "defender",
-							true,
-						);
-					}
-					attackerNeedsTeleport = true;
-				}
-			}
-
-			if (this.defenderState.currentHp <= 0) {
-				if (this.isDefenderMonster) {
-					defenderMonsterDied = true;
-				} else {
-					const defeatedByHunter = !this.isAttackerMonster;
-					const consequence = resolveDefeat(
-						this.defenderState.stats,
-						defeatedByHunter,
-					);
-					this.defenderState.hpCeiling = consequence.hpCeiling;
-					if (consequence.itemStolen && defeatedByHunter) {
-						await this.runLootSequence(
-							this.attackerState,
-							this.defenderState,
-							this.localHumanRole === "attacker",
-							true,
-						);
-					}
-					defenderNeedsTeleport = true;
-				}
-			}
+		for (const seq of decision.lootSequences) {
+			await this.playLootSequence(seq);
 		}
 
 		setTimeout(() => {
 			this.game.overlays.hide();
 			this.onComplete({
-				attackerNeedsTeleport,
-				defenderNeedsTeleport,
-				attackerMonsterDied,
-				defenderMonsterDied,
+				attackerNeedsTeleport: decision.attackerNeedsTeleport,
+				defenderNeedsTeleport: decision.defenderNeedsTeleport,
+				attackerMonsterDied: decision.attackerMonsterDied,
+				defenderMonsterDied: decision.defenderMonsterDied,
 			});
 		}, RESULT_LINGER_MS);
+	}
+
+	/** Dispatches to whichever visual sequence the decision asked for — field names match each method's own parameters exactly, so there's nothing to remap here. */
+	private async playLootSequence(seq: LootSequenceRequest): Promise<void> {
+		if (seq.kind === "loot") {
+			await this.runLootSequence(
+				seq.winnerState,
+				seq.loserState,
+				seq.winnerIsLocal,
+				seq.allowSkip,
+			);
+		} else {
+			await this.runSurrenderGiveSequence(
+				seq.giverState,
+				seq.receiverState,
+				seq.giverIsLocal,
+			);
+		}
 	}
 
 	private layout(width: number, height: number): void {

@@ -17,6 +17,12 @@ import * as RH from "@relic-hunter/shared";
 
 import { PauseOverlay } from "@/ui/overlay/PauseOverlay";
 import { BattleHost, type BattleHostResult } from "@/combat/BattleHost";
+import {
+	buildBattleRequest,
+	describeLocalPlayer,
+	describeHunter,
+	describeMonster,
+} from "@/combat/buildBattleRequest";
 import { MoveController } from "@/systems/MoveController";
 import { TurnManager } from "@/systems/TurnManager";
 import { Hand } from "@/ui/Hand";
@@ -39,7 +45,10 @@ import { CardDrawQueue } from "@/ui/CardDrawQueue";
 import { MapHud } from "@/hud/MapHud";
 import { GestureRouter, type ScrollSurface } from "@/input/GestureRouter";
 import { DialogueOverlay } from "@/ui/overlay/DialogueOverlay";
-import type { TutorialPort } from "@/tutorial/tutorialPort";
+import type {
+	TutorialPort,
+	TutorialCombatGuide,
+} from "@/tutorial/tutorialPort";
 import type { DialogueLine } from "@/tutorial/dialogue";
 
 /** A chest placed on the map, tying its visual entity to its plan and position. */
@@ -1659,49 +1668,25 @@ export class MapScene implements Scene, TutorialPort {
 		monster: MonsterEntity,
 		target: PilotedMercenary,
 	): Promise<void> {
-		const monsterAsState = RH.monsterAsMercenaryState(monster.state);
+		const attackerDescriptor = describeMonster(monster);
+		const defenderDescriptor = describeHunter(target);
 
-		const tierLabel = `${monster.state.tier[0].toUpperCase()}${monster.state.tier.slice(1)} Monster`;
+		await this.battleHost.run(
+			buildBattleRequest(attackerDescriptor, defenderDescriptor, {
+				isRangedInitiated: false,
+				onComplete: async (result) => {
+					monster.state.currentHp = attackerDescriptor.state.currentHp;
 
-		await this.battleHost.run({
-			attackerState: monsterAsState,
-			defenderState: target.state,
+					if (result.attackerMonsterDied) {
+						this.removeMonster(monster);
+					}
 
-			attackerColor: 0x8b0000,
-			attackerLabel: tierLabel,
-
-			defenderColor:
-				target.pilot === "local"
-					? 0x4a9eff
-					: RH.ARCHETYPE_COLORS[target.archetype!],
-
-			defenderLabel: target.pilot === "local" ? "You" : target.state.name,
-
-			attackerArchetype: "balanced",
-			defenderArchetype: target.archetype ?? "balanced",
-
-			localHumanRole: target.pilot === "local" ? "defender" : "none",
-
-			attackerMapCoord: monster.state.coord,
-			defenderMapCoord: target.state.coord,
-
-			isRangedInitiated: false,
-
-			isAttackerMonster: true,
-			isDefenderMonster: false,
-
-			onComplete: async (result) => {
-				monster.state.currentHp = monsterAsState.currentHp;
-
-				if (result.attackerMonsterDied) {
-					this.removeMonster(monster);
-				}
-
-				if (result.defenderNeedsTeleport) {
-					this.teleportEntity(target.state, target.mercenary);
-				}
-			},
-		});
+					if (result.defenderNeedsTeleport) {
+						this.teleportEntity(target.state, target.mercenary);
+					}
+				},
+			}),
+		);
 	}
 
 	private async aiInitiateCombat(
@@ -1710,32 +1695,17 @@ export class MapScene implements Scene, TutorialPort {
 	): Promise<void> {
 		this.activeCombatUnit = defender;
 
-		const result = await this.battleHost.run({
-			attackerState: attacker.state,
-			defenderState: defender.state,
+		const attackerDescriptor = describeHunter(attacker);
+		const defenderDescriptor = describeHunter(defender);
 
-			attackerColor: RH.ARCHETYPE_COLORS[attacker.archetype!],
-			attackerLabel: attacker.state.name,
-
-			defenderColor: 0x4a9eff,
-			defenderLabel: "You",
-
-			attackerArchetype: attacker.archetype!,
-			defenderArchetype: "balanced",
-
-			localHumanRole: "defender",
-
-			attackerMapCoord: attacker.state.coord,
-			defenderMapCoord: defender.state.coord,
-
-			isRangedInitiated: !RH.isAdjacent(
-				attacker.state.coord,
-				defender.state.coord,
-			),
-
-			isAttackerMonster: false,
-			isDefenderMonster: false,
-		});
+		const result = await this.battleHost.run(
+			buildBattleRequest(attackerDescriptor, defenderDescriptor, {
+				isRangedInitiated: !RH.isAdjacent(
+					attacker.state.coord,
+					defender.state.coord,
+				),
+			}),
+		);
 
 		if (result.attackerNeedsTeleport) {
 			this.teleportEntity(attacker.state, attacker.mercenary);
@@ -1750,32 +1720,17 @@ export class MapScene implements Scene, TutorialPort {
 		attacker: PilotedMercenary,
 		defender: PilotedMercenary,
 	): Promise<void> {
-		const result = await this.battleHost.run({
-			attackerState: attacker.state,
-			defenderState: defender.state,
+		const attackerDescriptor = describeHunter(attacker);
+		const defenderDescriptor = describeHunter(defender);
 
-			attackerColor: RH.ARCHETYPE_COLORS[attacker.archetype!],
-			attackerLabel: attacker.state.name,
-
-			defenderColor: RH.ARCHETYPE_COLORS[defender.archetype!],
-			defenderLabel: defender.state.name,
-
-			attackerArchetype: attacker.archetype!,
-			defenderArchetype: defender.archetype!,
-
-			localHumanRole: "none",
-
-			attackerMapCoord: attacker.state.coord,
-			defenderMapCoord: defender.state.coord,
-
-			isRangedInitiated: !RH.isAdjacent(
-				attacker.state.coord,
-				defender.state.coord,
-			),
-
-			isAttackerMonster: false,
-			isDefenderMonster: false,
-		});
+		const result = await this.battleHost.run(
+			buildBattleRequest(attackerDescriptor, defenderDescriptor, {
+				isRangedInitiated: !RH.isAdjacent(
+					attacker.state.coord,
+					defender.state.coord,
+				),
+			}),
+		);
 
 		if (result.attackerNeedsTeleport) {
 			this.teleportEntity(attacker.state, attacker.mercenary);
@@ -2133,33 +2088,18 @@ export class MapScene implements Scene, TutorialPort {
 		this.exitTargetingMode();
 		this.activeCombatUnit = unit;
 
-		void this.battleHost.run({
-			attackerState: local,
-			defenderState: unit.state,
-
-			attackerColor: 0x4a9eff,
-			attackerLabel: "You",
-
-			defenderColor: RH.ARCHETYPE_COLORS[unit.archetype!],
-			defenderLabel: unit.state.name,
-
-			attackerArchetype: "balanced",
-			defenderArchetype: unit.archetype!,
-
-			localHumanRole: "attacker",
-
-			attackerMapCoord: local.coord,
-			defenderMapCoord: unit.state.coord,
-
-			isRangedInitiated: !RH.isAdjacent(local.coord, unit.state.coord),
-
-			isAttackerMonster: false,
-			isDefenderMonster: false,
-
-			onComplete: (result) => {
-				this.onBattleComplete(result);
-			},
-		});
+		void this.battleHost.run(
+			buildBattleRequest(
+				describeLocalPlayer(this.localUnit),
+				describeHunter(unit),
+				{
+					isRangedInitiated: !RH.isAdjacent(local.coord, unit.state.coord),
+					onComplete: (result) => {
+						this.onBattleComplete(result);
+					},
+				},
+			),
+		);
 	}
 
 	private tryStartCombatVsMonster(monster: MonsterEntity): void {
@@ -2175,57 +2115,43 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.exitTargetingMode();
 
-		const monsterAsState = RH.monsterAsMercenaryState(monster.state);
-
-		const tierLabel = `${monster.state.tier[0].toUpperCase()}${monster.state.tier.slice(1)} Monster`;
+		const defenderDescriptor = describeMonster(monster);
 
 		this.tutorialConfig?.onTutorialEvent({
 			type: "combatStarted",
 			opponentType: "monster",
 		});
 
-		void this.battleHost.run({
-			attackerState: local,
-			defenderState: monsterAsState,
+		void this.battleHost.run(
+			buildBattleRequest(
+				describeLocalPlayer(this.localUnit),
+				defenderDescriptor,
+				{
+					isRangedInitiated: !RH.isAdjacent(local.coord, monster.state.coord),
+					onComplete: (result) => {
+						monster.state.currentHp = defenderDescriptor.state.currentHp;
 
-			attackerColor: 0x4a9eff,
-			attackerLabel: "You",
+						if (result.defenderMonsterDied) {
+							this.removeMonster(monster);
+						}
 
-			defenderColor: 0x8b0000,
-			defenderLabel: tierLabel,
+						if (result.attackerNeedsTeleport) {
+							this.teleportEntity(
+								this.localUnit.state,
+								this.localUnit.mercenary,
+							);
+						}
 
-			attackerArchetype: "balanced",
-			defenderArchetype: "balanced",
+						this.tutorialConfig?.onTutorialEvent({
+							type: "combatEnded",
+							won: !!result.defenderMonsterDied,
+						});
 
-			localHumanRole: "attacker",
-
-			attackerMapCoord: local.coord,
-			defenderMapCoord: monster.state.coord,
-
-			isRangedInitiated: !RH.isAdjacent(local.coord, monster.state.coord),
-
-			isAttackerMonster: false,
-			isDefenderMonster: true,
-
-			onComplete: (result) => {
-				monster.state.currentHp = monsterAsState.currentHp;
-
-				if (result.defenderMonsterDied) {
-					this.removeMonster(monster);
-				}
-
-				if (result.attackerNeedsTeleport) {
-					this.teleportEntity(this.localUnit.state, this.localUnit.mercenary);
-				}
-
-				this.tutorialConfig?.onTutorialEvent({
-					type: "combatEnded",
-					won: !!result.defenderMonsterDied,
-				});
-
-				this.syncUI();
-			},
-		});
+						this.syncUI();
+					},
+				},
+			),
+		);
 	}
 
 	/**
@@ -2736,19 +2662,14 @@ export class MapScene implements Scene, TutorialPort {
 	triggerTutorialMonsterAttack(
 		maxRounds?: number,
 		availableActions?: RH.CombatAction[],
-		guide?: {
-			requiredAction: RH.CombatAction;
-			grayOthers?: boolean;
-			onWrongAction?: () => void | Promise<void>;
-			onReady?: () => void | Promise<void>;
-		},
+		guide?: TutorialCombatGuide,
 	): Promise<void> {
 		const monster = this.tutorialMonster;
 		if (!monster) return Promise.resolve();
 
 		const target = this.localUnit;
-		const monsterAsState = RH.monsterAsMercenaryState(monster.state);
-		const tierLabel = `${monster.state.tier[0].toUpperCase()}${monster.state.tier.slice(1)} Monster`;
+		const attackerDescriptor = describeMonster(monster);
+		const defenderDescriptor = describeLocalPlayer(target);
 
 		this.tutorialConfig?.onTutorialEvent({
 			type: "combatStarted",
@@ -2756,49 +2677,21 @@ export class MapScene implements Scene, TutorialPort {
 		});
 
 		return this.battleHost
-			.run({
-				attackerState: monsterAsState,
-				defenderState: target.state,
-
-				attackerColor: 0x8b0000,
-				attackerLabel: tierLabel,
-
-				defenderColor: 0x4a9eff,
-				defenderLabel: "You",
-
-				attackerArchetype: "balanced",
-				defenderArchetype: "balanced",
-
-				localHumanRole: "defender",
-
-				attackerMapCoord: monster.state.coord,
-				defenderMapCoord: target.state.coord,
-
-				isRangedInitiated: false,
-				isAttackerMonster: true,
-				isDefenderMonster: false,
-
-				maxRounds: maxRounds ?? 3,
-
-				tutorial: guide
-					? {
-							availableActions,
-							actionGate: (action) => {
-								if (action !== guide.requiredAction) {
-									void Promise.resolve(guide.onWrongAction?.());
-									return false;
-								}
-
-								return true;
-							},
-							onReady: guide.onReady,
-						}
-					: {
-							availableActions,
-						},
-			})
+			.run(
+				buildBattleRequest(attackerDescriptor, defenderDescriptor, {
+					isRangedInitiated: false,
+					maxRounds,
+					tutorial: {
+						availableActions,
+						requiredAction: guide?.requiredAction,
+						grayOthers: guide?.grayOthers,
+						onWrongAction: guide?.onWrongAction,
+						onReady: guide?.onReady,
+					},
+				}),
+			)
 			.then(async (result) => {
-				monster.state.currentHp = monsterAsState.currentHp;
+				monster.state.currentHp = attackerDescriptor.state.currentHp;
 
 				if (result.attackerMonsterDied) {
 					this.removeMonster(monster);
