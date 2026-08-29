@@ -10,7 +10,8 @@ import {
 	TILE_HEIGHT,
 } from "@/math/isoGridMath";
 import { computeUiScale, uiPx } from "@/math/uiScale";
-import { Mercenary, interpolatePolyline } from "@/entities/Mercenary";
+import { Mercenary } from "@/entities/Mercenary";
+
 import * as RH from "@relic-hunter/shared";
 
 import { PauseOverlay } from "@/ui/overlay/PauseOverlay";
@@ -38,6 +39,8 @@ import type { HunterSummaryEntry } from "@/ui/HunterSummaryPanel";
 import { MonsterSystem } from "@/systems/MonsterSystem";
 import { ChestSystem } from "@/systems/ChestSystem";
 import { ExitRelicSystem } from "@/systems/ExitRelicSystem";
+import { ZoneQuery } from "@/systems/ZoneQuery";
+import { TutorialMarkers } from "@/systems/TutorialMarkers";
 import { TrapSystem } from "@/systems/TrapSystem";
 import type { MonsterEntity } from "@/types/entities";
 import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
@@ -140,20 +143,10 @@ export class MapScene implements Scene, TutorialPort {
 	private dialogueOverlay: DialogueOverlay | null = null;
 	/** Set by handleCardConfirmed right before a move starts */
 	private pendingMoveUsedCard = false;
-	private tutorialTargetMarker = new Container();
-	private tutorialTargetElapsedMs = 0;
-	/** Whether the target marker is logically "on" right now */
-	private tutorialTargetActive = false;
-	/** Static actor tokens keyed by label */
-	private tutorialActorTokens: Map<string, Container> = new Map();
-	/** Each static actor's current grid coord,  */
-	private tutorialActorCoords: Map<string, RH.GridCoord> = new Map();
 	/** The one controlled, killable monster a combat tutorial spawns */
 	private tutorialMonster: MonsterEntity | null = null;
 
-	private uiPointerMarker = new Container();
-	private uiPointerElapsedMs = 0;
-	private activeUiPointerTarget: TutorialUiPointerTarget | null = null;
+	private tutorialMarkers = new TutorialMarkers();
 
 	private battleHost: BattleHost;
 
@@ -254,7 +247,12 @@ export class MapScene implements Scene, TutorialPort {
 			this.spawnEnemyHunters();
 		}
 
-		this.spawnStaticActors();
+		if (this.tutorialConfig?.script.staticActors) {
+			this.tutorialMarkers.spawnStaticActors(
+				this.tutorialConfig.script.staticActors,
+				this.mercenaryContainer,
+			);
+		}
 		this.battleHost = new BattleHost(this.game);
 		// Item popup rides along as a child of the mercenary's own view,
 		// so it moves with the token automatically — no manual per-frame
@@ -273,8 +271,7 @@ export class MapScene implements Scene, TutorialPort {
 			this.spawnChests();
 		}
 
-		this.tutorialTargetMarker.visible = false;
-		this.mercenaryContainer.addChild(this.tutorialTargetMarker);
+		this.mercenaryContainer.addChild(this.tutorialMarkers.targetMarkerView);
 
 		this.playZone = new PlayZone();
 		this.view.addChild(this.playZone.view);
@@ -348,7 +345,7 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.hud.registerScrollSurfaces(this.gestureRouter);
 
-		this.view.addChild(this.uiPointerMarker);
+		this.view.addChild(this.tutorialMarkers.uiPointerView);
 	}
 
 	/** Render the map, center the camera, and wire up input. */
@@ -476,63 +473,9 @@ export class MapScene implements Scene, TutorialPort {
 			}
 		}
 
-		if (this.tutorialTargetMarker.visible) {
-			this.tutorialTargetElapsedMs += (deltaTime / 60) * 1000;
-			const t = this.tutorialTargetElapsedMs;
-			this.tutorialTargetMarker.alpha =
-				0.6 + Math.abs(Math.sin(t * 0.004)) * 0.4;
-			const arrow = this.tutorialTargetMarker.children[1];
-			if (arrow) arrow.y = -50 - Math.abs(Math.sin(t * 0.005)) * 8;
-		}
-
-		if (this.activeUiPointerTarget) {
-			const pos = this.resolveUiPointerPosition(this.activeUiPointerTarget);
-			if (pos) {
-				this.uiPointerElapsedMs += (deltaTime / 60) * 1000;
-				const t = this.uiPointerElapsedMs;
-				const bob = Math.abs(Math.sin(t * 0.005)) * 8;
-				// actionButton (the only left/right consumer) is 130px
-				// wide — 65px half-width — so a flat 40px offset landed
-				// the arrow inside the button's own bounds. cardDrawStack
-				// presents at 1.35x scale — genuinely taller than a normal
-				// hand card, skipButton, or PlayZone — so 40px landed the
-				// arrow inside that card specifically too.
-				const isHorizontal =
-					this.activeUiPointerTarget.side === "left" ||
-					this.activeUiPointerTarget.side === "right";
-				const isTallTarget =
-					this.activeUiPointerTarget.kind === "cardDrawStack";
-				const offset = (isHorizontal ? 85 : isTallTarget ? 90 : 40) + bob;
-
-				this.uiPointerMarker.visible = true;
-				this.uiPointerMarker.alpha = 0.6 + Math.abs(Math.sin(t * 0.004)) * 0.4;
-
-				switch (this.activeUiPointerTarget.side) {
-					case "up":
-						this.uiPointerMarker.x = pos.x;
-						this.uiPointerMarker.y = pos.y - offset;
-						break;
-					case "down":
-						this.uiPointerMarker.x = pos.x;
-						this.uiPointerMarker.y = pos.y + offset;
-						break;
-					case "left":
-						this.uiPointerMarker.x = pos.x - offset;
-						this.uiPointerMarker.y = pos.y;
-						break;
-					case "right":
-						this.uiPointerMarker.x = pos.x + offset;
-						this.uiPointerMarker.y = pos.y;
-						break;
-				}
-			} else {
-				// Target genuinely doesn't exist right now (e.g. pointing
-				// at a submenu row while the submenu is closed, or the
-				// card-draw stack once it's already been collected) —
-				// hide rather than leave a stale arrow floating in place.
-				this.uiPointerMarker.visible = false;
-			}
-		}
+		this.tutorialMarkers.update(deltaTime, (target) =>
+			this.resolveUiPointerPosition(target),
+		);
 
 		this.fpsAccumulator += deltaTime;
 		if (this.fpsAccumulator >= 30) {
@@ -928,30 +871,29 @@ export class MapScene implements Scene, TutorialPort {
 	// ---------- Zone of Control ----------
 
 	private buildZoneOwners(excludeId: string): RH.ZoneOwner[] {
-		return this.units
-			.filter(
-				(u) =>
-					u.state.id !== excludeId &&
-					u.state.currentHp > 0 &&
-					u.state.special === "overwatch",
-			)
-			.map((u) => ({ id: u.state.id, coord: u.state.coord, zocRadius: 2 }));
+		return ZoneQuery.buildZoneOwners(
+			this.units.map((u) => ({
+				id: u.state.id,
+				coord: u.state.coord,
+				stats: u.state.stats,
+				currentHp: u.state.currentHp,
+				special: u.state.special,
+			})),
+			excludeId,
+		);
 	}
 
 	private buildThreatZoneOwners(excludeId: string): RH.ThreatOwner[] {
-		return this.units
-			.filter(
-				(u) =>
-					u.state.id !== excludeId &&
-					u.state.currentHp > 0 &&
-					u.state.special === "overwatch",
-			)
-			.map((u) => ({
+		return ZoneQuery.buildThreatZoneOwners(
+			this.units.map((u) => ({
 				id: u.state.id,
 				coord: u.state.coord,
-				zocRadius: 2,
 				stats: u.state.stats,
-			}));
+				currentHp: u.state.currentHp,
+				special: u.state.special,
+			})),
+			excludeId,
+		);
 	}
 
 	/**
@@ -1019,41 +961,6 @@ export class MapScene implements Scene, TutorialPort {
 	// ---------- Chests & Items ----------
 
 	/** Place chests from the session plan onto walkable tiles. No-ops if plan is missing. */
-	/**
-	 * Purely visual, non-interactive tokens from the tutorial script's
-	 * staticActors list — a narrator's on-map presence, a decorative
-	 * "enemy" prop staged for tension. No PilotedMercenary, no
-	 * TurnManager, no combat stats.
-	 */
-	private spawnStaticActors(): void {
-		const actors = this.tutorialConfig?.script.staticActors;
-		if (!actors) return;
-
-		for (const actor of actors) {
-			const pos = gridToScreen(actor.coord);
-			const token = new Container();
-			token.x = pos.x;
-			token.y = pos.y;
-
-			const body = new Graphics();
-			body.circle(0, -14, 16);
-			body.fill(actor.color);
-			body.stroke({ width: 2, color: 0x000000, alpha: 0.5 });
-			token.addChild(body);
-
-			const label = new Text({
-				text: actor.label,
-				style: { fill: 0xffffff, fontSize: 12, fontWeight: "bold" },
-			});
-			label.anchor.set(0.5, 1);
-			label.y = -38;
-			token.addChild(label);
-
-			this.mercenaryContainer.addChild(token);
-			this.tutorialActorTokens.set(actor.label, token);
-			this.tutorialActorCoords.set(actor.label, actor.coord);
-		}
-	}
 
 	private spawnChests(): void {
 		const sessionPlacements = this.game.session.chestPlacements;
@@ -2525,8 +2432,7 @@ export class MapScene implements Scene, TutorialPort {
 			this.playZone.show();
 		}
 
-		this.uiPointerMarker.visible = isVisible && !!this.activeUiPointerTarget;
-		this.tutorialTargetMarker.visible = isVisible && this.tutorialTargetActive;
+		this.tutorialMarkers.setVisible(isVisible);
 	}
 	getLocalUnitCoord(): RH.GridCoord {
 		return this.localUnit.state.coord;
@@ -2552,10 +2458,7 @@ export class MapScene implements Scene, TutorialPort {
 
 	/**
 	 * Animates a static actor's token from its current screen position
-	 * to destination — a simple, self-contained tween (not
-	 * Mercenary.moveAlongPath's full animation system, which handles
-	 * zone-of-control strikes mid-path that don't apply to a purely
-	 * decorative token). Purely visual — no game state, no coord
+	 * to destination. Purely visual — no game state, no coord
 	 * tracking, since static actors were never part of turn logic to
 	 * begin with.
 	 */
@@ -2564,43 +2467,12 @@ export class MapScene implements Scene, TutorialPort {
 		destination: RH.GridCoord,
 		durationMs = 900,
 	): Promise<void> {
-		const token = this.tutorialActorTokens.get(label);
-		const currentCoord = this.tutorialActorCoords.get(label);
-		if (!token || !currentCoord) return Promise.resolve();
-
-		const range = RH.computeMovementRange(
+		return this.tutorialMarkers.moveStaticActor(
+			label,
+			destination,
 			this.grid,
-			currentCoord,
-			this.grid.width + this.grid.height,
-			new Set(),
+			durationMs,
 		);
-		const tilePath = RH.getPathTo(range, destination) ?? [destination];
-		this.tutorialActorCoords.set(label, destination);
-
-		// The whole path as one continuous polyline, not a queue of
-		// separate per-tile tweens — interpolatePolyline (shared with
-		// Mercenary's own movement) finds the correct position for a
-		// SINGLE eased t across the entire route, so there's exactly one
-		// ease-in at the start and one ease-out at the end, not a
-		// stop-start-stop-start jitter at every intermediate tile.
-		const points = [gridToScreen(currentCoord), ...tilePath.map(gridToScreen)];
-
-		return new Promise((resolve) => {
-			const start = performance.now();
-			const frame = (): void => {
-				const t = Math.min(1, (performance.now() - start) / durationMs);
-				const eased = 1 - Math.pow(1 - t, 3);
-				const pos = interpolatePolyline(points, eased);
-				token.x = pos.x;
-				token.y = pos.y;
-				if (t < 1) {
-					requestAnimationFrame(frame);
-				} else {
-					resolve();
-				}
-			};
-			requestAnimationFrame(frame);
-		});
 	}
 
 	/**
@@ -2714,40 +2586,11 @@ export class MapScene implements Scene, TutorialPort {
 	 * only, never enforced — the player can still move anywhere.
 	 */
 	showTutorialTarget(coord: RH.GridCoord): void {
-		const pos = gridToScreen(coord);
-		this.tutorialTargetMarker.removeChildren();
-		this.tutorialTargetMarker.x = pos.x;
-		this.tutorialTargetMarker.y = pos.y;
-
-		const glow = new Graphics();
-		glow.poly([
-			0,
-			-TILE_HEIGHT / 2,
-			TILE_WIDTH / 2,
-			0,
-			0,
-			TILE_HEIGHT / 2,
-			-TILE_WIDTH / 2,
-			0,
-		]);
-		glow.fill({ color: 0xffd700, alpha: 0.45 });
-		glow.stroke({ width: 2, color: 0xffd700, alpha: 0.9 });
-		this.tutorialTargetMarker.addChild(glow);
-
-		const arrow = new Graphics();
-		arrow.poly([0, 0, 10, -16, -10, -16]);
-		arrow.fill(0xffd700);
-		arrow.y = -50;
-		this.tutorialTargetMarker.addChild(arrow);
-
-		this.tutorialTargetElapsedMs = 0;
-		this.tutorialTargetMarker.visible = true;
-		this.tutorialTargetActive = true;
+		this.tutorialMarkers.showTarget(coord);
 	}
 
 	hideTutorialTarget(): void {
-		this.tutorialTargetMarker.visible = false;
-		this.tutorialTargetActive = false;
+		this.tutorialMarkers.hideTarget();
 	}
 
 	/**
@@ -2763,35 +2606,11 @@ export class MapScene implements Scene, TutorialPort {
 	 * card or menu row can genuinely move.
 	 */
 	showUiPointer(target: TutorialUiPointerTarget): void {
-		this.activeUiPointerTarget = target;
-		this.uiPointerElapsedMs = 0;
-
-		this.uiPointerMarker.removeChildren();
-		const arrow = new Graphics();
-		arrow.poly([0, 0, 10, -16, -10, -16]);
-		arrow.fill(0xffd700);
-
-		switch (target.side) {
-			case "up":
-				arrow.rotation = 0;
-				break;
-			case "down":
-				arrow.rotation = Math.PI;
-				break;
-			case "left":
-				arrow.rotation = -Math.PI / 2;
-				break;
-			case "right":
-				arrow.rotation = Math.PI / 2;
-				break;
-		}
-
-		this.uiPointerMarker.addChild(arrow);
+		this.tutorialMarkers.showUiPointer(target);
 	}
 
 	hideUiPointer(): void {
-		this.activeUiPointerTarget = null;
-		this.uiPointerMarker.visible = false;
+		this.tutorialMarkers.hideUiPointer();
 	}
 
 	/** Dispatches to whichever component actually owns the requested target's live screen position. Returns null if that element doesn't currently exist rather than throwing. */
@@ -3044,7 +2863,7 @@ export class MapScene implements Scene, TutorialPort {
 					.filter((u) => u.state.currentHp > 0)
 					.map((u) => u.state.coord),
 				...this.livingMonsterCoords(),
-				...Array.from(this.tutorialActorCoords.values()),
+				...this.tutorialMarkers.actorCoordsList,
 			],
 			onMoveCommitted: (
 				target: RH.GridCoord,
@@ -3073,6 +2892,7 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.mercenaryContainer.removeChildren();
 		this.units = [];
+		this.monsterSystem = new MonsterSystem(this.mercenaryContainer);
 		this.spawnLocalUnit();
 		this.localUnit.mercenary.view.addChild(this.itemPopup);
 		this.itemPopup.visible = false;
