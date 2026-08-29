@@ -1,17 +1,18 @@
 import type { GridCoord } from "../world/grid";
-import type { EntityCore } from "./entity";
+import type { EntityCore, HasStatus } from "./entity";
 import type { MercenaryStats, MercenaryState } from "./mercenary";
 
 export type MonsterTier = "light" | "medium" | "heavy" | "boss";
 
 /**
- * Non-hunter map entity — core only, plus tier. Has no hand,
+ * Non-hunter map entity — core + tier + status (stun). Has no hand,
  * no items, no character class — not faked, not present at all.
  */
-export type MonsterState = EntityCore & {
-	tier: MonsterTier;
-	frenzied: boolean;
-};
+export type MonsterState = EntityCore &
+	HasStatus & {
+		tier: MonsterTier;
+		frenzied: boolean;
+	};
 
 /** First-pass tier stats, each meaningfully stronger than the last. NOT TUNED */
 export const MONSTER_TIER_STATS: Record<MonsterTier, MercenaryStats> = {
@@ -43,6 +44,7 @@ export function createMonster(
 		stats: MONSTER_TIER_STATS[tier],
 		currentHp: MONSTER_TIER_STATS[tier].maxHp,
 		frenzied: false,
+		stunnedTurnsRemaining: 0,
 	};
 }
 
@@ -88,7 +90,7 @@ export function monsterAsMercenaryState(monster: MonsterState): MercenaryState {
 			tacticalScore: 0,
 			objectiveTurnsHeld: 0,
 		},
-		stunnedTurnsRemaining: 0,
+		stunnedTurnsRemaining: monster.stunnedTurnsRemaining,
 		temporaryStatBonus: { attack: 0, defense: 0, movement: 0 },
 		special: null,
 		statusEffects: [],
