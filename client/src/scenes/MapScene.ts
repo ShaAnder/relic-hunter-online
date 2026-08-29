@@ -10,8 +10,7 @@ import {
 	TILE_HEIGHT,
 } from "@/math/isoGridMath";
 import { computeUiScale, uiPx } from "@/math/uiScale";
-import { Mercenary, interpolatePolyline } from "@/entities/Mercenary";
-import { Chest } from "@/entities/Chest";
+import { Mercenary } from "@/entities/Mercenary";
 
 import * as RH from "@relic-hunter/shared";
 
@@ -38,6 +37,10 @@ import type { PilotedMercenary, MovableToken } from "@/types/entities";
 import { logMatchEvent } from "@/core/game/GameSession";
 import type { HunterSummaryEntry } from "@/ui/HunterSummaryPanel";
 import { MonsterSystem } from "@/systems/MonsterSystem";
+import { ChestSystem } from "@/systems/ChestSystem";
+import { ExitRelicSystem } from "@/systems/ExitRelicSystem";
+import { ZoneQuery } from "@/systems/ZoneQuery";
+import { TutorialMarkers } from "@/systems/TutorialMarkers";
 import { TrapSystem } from "@/systems/TrapSystem";
 import type { MonsterEntity } from "@/types/entities";
 import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
@@ -51,13 +54,6 @@ import type {
 	TutorialCombatGuide,
 } from "@/tutorial/tutorialPort";
 import type { DialogueLine } from "@/tutorial/dialogue";
-
-/** A chest placed on the map, tying its visual entity to its plan and position. */
-interface PlacedChest {
-	coord: RH.GridCoord;
-	plan: RH.ChestPlan;
-	entity: Chest;
-}
 
 /**
  * Tactical map scene — grid, mercenary, AP turns, cards, chests, win condition.
@@ -73,7 +69,6 @@ export class MapScene implements Scene, TutorialPort {
 	private grid: RH.Grid;
 	private boardContainer = new Container();
 	private tilesContainer = new Container();
-	private chestContainer = new Container();
 	private mercenaryContainer = new Container();
 
 	// Systems
@@ -83,9 +78,9 @@ export class MapScene implements Scene, TutorialPort {
 
 	// Entities — one array, pilot type is the only thing distinguishing them
 	private units: PilotedMercenary[] = [];
-	private placedChests: PlacedChest[] = [];
 
 	private monsterSystem!: MonsterSystem;
+	private chestSystem = new ChestSystem();
 
 	// True during the Exit card's two-flight teleport sequence — blocks
 	// End Turn / regenerate from interrupting mid-sequence, same role
@@ -148,20 +143,10 @@ export class MapScene implements Scene, TutorialPort {
 	private dialogueOverlay: DialogueOverlay | null = null;
 	/** Set by handleCardConfirmed right before a move starts */
 	private pendingMoveUsedCard = false;
-	private tutorialTargetMarker = new Container();
-	private tutorialTargetElapsedMs = 0;
-	/** Whether the target marker is logically "on" right now */
-	private tutorialTargetActive = false;
-	/** Static actor tokens keyed by label */
-	private tutorialActorTokens: Map<string, Container> = new Map();
-	/** Each static actor's current grid coord,  */
-	private tutorialActorCoords: Map<string, RH.GridCoord> = new Map();
 	/** The one controlled, killable monster a combat tutorial spawns */
 	private tutorialMonster: MonsterEntity | null = null;
 
-	private uiPointerMarker = new Container();
-	private uiPointerElapsedMs = 0;
-	private activeUiPointerTarget: TutorialUiPointerTarget | null = null;
+	private tutorialMarkers = new TutorialMarkers();
 
 	private battleHost: BattleHost;
 
@@ -228,7 +213,7 @@ export class MapScene implements Scene, TutorialPort {
 		this.grid = this.buildMap();
 
 		this.boardContainer.addChild(this.tilesContainer);
-		this.boardContainer.addChild(this.chestContainer);
+		this.boardContainer.addChild(this.chestSystem.container);
 		this.boardContainer.addChild(this.mercenaryContainer);
 		this.view.addChild(this.boardContainer);
 
@@ -262,7 +247,12 @@ export class MapScene implements Scene, TutorialPort {
 			this.spawnEnemyHunters();
 		}
 
-		this.spawnStaticActors();
+		if (this.tutorialConfig?.script.staticActors) {
+			this.tutorialMarkers.spawnStaticActors(
+				this.tutorialConfig.script.staticActors,
+				this.mercenaryContainer,
+			);
+		}
 		this.battleHost = new BattleHost(this.game);
 		// Item popup rides along as a child of the mercenary's own view,
 		// so it moves with the token automatically — no manual per-frame
@@ -281,8 +271,7 @@ export class MapScene implements Scene, TutorialPort {
 			this.spawnChests();
 		}
 
-		this.tutorialTargetMarker.visible = false;
-		this.mercenaryContainer.addChild(this.tutorialTargetMarker);
+		this.mercenaryContainer.addChild(this.tutorialMarkers.targetMarkerView);
 
 		this.playZone = new PlayZone();
 		this.view.addChild(this.playZone.view);
@@ -356,7 +345,7 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.hud.registerScrollSurfaces(this.gestureRouter);
 
-		this.view.addChild(this.uiPointerMarker);
+		this.view.addChild(this.tutorialMarkers.uiPointerView);
 	}
 
 	/** Render the map, center the camera, and wire up input. */
@@ -484,63 +473,9 @@ export class MapScene implements Scene, TutorialPort {
 			}
 		}
 
-		if (this.tutorialTargetMarker.visible) {
-			this.tutorialTargetElapsedMs += (deltaTime / 60) * 1000;
-			const t = this.tutorialTargetElapsedMs;
-			this.tutorialTargetMarker.alpha =
-				0.6 + Math.abs(Math.sin(t * 0.004)) * 0.4;
-			const arrow = this.tutorialTargetMarker.children[1];
-			if (arrow) arrow.y = -50 - Math.abs(Math.sin(t * 0.005)) * 8;
-		}
-
-		if (this.activeUiPointerTarget) {
-			const pos = this.resolveUiPointerPosition(this.activeUiPointerTarget);
-			if (pos) {
-				this.uiPointerElapsedMs += (deltaTime / 60) * 1000;
-				const t = this.uiPointerElapsedMs;
-				const bob = Math.abs(Math.sin(t * 0.005)) * 8;
-				// actionButton (the only left/right consumer) is 130px
-				// wide — 65px half-width — so a flat 40px offset landed
-				// the arrow inside the button's own bounds. cardDrawStack
-				// presents at 1.35x scale — genuinely taller than a normal
-				// hand card, skipButton, or PlayZone — so 40px landed the
-				// arrow inside that card specifically too.
-				const isHorizontal =
-					this.activeUiPointerTarget.side === "left" ||
-					this.activeUiPointerTarget.side === "right";
-				const isTallTarget =
-					this.activeUiPointerTarget.kind === "cardDrawStack";
-				const offset = (isHorizontal ? 85 : isTallTarget ? 90 : 40) + bob;
-
-				this.uiPointerMarker.visible = true;
-				this.uiPointerMarker.alpha = 0.6 + Math.abs(Math.sin(t * 0.004)) * 0.4;
-
-				switch (this.activeUiPointerTarget.side) {
-					case "up":
-						this.uiPointerMarker.x = pos.x;
-						this.uiPointerMarker.y = pos.y - offset;
-						break;
-					case "down":
-						this.uiPointerMarker.x = pos.x;
-						this.uiPointerMarker.y = pos.y + offset;
-						break;
-					case "left":
-						this.uiPointerMarker.x = pos.x - offset;
-						this.uiPointerMarker.y = pos.y;
-						break;
-					case "right":
-						this.uiPointerMarker.x = pos.x + offset;
-						this.uiPointerMarker.y = pos.y;
-						break;
-				}
-			} else {
-				// Target genuinely doesn't exist right now (e.g. pointing
-				// at a submenu row while the submenu is closed, or the
-				// card-draw stack once it's already been collected) —
-				// hide rather than leave a stale arrow floating in place.
-				this.uiPointerMarker.visible = false;
-			}
-		}
+		this.tutorialMarkers.update(deltaTime, (target) =>
+			this.resolveUiPointerPosition(target),
+		);
 
 		this.fpsAccumulator += deltaTime;
 		if (this.fpsAccumulator >= 30) {
@@ -936,30 +871,29 @@ export class MapScene implements Scene, TutorialPort {
 	// ---------- Zone of Control ----------
 
 	private buildZoneOwners(excludeId: string): RH.ZoneOwner[] {
-		return this.units
-			.filter(
-				(u) =>
-					u.state.id !== excludeId &&
-					u.state.currentHp > 0 &&
-					u.state.special === "overwatch",
-			)
-			.map((u) => ({ id: u.state.id, coord: u.state.coord, zocRadius: 2 }));
+		return ZoneQuery.buildZoneOwners(
+			this.units.map((u) => ({
+				id: u.state.id,
+				coord: u.state.coord,
+				stats: u.state.stats,
+				currentHp: u.state.currentHp,
+				special: u.state.special,
+			})),
+			excludeId,
+		);
 	}
 
 	private buildThreatZoneOwners(excludeId: string): RH.ThreatOwner[] {
-		return this.units
-			.filter(
-				(u) =>
-					u.state.id !== excludeId &&
-					u.state.currentHp > 0 &&
-					u.state.special === "overwatch",
-			)
-			.map((u) => ({
+		return ZoneQuery.buildThreatZoneOwners(
+			this.units.map((u) => ({
 				id: u.state.id,
 				coord: u.state.coord,
-				zocRadius: 2,
 				stats: u.state.stats,
-			}));
+				currentHp: u.state.currentHp,
+				special: u.state.special,
+			})),
+			excludeId,
+		);
 	}
 
 	/**
@@ -1027,57 +961,11 @@ export class MapScene implements Scene, TutorialPort {
 	// ---------- Chests & Items ----------
 
 	/** Place chests from the session plan onto walkable tiles. No-ops if plan is missing. */
-	/**
-	 * Purely visual, non-interactive tokens from the tutorial script's
-	 * staticActors list — a narrator's on-map presence, a decorative
-	 * "enemy" prop staged for tension. No PilotedMercenary, no
-	 * TurnManager, no combat stats.
-	 */
-	private spawnStaticActors(): void {
-		const actors = this.tutorialConfig?.script.staticActors;
-		if (!actors) return;
-
-		for (const actor of actors) {
-			const pos = gridToScreen(actor.coord);
-			const token = new Container();
-			token.x = pos.x;
-			token.y = pos.y;
-
-			const body = new Graphics();
-			body.circle(0, -14, 16);
-			body.fill(actor.color);
-			body.stroke({ width: 2, color: 0x000000, alpha: 0.5 });
-			token.addChild(body);
-
-			const label = new Text({
-				text: actor.label,
-				style: { fill: 0xffffff, fontSize: 12, fontWeight: "bold" },
-			});
-			label.anchor.set(0.5, 1);
-			label.y = -38;
-			token.addChild(label);
-
-			this.mercenaryContainer.addChild(token);
-			this.tutorialActorTokens.set(actor.label, token);
-			this.tutorialActorCoords.set(actor.label, actor.coord);
-		}
-	}
 
 	private spawnChests(): void {
-		this.chestContainer.removeChildren();
-		this.placedChests = [];
-
 		const sessionPlacements = this.game.session.chestPlacements;
 		if (sessionPlacements && sessionPlacements.length > 0) {
-			for (const record of sessionPlacements) {
-				const entity = new Chest(record.coord);
-				this.chestContainer.addChild(entity.view);
-				this.placedChests.push({
-					coord: record.coord,
-					plan: record.plan,
-					entity,
-				});
-			}
+			this.chestSystem.spawnFromPlacements(sessionPlacements);
 			return;
 		}
 
@@ -1085,17 +973,9 @@ export class MapScene implements Scene, TutorialPort {
 		if (!plan) return;
 
 		// No exit at match start — only reserve the local spawn tile.
-		const used = new Set<string>();
-		used.add(RH.coordKey(this.localUnit.state.coord));
-
-		for (const chestPlan of plan.chests) {
-			const coord = RH.pickSpreadWalkableTile(this.grid, used);
-			if (!coord) break;
-			used.add(RH.coordKey(coord));
-			const entity = new Chest(coord);
-			this.chestContainer.addChild(entity.view);
-			this.placedChests.push({ coord, plan: chestPlan, entity });
-		}
+		const reserved = new Set<string>();
+		reserved.add(RH.coordKey(this.localUnit.state.coord));
+		this.chestSystem.spawnFromPlan(plan, this.grid, reserved);
 	}
 
 	private isPointOverUiSurface(screenX: number, screenY: number): boolean {
@@ -1104,38 +984,36 @@ export class MapScene implements Scene, TutorialPort {
 
 	/** Open the chest at coord if unopened, for whichever unit reached it. Stays closed if inventory full. */
 	private tryOpenChestAt(state: RH.MercenaryState, coord: RH.GridCoord): void {
-		const placed = this.placedChests.find(
-			(c) => !c.entity.isOpen && c.coord.x === coord.x && c.coord.y === coord.y,
-		);
-		if (!placed) return;
-
-		if (!state.items.some((i) => i === null)) {
-			if (state.id === this.localUnit.state.id) {
-				this.showFeedback("🎒 Inventory full — chest left unopened");
-			}
-			return;
-		}
-
-		placed.entity.open();
-		const emptyIndex = state.items.findIndex((i) => i === null);
-		state.items[emptyIndex] = placed.plan.item;
-
+		const outcome = this.chestSystem.tryOpen(coord, state.items);
 		const isLocal = state.id === this.localUnit.state.id;
-		if (placed.plan.isTarget) {
-			this.game.session.relicFound = true;
-			this.triggerFrenzy();
-			this.spawnExitFarFrom(coord);
-			this.mapRenderer.build(this.grid, 0);
-			this.showFeedback(
-				isLocal
-					? `🎯 Found the target: ${placed.plan.item.name}! The Exit has revealed itself.`
-					: "⚠️ An enemy hunter found the target item! The Exit has revealed itself.",
-			);
-		} else if (isLocal) {
-			this.showFeedback(`📦 Found: ${placed.plan.item.name}`);
-		}
 
-		if (isLocal) this.showItemPopup(placed.plan.item, placed.plan.isTarget);
+		switch (outcome.kind) {
+			case "noChest":
+				return;
+
+			case "inventoryFull":
+				if (isLocal) {
+					this.showFeedback("🎒 Inventory full — chest left unopened");
+				}
+				return;
+
+			case "opened":
+				if (outcome.isTarget) {
+					this.game.session.relicFound = true;
+					this.triggerFrenzy();
+					this.spawnExitFarFrom(coord);
+					this.mapRenderer.build(this.grid, 0);
+					this.showFeedback(
+						isLocal
+							? `🎯 Found the target: ${outcome.item.name}! The Exit has revealed itself.`
+							: "⚠️ An enemy hunter found the target item! The Exit has revealed itself.",
+					);
+				} else if (isLocal) {
+					this.showFeedback(`📦 Found: ${outcome.item.name}`);
+				}
+
+				if (isLocal) this.showItemPopup(outcome.item, outcome.isTarget);
+		}
 	}
 
 	/**
@@ -1148,15 +1026,12 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	/**
-	 * Spawns the match Exit far from the relic-find location. No exit
-	 * exists on the grid until this runs. Occupied hunter/monster tiles
-	 * and the find tile itself are blocked.
+	 * Spawns the match Exit far from the relic-find location, deferring
+	 * to ExitRelicSystem for the actual tile-picking — this just builds
+	 * the blocked set from the units/monsters MapScene already tracks.
 	 */
 	private spawnExitFarFrom(from: RH.GridCoord): void {
-		if (RH.findExitTile(this.grid)) return;
-
 		const blocked = new Set<string>();
-		blocked.add(RH.coordKey(from));
 		for (const u of this.units) {
 			if (u.state.currentHp > 0) blocked.add(RH.coordKey(u.state.coord));
 		}
@@ -1164,14 +1039,7 @@ export class MapScene implements Scene, TutorialPort {
 			if (m.state.currentHp > 0) blocked.add(RH.coordKey(m.state.coord));
 		}
 
-		const exitCoord = RH.pickExitFarFrom(this.grid, from, blocked, 0.35);
-		if (!exitCoord) {
-			const fallback = RH.pickSpreadWalkableTile(this.grid, blocked, 1, 1);
-			if (!fallback) return;
-			this.grid.setTileType(fallback, RH.TileType.Exit);
-			return;
-		}
-		this.grid.setTileType(exitCoord, RH.TileType.Exit);
+		ExitRelicSystem.spawnFarFrom(this.grid, from, blocked);
 	}
 
 	/** Float an icon + item name above the mercenary's head briefly. */
@@ -1284,7 +1152,7 @@ export class MapScene implements Scene, TutorialPort {
 		const preMoveHp = self.currentHp;
 		const others = this.buildOtherCombatants(unit.state.id);
 
-		const chestInfos: RH.ChestInfo[] = this.placedChests.map((c) => ({
+		const chestInfos: RH.ChestInfo[] = this.chestSystem.all.map((c) => ({
 			coord: c.coord,
 			isOpen: c.entity.isOpen,
 		}));
@@ -2564,8 +2432,7 @@ export class MapScene implements Scene, TutorialPort {
 			this.playZone.show();
 		}
 
-		this.uiPointerMarker.visible = isVisible && !!this.activeUiPointerTarget;
-		this.tutorialTargetMarker.visible = isVisible && this.tutorialTargetActive;
+		this.tutorialMarkers.setVisible(isVisible);
 	}
 	getLocalUnitCoord(): RH.GridCoord {
 		return this.localUnit.state.coord;
@@ -2591,10 +2458,7 @@ export class MapScene implements Scene, TutorialPort {
 
 	/**
 	 * Animates a static actor's token from its current screen position
-	 * to destination — a simple, self-contained tween (not
-	 * Mercenary.moveAlongPath's full animation system, which handles
-	 * zone-of-control strikes mid-path that don't apply to a purely
-	 * decorative token). Purely visual — no game state, no coord
+	 * to destination. Purely visual — no game state, no coord
 	 * tracking, since static actors were never part of turn logic to
 	 * begin with.
 	 */
@@ -2603,43 +2467,12 @@ export class MapScene implements Scene, TutorialPort {
 		destination: RH.GridCoord,
 		durationMs = 900,
 	): Promise<void> {
-		const token = this.tutorialActorTokens.get(label);
-		const currentCoord = this.tutorialActorCoords.get(label);
-		if (!token || !currentCoord) return Promise.resolve();
-
-		const range = RH.computeMovementRange(
+		return this.tutorialMarkers.moveStaticActor(
+			label,
+			destination,
 			this.grid,
-			currentCoord,
-			this.grid.width + this.grid.height,
-			new Set(),
+			durationMs,
 		);
-		const tilePath = RH.getPathTo(range, destination) ?? [destination];
-		this.tutorialActorCoords.set(label, destination);
-
-		// The whole path as one continuous polyline, not a queue of
-		// separate per-tile tweens — interpolatePolyline (shared with
-		// Mercenary's own movement) finds the correct position for a
-		// SINGLE eased t across the entire route, so there's exactly one
-		// ease-in at the start and one ease-out at the end, not a
-		// stop-start-stop-start jitter at every intermediate tile.
-		const points = [gridToScreen(currentCoord), ...tilePath.map(gridToScreen)];
-
-		return new Promise((resolve) => {
-			const start = performance.now();
-			const frame = (): void => {
-				const t = Math.min(1, (performance.now() - start) / durationMs);
-				const eased = 1 - Math.pow(1 - t, 3);
-				const pos = interpolatePolyline(points, eased);
-				token.x = pos.x;
-				token.y = pos.y;
-				if (t < 1) {
-					requestAnimationFrame(frame);
-				} else {
-					resolve();
-				}
-			};
-			requestAnimationFrame(frame);
-		});
 	}
 
 	/**
@@ -2753,40 +2586,11 @@ export class MapScene implements Scene, TutorialPort {
 	 * only, never enforced — the player can still move anywhere.
 	 */
 	showTutorialTarget(coord: RH.GridCoord): void {
-		const pos = gridToScreen(coord);
-		this.tutorialTargetMarker.removeChildren();
-		this.tutorialTargetMarker.x = pos.x;
-		this.tutorialTargetMarker.y = pos.y;
-
-		const glow = new Graphics();
-		glow.poly([
-			0,
-			-TILE_HEIGHT / 2,
-			TILE_WIDTH / 2,
-			0,
-			0,
-			TILE_HEIGHT / 2,
-			-TILE_WIDTH / 2,
-			0,
-		]);
-		glow.fill({ color: 0xffd700, alpha: 0.45 });
-		glow.stroke({ width: 2, color: 0xffd700, alpha: 0.9 });
-		this.tutorialTargetMarker.addChild(glow);
-
-		const arrow = new Graphics();
-		arrow.poly([0, 0, 10, -16, -10, -16]);
-		arrow.fill(0xffd700);
-		arrow.y = -50;
-		this.tutorialTargetMarker.addChild(arrow);
-
-		this.tutorialTargetElapsedMs = 0;
-		this.tutorialTargetMarker.visible = true;
-		this.tutorialTargetActive = true;
+		this.tutorialMarkers.showTarget(coord);
 	}
 
 	hideTutorialTarget(): void {
-		this.tutorialTargetMarker.visible = false;
-		this.tutorialTargetActive = false;
+		this.tutorialMarkers.hideTarget();
 	}
 
 	/**
@@ -2802,35 +2606,11 @@ export class MapScene implements Scene, TutorialPort {
 	 * card or menu row can genuinely move.
 	 */
 	showUiPointer(target: TutorialUiPointerTarget): void {
-		this.activeUiPointerTarget = target;
-		this.uiPointerElapsedMs = 0;
-
-		this.uiPointerMarker.removeChildren();
-		const arrow = new Graphics();
-		arrow.poly([0, 0, 10, -16, -10, -16]);
-		arrow.fill(0xffd700);
-
-		switch (target.side) {
-			case "up":
-				arrow.rotation = 0;
-				break;
-			case "down":
-				arrow.rotation = Math.PI;
-				break;
-			case "left":
-				arrow.rotation = -Math.PI / 2;
-				break;
-			case "right":
-				arrow.rotation = Math.PI / 2;
-				break;
-		}
-
-		this.uiPointerMarker.addChild(arrow);
+		this.tutorialMarkers.showUiPointer(target);
 	}
 
 	hideUiPointer(): void {
-		this.activeUiPointerTarget = null;
-		this.uiPointerMarker.visible = false;
+		this.tutorialMarkers.hideUiPointer();
 	}
 
 	/** Dispatches to whichever component actually owns the requested target's live screen position. Returns null if that element doesn't currently exist rather than throwing. */
@@ -3083,7 +2863,7 @@ export class MapScene implements Scene, TutorialPort {
 					.filter((u) => u.state.currentHp > 0)
 					.map((u) => u.state.coord),
 				...this.livingMonsterCoords(),
-				...Array.from(this.tutorialActorCoords.values()),
+				...this.tutorialMarkers.actorCoordsList,
 			],
 			onMoveCommitted: (
 				target: RH.GridCoord,
@@ -3112,6 +2892,7 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.mercenaryContainer.removeChildren();
 		this.units = [];
+		this.monsterSystem = new MonsterSystem(this.mercenaryContainer);
 		this.spawnLocalUnit();
 		this.localUnit.mercenary.view.addChild(this.itemPopup);
 		this.itemPopup.visible = false;
