@@ -38,6 +38,7 @@ import type { PilotedMercenary, MovableToken } from "@/types/entities";
 import { logMatchEvent } from "@/core/game/GameSession";
 import type { HunterSummaryEntry } from "@/ui/HunterSummaryPanel";
 import { MonsterSystem } from "@/systems/MonsterSystem";
+import { TrapSystem } from "@/systems/TrapSystem";
 import type { MonsterEntity } from "@/types/entities";
 import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
 import { AudioController } from "@/core/audio/audioController";
@@ -131,10 +132,7 @@ export class MapScene implements Scene, TutorialPort {
 	private cardDrawQueue!: CardDrawQueue;
 	private drawLayer = new Container();
 
-	// traps
-	private traps: RH.Trap[] = [];
-
-	private trapMarkerContainer = new Container();
+	private trapSystem = new TrapSystem();
 
 	// Map config — dimensions and seed come from GameSession (set by
 	// LoadingScene) rather than being hardcoded, so mission map size
@@ -340,8 +338,7 @@ export class MapScene implements Scene, TutorialPort {
 		this.boardContainer.addChild(this.moveController.view);
 		this.boardContainer.addChild(this.attackRangeContainer);
 
-		// traps
-		this.boardContainer.addChild(this.trapMarkerContainer);
+		this.boardContainer.addChild(this.trapSystem.markerContainer);
 
 		this.hud = new MapHud(this.game);
 		this.hud.setActionMenuSubmenuToggled((open) => {
@@ -610,6 +607,16 @@ export class MapScene implements Scene, TutorialPort {
 	private async beginPlayerTurn(): Promise<void> {
 		this.camera.unlock();
 
+		if (this.localUnit.state.stunnedTurnsRemaining > 0) {
+			this.localUnit.state.stunnedTurnsRemaining -= 1;
+			this.showFeedback("🪤 You're stunned and can't act this turn");
+			this.turnsTaken++;
+			this.trySpawnMonster();
+			this.syncUI();
+			void this.processEnemyTurns();
+			return;
+		}
+
 		// A normal player turn starts here. TurnManager owns the rule and
 		// returns the card for MapScene to present through CardDrawQueue.
 		const drawn = this.localUnit.turnManager.startTurn();
@@ -629,16 +636,6 @@ export class MapScene implements Scene, TutorialPort {
 			);
 			this.localUnit.state.currentHp = 1;
 			this.showFeedback("✨ You recover and get back up");
-			this.turnsTaken++;
-			this.trySpawnMonster();
-			this.syncUI();
-			void this.processEnemyTurns();
-			return;
-		}
-
-		if (this.localUnit.state.stunnedTurnsRemaining > 0) {
-			this.localUnit.state.stunnedTurnsRemaining -= 1;
-			this.showFeedback("🪤 You're stunned and can't act this turn");
 			this.turnsTaken++;
 			this.trySpawnMonster();
 			this.syncUI();
@@ -857,10 +854,17 @@ export class MapScene implements Scene, TutorialPort {
 	): Promise<void> {
 		const local = this.localUnit;
 
-		const { truncatedPath, hazardHit } = this.resolveTrapsAlongPath(
-			local,
-			path,
-		);
+		const { truncatedPath, hazardHit, resists } =
+			this.trapSystem.resolveAlongPath(
+				path,
+				local.state.stats,
+				local.state.temporaryStatBonus.defense,
+			);
+		for (const r of resists) {
+			this.showFeedback(
+				`🪤 ${this.getUnitLabel(local)} resisted a hazard (${r.hazardRoll} vs ${r.victimRoll})`,
+			);
+		}
 
 		local.state.coord =
 			truncatedPath.length > 0
@@ -883,10 +887,30 @@ export class MapScene implements Scene, TutorialPort {
 		if (hazardHit) {
 			this.applyHazardEffect(local, hazardHit.kind, hazardHit.result);
 		}
-		this.renderTrapMarkers();
+		this.refreshTrapMarkers();
 
 		this.tryOpenChestAt(local.state, target);
 		await this.checkWinCondition(local);
+
+		// Trap stun: no more actions this turn (attack / move / rest / etc.)
+		if (local.state.stunnedTurnsRemaining > 0) {
+			this.resetActionState();
+			this.setPlayerControlsVisible(false);
+			this.showFeedback("🪤 Stunned — your turn ends");
+			// Leave stunnedTurnsRemaining as-is so beginPlayerTurn skips next turn too.
+			this.localUnit.turnManager.endTurn();
+			this.turnsTaken++;
+			this.tutorialConfig?.onTutorialEvent({
+				type: "moved",
+				tilesMoved: truncatedPath.length,
+				usedCard: this.pendingMoveUsedCard,
+				finalCoord: local.state.coord,
+			});
+			this.syncUI();
+			this.trySpawnMonster();
+			void this.processEnemyTurns();
+			return;
+		}
 
 		this.tutorialConfig?.onTutorialEvent({
 			type: "moved",
@@ -894,7 +918,6 @@ export class MapScene implements Scene, TutorialPort {
 			usedCard: this.pendingMoveUsedCard,
 			finalCoord: local.state.coord,
 		});
-
 		this.syncUI();
 	}
 
@@ -1198,14 +1221,24 @@ export class MapScene implements Scene, TutorialPort {
 					await this.delay(BETWEEN_AI_MS);
 				}
 				isFirst = false;
-				// Every AI turn begins through the same lifecycle as the local player.
-				// TurnManager refreshes the turn and returns only cards the hand can hold.
-				const drawn = unit.turnManager.startTurn();
-				unit.state.hand.push(...drawn);
+
 				if (unit.state.currentHp <= 0) {
 					await this.processRecoveryTurn(unit);
 					continue;
 				}
+
+				// Stun: full turn skip — no startTurn(), no draw, no move/attack.
+				if (unit.state.stunnedTurnsRemaining > 0) {
+					unit.state.stunnedTurnsRemaining -= 1;
+					this.showFeedback(
+						`🪤 ${this.getUnitLabel(unit)} is stunned and skips their turn`,
+					);
+					this.trySpawnMonster();
+					continue;
+				}
+
+				const drawn = unit.turnManager.startTurn();
+				unit.state.hand.push(...drawn);
 				await this.processOneEnemyTurn(unit);
 				this.trySpawnMonster();
 			}
@@ -1278,7 +1311,11 @@ export class MapScene implements Scene, TutorialPort {
 
 		if (!wouldDeclineOnArrival) {
 			this.showFeedback(`🤔 ${this.getUnitLabel(unit)} avoids a fight`);
-			const visibleTraps = this.trapsVisibleTo(unit);
+			const visibleTraps = this.trapSystem.visibleTo(
+				unit.state.id,
+				unit.state.coord,
+				unit.state.characterClass === "hunter",
+			);
 			const blocked = new Set([
 				...others.map((o) => RH.coordKey(o.coord)),
 				...this.livingMonsterCoords().map(RH.coordKey),
@@ -1355,10 +1392,17 @@ export class MapScene implements Scene, TutorialPort {
 						unit.state.temporaryStatBonus.movement = cardBonus;
 					}
 
-					const { truncatedPath, hazardHit } = this.resolveTrapsAlongPath(
-						unit,
-						path,
-					);
+					const { truncatedPath, hazardHit, resists } =
+						this.trapSystem.resolveAlongPath(
+							path,
+							unit.state.stats,
+							unit.state.temporaryStatBonus.defense,
+						);
+					for (const r of resists) {
+						this.showFeedback(
+							`🪤 ${this.getUnitLabel(unit)} resisted a hazard (${r.hazardRoll} vs ${r.victimRoll})`,
+						);
+					}
 
 					unit.state.coord =
 						truncatedPath.length > 0
@@ -1376,7 +1420,17 @@ export class MapScene implements Scene, TutorialPort {
 					if (hazardHit) {
 						this.applyHazardEffect(unit, hazardHit.kind, hazardHit.result);
 					}
-					this.renderTrapMarkers();
+					this.refreshTrapMarkers();
+
+					// Stunned mid-move: still on tile, but no fight / fallback this turn.
+					// Counter stays so the *next* turn is also skipped at loop start.
+					if (unit.state.stunnedTurnsRemaining > 0) {
+						this.tryOpenChestAt(unit.state, unit.state.coord);
+						await this.checkWinCondition(unit);
+						this.activeAi = null;
+						this.camera.unlock();
+						return;
+					}
 				}
 			}
 		}
@@ -1574,6 +1628,13 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	private async processOneMonsterTurn(monster: MonsterEntity): Promise<void> {
+		if (monster.state.stunnedTurnsRemaining > 0) {
+			monster.state.stunnedTurnsRemaining -= 1;
+			this.showFeedback(
+				`🪤 A ${monster.state.tier} monster is stunned and skips its turn`,
+			);
+			return;
+		}
 		this.activeMonster = monster;
 		this.camera.centerOn(
 			{ x: monster.token.view.x, y: monster.token.view.y },
@@ -2862,99 +2923,23 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	private placeTrapAtCurrentPosition(_card: RH.CardData): void {
-		const coord = this.localUnit.state.coord;
-		this.traps.push({
-			id: `trap_${Date.now()}_${this.traps.length}`,
-			coord,
-			ownerId: this.localUnit.state.id,
+		const local = this.localUnit.state;
+		this.trapSystem.place({
+			coord: local.coord,
+			ownerId: local.id,
 			kind: "stun",
 		});
 		this.showFeedback("🪤 RH.Trap left behind");
-		this.renderTrapMarkers();
+		this.refreshTrapMarkers();
 	}
 
-	private visibleTrapsForLocalPlayer(): RH.Trap[] {
+	private refreshTrapMarkers(): void {
 		const local = this.localUnit.state;
-		const isHunterClass = local.characterClass === "hunter";
-		return this.traps.filter((t) =>
-			RH.canSeeTrap(t, local.id, local.coord, isHunterClass),
+		this.trapSystem.renderMarkersFor(
+			local.id,
+			local.coord,
+			local.characterClass === "hunter",
 		);
-	}
-
-	private trapsVisibleTo(unit: PilotedMercenary): RH.Trap[] {
-		const isHunterClass = unit.state.characterClass === "hunter";
-		return this.traps.filter((t) =>
-			RH.canSeeTrap(t, unit.state.id, unit.state.coord, isHunterClass),
-		);
-	}
-
-	private renderTrapMarkers(): void {
-		this.trapMarkerContainer.removeChildren();
-		for (const trap of this.visibleTrapsForLocalPlayer()) {
-			const pos = gridToScreen(trap.coord);
-			const g = new Graphics();
-			g.poly([
-				0,
-				-TILE_HEIGHT / 2,
-				TILE_WIDTH / 2,
-				0,
-				0,
-				TILE_HEIGHT / 2,
-				-TILE_WIDTH / 2,
-				0,
-			]);
-			g.fill({ color: 0x2ecc71, alpha: 0.4 });
-			g.stroke({ width: 2, color: 0x2ecc71, alpha: 0.8 });
-			g.x = pos.x;
-			g.y = pos.y;
-			this.trapMarkerContainer.addChild(g);
-		}
-	}
-
-	private resolveTrapsAlongPath(
-		unit: PilotedMercenary,
-		path: RH.GridCoord[],
-	): {
-		truncatedPath: RH.GridCoord[];
-		hazardHit: { kind: RH.TrapKind; result: RH.HazardRollResult } | null;
-	} {
-		for (let i = 0; i < path.length; i++) {
-			const step = path[i];
-			const index = this.traps.findIndex(
-				(t) => t.coord.x === step.x && t.coord.y === step.y,
-			);
-			if (index === -1) continue;
-			const trap = this.traps[index];
-
-			this.traps.splice(index, 1);
-
-			const bonus = unit.state.temporaryStatBonus.defense;
-			const syntheticCard: RH.CardData | undefined =
-				bonus !== 0
-					? {
-							id: "__temp_defense__",
-							color: "yellow",
-							name: "Defense",
-							value: bonus,
-							description: "",
-							actionType: "defense",
-						}
-					: undefined;
-			const result = RH.resolveHazardRoll(unit.state.stats, syntheticCard);
-
-			if (!result.landed) {
-				this.showFeedback(
-					`🪤 ${this.getUnitLabel(unit)} resisted a hazard (${result.hazardRoll} vs ${result.victimRoll})`,
-				);
-				continue;
-			}
-
-			return {
-				truncatedPath: path.slice(0, i + 1),
-				hazardHit: { kind: trap.kind, result },
-			};
-		}
-		return { truncatedPath: path, hazardHit: null };
 	}
 
 	private placeTrap(card: RH.CardData): void {
