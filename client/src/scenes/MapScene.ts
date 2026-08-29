@@ -11,8 +11,6 @@ import {
 } from "@/math/isoGridMath";
 import { computeUiScale, uiPx } from "@/math/uiScale";
 import { Mercenary, interpolatePolyline } from "@/entities/Mercenary";
-import { Chest } from "@/entities/Chest";
-
 import * as RH from "@relic-hunter/shared";
 
 import { PauseOverlay } from "@/ui/overlay/PauseOverlay";
@@ -38,6 +36,8 @@ import type { PilotedMercenary, MovableToken } from "@/types/entities";
 import { logMatchEvent } from "@/core/game/GameSession";
 import type { HunterSummaryEntry } from "@/ui/HunterSummaryPanel";
 import { MonsterSystem } from "@/systems/MonsterSystem";
+import { ChestSystem } from "@/systems/ChestSystem";
+import { ExitRelicSystem } from "@/systems/ExitRelicSystem";
 import { TrapSystem } from "@/systems/TrapSystem";
 import type { MonsterEntity } from "@/types/entities";
 import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
@@ -51,13 +51,6 @@ import type {
 	TutorialCombatGuide,
 } from "@/tutorial/tutorialPort";
 import type { DialogueLine } from "@/tutorial/dialogue";
-
-/** A chest placed on the map, tying its visual entity to its plan and position. */
-interface PlacedChest {
-	coord: RH.GridCoord;
-	plan: RH.ChestPlan;
-	entity: Chest;
-}
 
 /**
  * Tactical map scene — grid, mercenary, AP turns, cards, chests, win condition.
@@ -73,7 +66,6 @@ export class MapScene implements Scene, TutorialPort {
 	private grid: RH.Grid;
 	private boardContainer = new Container();
 	private tilesContainer = new Container();
-	private chestContainer = new Container();
 	private mercenaryContainer = new Container();
 
 	// Systems
@@ -83,9 +75,9 @@ export class MapScene implements Scene, TutorialPort {
 
 	// Entities — one array, pilot type is the only thing distinguishing them
 	private units: PilotedMercenary[] = [];
-	private placedChests: PlacedChest[] = [];
 
 	private monsterSystem!: MonsterSystem;
+	private chestSystem = new ChestSystem();
 
 	// True during the Exit card's two-flight teleport sequence — blocks
 	// End Turn / regenerate from interrupting mid-sequence, same role
@@ -228,7 +220,7 @@ export class MapScene implements Scene, TutorialPort {
 		this.grid = this.buildMap();
 
 		this.boardContainer.addChild(this.tilesContainer);
-		this.boardContainer.addChild(this.chestContainer);
+		this.boardContainer.addChild(this.chestSystem.container);
 		this.boardContainer.addChild(this.mercenaryContainer);
 		this.view.addChild(this.boardContainer);
 
@@ -1064,20 +1056,9 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	private spawnChests(): void {
-		this.chestContainer.removeChildren();
-		this.placedChests = [];
-
 		const sessionPlacements = this.game.session.chestPlacements;
 		if (sessionPlacements && sessionPlacements.length > 0) {
-			for (const record of sessionPlacements) {
-				const entity = new Chest(record.coord);
-				this.chestContainer.addChild(entity.view);
-				this.placedChests.push({
-					coord: record.coord,
-					plan: record.plan,
-					entity,
-				});
-			}
+			this.chestSystem.spawnFromPlacements(sessionPlacements);
 			return;
 		}
 
@@ -1085,17 +1066,9 @@ export class MapScene implements Scene, TutorialPort {
 		if (!plan) return;
 
 		// No exit at match start — only reserve the local spawn tile.
-		const used = new Set<string>();
-		used.add(RH.coordKey(this.localUnit.state.coord));
-
-		for (const chestPlan of plan.chests) {
-			const coord = RH.pickSpreadWalkableTile(this.grid, used);
-			if (!coord) break;
-			used.add(RH.coordKey(coord));
-			const entity = new Chest(coord);
-			this.chestContainer.addChild(entity.view);
-			this.placedChests.push({ coord, plan: chestPlan, entity });
-		}
+		const reserved = new Set<string>();
+		reserved.add(RH.coordKey(this.localUnit.state.coord));
+		this.chestSystem.spawnFromPlan(plan, this.grid, reserved);
 	}
 
 	private isPointOverUiSurface(screenX: number, screenY: number): boolean {
@@ -1104,38 +1077,36 @@ export class MapScene implements Scene, TutorialPort {
 
 	/** Open the chest at coord if unopened, for whichever unit reached it. Stays closed if inventory full. */
 	private tryOpenChestAt(state: RH.MercenaryState, coord: RH.GridCoord): void {
-		const placed = this.placedChests.find(
-			(c) => !c.entity.isOpen && c.coord.x === coord.x && c.coord.y === coord.y,
-		);
-		if (!placed) return;
-
-		if (!state.items.some((i) => i === null)) {
-			if (state.id === this.localUnit.state.id) {
-				this.showFeedback("🎒 Inventory full — chest left unopened");
-			}
-			return;
-		}
-
-		placed.entity.open();
-		const emptyIndex = state.items.findIndex((i) => i === null);
-		state.items[emptyIndex] = placed.plan.item;
-
+		const outcome = this.chestSystem.tryOpen(coord, state.items);
 		const isLocal = state.id === this.localUnit.state.id;
-		if (placed.plan.isTarget) {
-			this.game.session.relicFound = true;
-			this.triggerFrenzy();
-			this.spawnExitFarFrom(coord);
-			this.mapRenderer.build(this.grid, 0);
-			this.showFeedback(
-				isLocal
-					? `🎯 Found the target: ${placed.plan.item.name}! The Exit has revealed itself.`
-					: "⚠️ An enemy hunter found the target item! The Exit has revealed itself.",
-			);
-		} else if (isLocal) {
-			this.showFeedback(`📦 Found: ${placed.plan.item.name}`);
-		}
 
-		if (isLocal) this.showItemPopup(placed.plan.item, placed.plan.isTarget);
+		switch (outcome.kind) {
+			case "noChest":
+				return;
+
+			case "inventoryFull":
+				if (isLocal) {
+					this.showFeedback("🎒 Inventory full — chest left unopened");
+				}
+				return;
+
+			case "opened":
+				if (outcome.isTarget) {
+					this.game.session.relicFound = true;
+					this.triggerFrenzy();
+					this.spawnExitFarFrom(coord);
+					this.mapRenderer.build(this.grid, 0);
+					this.showFeedback(
+						isLocal
+							? `🎯 Found the target: ${outcome.item.name}! The Exit has revealed itself.`
+							: "⚠️ An enemy hunter found the target item! The Exit has revealed itself.",
+					);
+				} else if (isLocal) {
+					this.showFeedback(`📦 Found: ${outcome.item.name}`);
+				}
+
+				if (isLocal) this.showItemPopup(outcome.item, outcome.isTarget);
+		}
 	}
 
 	/**
@@ -1148,15 +1119,12 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	/**
-	 * Spawns the match Exit far from the relic-find location. No exit
-	 * exists on the grid until this runs. Occupied hunter/monster tiles
-	 * and the find tile itself are blocked.
+	 * Spawns the match Exit far from the relic-find location, deferring
+	 * to ExitRelicSystem for the actual tile-picking — this just builds
+	 * the blocked set from the units/monsters MapScene already tracks.
 	 */
 	private spawnExitFarFrom(from: RH.GridCoord): void {
-		if (RH.findExitTile(this.grid)) return;
-
 		const blocked = new Set<string>();
-		blocked.add(RH.coordKey(from));
 		for (const u of this.units) {
 			if (u.state.currentHp > 0) blocked.add(RH.coordKey(u.state.coord));
 		}
@@ -1164,14 +1132,7 @@ export class MapScene implements Scene, TutorialPort {
 			if (m.state.currentHp > 0) blocked.add(RH.coordKey(m.state.coord));
 		}
 
-		const exitCoord = RH.pickExitFarFrom(this.grid, from, blocked, 0.35);
-		if (!exitCoord) {
-			const fallback = RH.pickSpreadWalkableTile(this.grid, blocked, 1, 1);
-			if (!fallback) return;
-			this.grid.setTileType(fallback, RH.TileType.Exit);
-			return;
-		}
-		this.grid.setTileType(exitCoord, RH.TileType.Exit);
+		ExitRelicSystem.spawnFarFrom(this.grid, from, blocked);
 	}
 
 	/** Float an icon + item name above the mercenary's head briefly. */
@@ -1284,7 +1245,7 @@ export class MapScene implements Scene, TutorialPort {
 		const preMoveHp = self.currentHp;
 		const others = this.buildOtherCombatants(unit.state.id);
 
-		const chestInfos: RH.ChestInfo[] = this.placedChests.map((c) => ({
+		const chestInfos: RH.ChestInfo[] = this.chestSystem.all.map((c) => ({
 			coord: c.coord,
 			isOpen: c.entity.isOpen,
 		}));
