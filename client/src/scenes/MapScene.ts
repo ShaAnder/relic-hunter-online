@@ -25,10 +25,11 @@ import type {
 } from "@/tutorial/tutorialTypes";
 import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
 import { PlayZone } from "@/ui/PlayZone";
-import type { PilotedMercenary, MovableToken } from "@/types/entities";
+import type { PilotedMercenary } from "@/types/entities";
 import { logMatchEvent } from "@/core/game/GameSession";
 import type { HunterSummaryEntry } from "@/ui/HunterSummaryPanel";
 import { MapController } from "@/systems/MapController";
+import { AiTurnController } from "@/systems/AiTurnController";
 import { TutorialMarkers } from "@/systems/TutorialMarkers";
 import { MatchController } from "@/systems/MatchController";
 import { TargetingVisuals } from "@/systems/TargetingVisuals";
@@ -95,10 +96,7 @@ export class MapScene implements Scene, TutorialPort {
 	private cameraDragActive = false;
 	private lastDragScreenPos: { x: number; y: number } | null = null;
 
-	// Guards End Turn from re-firing while enemies are mid-move/mid-fight
-	private processingEnemyTurns = false;
-	private activeAi: PilotedMercenary | null = null;
-	private activeMonster: MonsterEntity | null = null;
+	private aiTurnController!: AiTurnController;
 
 	// UI
 	private hud!: MapHud;
@@ -237,6 +235,39 @@ export class MapScene implements Scene, TutorialPort {
 				panSpeed: 700,
 			});
 		}
+
+		this.aiTurnController = new AiTurnController(
+			this.game,
+			this.camera,
+			this.mapController,
+			{
+				showFeedback: (message) => this.showFeedback(message),
+				getUnitLabel: (unit) => this.getUnitLabel(unit),
+				showTargetMarker: (target) => this.showTargetMarker(target),
+				hideTargetMarker: () => this.hideTargetMarker(),
+				delay: (ms) => this.delay(ms),
+				getUnits: () => this.units,
+				getLocalUnit: () => this.localUnit,
+				getGrid: () => this.grid,
+				adjacentTiles: (coord) => this.adjacentTiles(coord),
+				pickEnemySpawnTile: (used) => this.pickEnemySpawnTile(used),
+				setPlayerControlsVisible: (visible) =>
+					this.setPlayerControlsVisible(visible),
+				beginPlayerTurn: () => {
+					void this.beginPlayerTurn();
+				},
+				syncUI: () => this.syncUI(),
+				syncDeckTracker: () =>
+					this.hud.syncDeckTracker(this.localUnit.turnManager),
+				showBossAlert: (ms) => this.hud.showBossAlert(ms),
+				playBossAudio: () =>
+					this.audio.play("boss-theme", "/audio/boss-theme.mp3", {
+						loop: true,
+						volume: 0.6,
+					}),
+				isTutorial: () => !!this.tutorialConfig,
+			},
+		);
 
 		this.mapRenderer = new MapRenderer(
 			this.tilesContainer,
@@ -436,17 +467,23 @@ export class MapScene implements Scene, TutorialPort {
 
 		// PASS 4 TODO: still assumes exactly one local unit ever needs the
 		// camera to follow it — real judgment call, deferred deliberately.
-		if (this.processingEnemyTurns && this.activeAi) {
+		if (
+			this.aiTurnController.processingEnemyTurns &&
+			this.aiTurnController.activeAi
+		) {
 			this.camera.lockTo({
-				x: this.activeAi.mercenary.view.x,
-				y: this.activeAi.mercenary.view.y,
+				x: this.aiTurnController.activeAi.mercenary.view.x,
+				y: this.aiTurnController.activeAi.mercenary.view.y,
 			});
-		} else if (this.processingEnemyTurns && this.activeMonster) {
+		} else if (
+			this.aiTurnController.processingEnemyTurns &&
+			this.aiTurnController.activeMonster
+		) {
 			this.camera.lockTo({
-				x: this.activeMonster.token.view.x,
-				y: this.activeMonster.token.view.y,
+				x: this.aiTurnController.activeMonster.token.view.x,
+				y: this.aiTurnController.activeMonster.token.view.y,
 			});
-		} else if (this.processingEnemyTurns) {
+		} else if (this.aiTurnController.processingEnemyTurns) {
 			// Between individual units' turns — nothing specific is
 			// "active" right now, but the whole cycle is still running.
 			// Deliberately a no-op: holds whatever was last locked instead
@@ -552,7 +589,7 @@ export class MapScene implements Scene, TutorialPort {
 			this.turnsTaken++;
 			this.trySpawnMonster();
 			this.syncUI();
-			void this.processEnemyTurns();
+			void this.aiTurnController.processEnemyTurns();
 			return;
 		}
 
@@ -578,7 +615,7 @@ export class MapScene implements Scene, TutorialPort {
 			this.turnsTaken++;
 			this.trySpawnMonster();
 			this.syncUI();
-			void this.processEnemyTurns();
+			void this.aiTurnController.processEnemyTurns();
 			return;
 		}
 
@@ -653,7 +690,7 @@ export class MapScene implements Scene, TutorialPort {
 
 	private handlePointerDown = (event: PointerEvent): void => {
 		if (this.game.overlays.isOpen) return;
-		if (this.processingEnemyTurns) return;
+		if (this.aiTurnController.processingEnemyTurns) return;
 		if (event.button !== 0) return;
 
 		const { screenX, screenY } = this.getScreenPoint(event);
@@ -851,7 +888,7 @@ export class MapScene implements Scene, TutorialPort {
 			});
 			this.syncUI();
 			this.trySpawnMonster();
-			void this.processEnemyTurns();
+			void this.aiTurnController.processEnemyTurns();
 			return;
 		}
 
@@ -874,26 +911,6 @@ export class MapScene implements Scene, TutorialPort {
 			this.hud.setMoveActive(false);
 			this.moveController.exit();
 		}
-	}
-
-	// ---------- Zone of Control ----------
-
-	private buildThreatZoneOwners(excludeId: string): RH.ThreatOwner[] {
-		return this.mapController.buildThreatZoneOwners(excludeId);
-	}
-
-	/**
-	 * Animates a path in segments, pausing exactly at each zone crossing to
-	 * apply the reaction strike and log it. Works for ANY entity with a
-	 * mutable RH.EntityCore-shaped state and a MovableToken — hunters and
-	 * monsters both satisfy this structurally.
-	 */
-	private async moveEntityWithZoneStrikes(
-		entity: { state: RH.EntityCore; token: MovableToken },
-		path: RH.GridCoord[],
-		label: string,
-	): Promise<void> {
-		await this.mapController.moveEntityWithZoneStrikes(entity, path, label);
 	}
 
 	// ---------- Chests & Items ----------
@@ -925,563 +942,6 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	// ---------- Enemy AI ----------
-
-	private toCombatant(state: RH.MercenaryState): RH.AiCombatant {
-		return {
-			id: state.id,
-			coord: state.coord,
-			stats: state.stats,
-			currentHp: state.currentHp,
-			items: state.items.filter((i): i is RH.ItemData => i !== null),
-		};
-	}
-
-	/** Every living combatant except excludeId. */
-	private buildOtherCombatants(excludeId: string): RH.AiCombatant[] {
-		return this.units
-			.filter((u) => u.state.id !== excludeId && u.state.currentHp > 0)
-			.map((u) => this.toCombatant(u.state));
-	}
-
-	private async processEnemyTurns(): Promise<void> {
-		this.processingEnemyTurns = true;
-		this.camera.setInputLocked(true);
-		this.setPlayerControlsVisible(false);
-
-		try {
-			const BETWEEN_AI_MS = 1200;
-
-			let isFirst = true;
-			for (const unit of this.aiUnits) {
-				if (!isFirst) {
-					await this.delay(BETWEEN_AI_MS);
-				}
-				isFirst = false;
-
-				if (unit.state.currentHp <= 0) {
-					await this.processRecoveryTurn(unit);
-					continue;
-				}
-
-				// Stun: full turn skip — no startTurn(), no draw, no move/attack.
-				if (unit.state.stunnedTurnsRemaining > 0) {
-					unit.state.stunnedTurnsRemaining -= 1;
-					this.showFeedback(
-						`🪤 ${this.getUnitLabel(unit)} is stunned and skips their turn`,
-					);
-					this.trySpawnMonster();
-					continue;
-				}
-
-				const drawn = unit.turnManager.startTurn();
-				unit.state.hand.push(...drawn);
-				await this.processOneEnemyTurn(unit);
-				this.trySpawnMonster();
-			}
-
-			this.hud.syncDeckTracker(this.localUnit.turnManager);
-			await this.checkDeckExhaustion();
-			await this.processMonsterTurns();
-
-			if (
-				this.mapController.monsterSystem.bossEntity &&
-				this.mapController.monsterSystem.bossEntity.state.currentHp > 0
-			) {
-				await this.delay(400);
-				await this.processOneMonsterTurn(
-					this.mapController.monsterSystem.bossEntity,
-				);
-			}
-		} finally {
-			this.processingEnemyTurns = false;
-			this.camera.setInputLocked(false);
-			this.beginPlayerTurn();
-			this.syncUI();
-		}
-	}
-
-	private async processOneEnemyTurn(unit: PilotedMercenary): Promise<void> {
-		// AI units always have both — guard for the type
-		if (!unit.archetype || !unit.memory) return;
-		this.activeAi = unit;
-		this.camera.centerOn(
-			{ x: unit.mercenary.view.x, y: unit.mercenary.view.y },
-			this.game.app.screen.width,
-			this.game.app.screen.height,
-		);
-		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
-		// Not carrying → drop sticky extract so a later pickup starts fresh.
-		if (
-			!targetItemId ||
-			!unit.state.items.some((i) => i?.id === targetItemId)
-		) {
-			unit.memory.extracting = false;
-		}
-
-		const self = this.toCombatant(unit.state);
-		const preMoveHp = self.currentHp;
-		const others = this.buildOtherCombatants(unit.state.id);
-
-		const chestInfos: RH.ChestInfo[] = this.mapController.chestSystem.all.map(
-			(c) => ({
-				coord: c.coord,
-				isOpen: c.entity.isOpen,
-			}),
-		);
-
-		const exitCoord = RH.findExitTile(this.grid);
-		const monsterCoords = this.livingMonsters().map((m) => m.state.coord);
-		const target = RH.decideMovementTarget(
-			unit.archetype,
-			self,
-			others,
-			chestInfos,
-			targetItemId,
-			exitCoord,
-			monsterCoords,
-			unit.memory ?? null,
-		);
-
-		const targetCombatant = others.find(
-			(o) => o.coord.x === target.x && o.coord.y === target.y,
-		);
-		const wouldDeclineOnArrival =
-			targetCombatant !== undefined &&
-			!RH.decideEngagement(unit.archetype, self, targetCombatant);
-
-		if (!wouldDeclineOnArrival) {
-			this.showFeedback(`🤔 ${this.getUnitLabel(unit)} avoids a fight`);
-			const visibleTraps = this.mapController.trapSystem.visibleTo(
-				unit.state.id,
-				unit.state.coord,
-				unit.state.characterClass === "hunter",
-			);
-			const blocked = new Set([
-				...others.map((o) => RH.coordKey(o.coord)),
-				...this.livingMonsterCoords().map(RH.coordKey),
-				...visibleTraps.map((t) => RH.coordKey(t.coord)),
-			]);
-
-			// Uncapped range purely to read the real, wall-aware path distance to
-			// the target — not a straight-line guess, which could send AI toward
-			// a card it doesn't actually need if the direct route is blocked.
-			const uncappedRange = RH.computeMovementRange(
-				this.grid,
-				unit.state.coord,
-				this.grid.width * this.grid.height,
-				blocked,
-			);
-			const distanceNeeded =
-				uncappedRange.get(RH.coordKey(target))?.distance ??
-				Math.abs(target.x - unit.state.coord.x) +
-					Math.abs(target.y - unit.state.coord.y);
-
-			const moveCard = RH.decideMovementCard(
-				unit.state.hand,
-				unit.state.stats.movement,
-				distanceNeeded,
-			);
-			const cardBonus =
-				typeof moveCard?.value === "number" ? moveCard.value : 0;
-			const moveBudget = unit.state.stats.movement + cardBonus;
-
-			const threatOwners = this.buildThreatZoneOwners(unit.state.id);
-			const range = RH.computeMovementRangeWeighted(
-				this.grid,
-				unit.state.coord,
-				moveBudget,
-				blocked,
-				threatOwners,
-				unit.state.stats,
-				unit.archetype,
-			);
-			const reachable =
-				RH.findNearestReachableTile(this.grid, range, target, blocked) ??
-				unit.state.coord;
-			const path = RH.getPathTo(range, reachable) ?? [];
-
-			const threatFraction = RH.computePathThreatFraction(
-				this.grid,
-				path,
-				threatOwners,
-				unit.state.stats,
-				unit.state.currentHp,
-			);
-			const tooRisky =
-				threatFraction > RH.ARCHETYPE_ZOC_REFUSAL_THRESHOLD[unit.archetype];
-			if (tooRisky) {
-				this.showFeedback(
-					`⚠️ ${this.getUnitLabel(unit)} avoids a zone of control`,
-				);
-			}
-
-			if (path.length > 0 && !tooRisky) {
-				const cardType = moveCard?.color ?? "none";
-				if (unit.turnManager.beginMovement(cardType, cardBonus)) {
-					if (moveCard) {
-						const idx = unit.state.hand.findIndex((c) => c.id === moveCard.id);
-						if (idx !== -1) unit.state.hand.splice(idx, 1);
-					}
-
-					if (moveCard?.actionType === "defense") {
-						const v = moveCard.value;
-						if (typeof v === "number" || v === "A" || v === "C") {
-							unit.state.temporaryStatBonus.defense = v;
-						}
-					} else {
-						unit.state.temporaryStatBonus.movement = cardBonus;
-					}
-
-					const { truncatedPath, hazardHit, resists } =
-						this.mapController.trapSystem.resolveAlongPath(
-							path,
-							unit.state.stats,
-							unit.state.temporaryStatBonus.defense,
-						);
-					for (const r of resists) {
-						this.showFeedback(
-							`🪤 ${this.getUnitLabel(unit)} resisted a hazard (${r.hazardRoll} vs ${r.victimRoll})`,
-						);
-					}
-
-					unit.state.coord =
-						truncatedPath.length > 0
-							? truncatedPath[truncatedPath.length - 1]
-							: unit.state.coord;
-					unit.turnManager.commitMove(truncatedPath.length);
-					this.showFeedback(
-						`🏃 ${this.getUnitLabel(unit)} moves toward its target`,
-					);
-					await this.moveEntityWithZoneStrikes(
-						{ state: unit.state, token: unit.mercenary },
-						truncatedPath,
-						this.getUnitLabel(unit),
-					);
-					if (hazardHit) {
-						this.mapController.applyHazardEffect(
-							unit,
-							hazardHit.kind,
-							hazardHit.result,
-						);
-					}
-					this.mapController.refreshTrapMarkers();
-
-					// Stunned mid-move: still on tile, but no fight / fallback this turn.
-					// Counter stays so the *next* turn is also skipped at loop start.
-					if (unit.state.stunnedTurnsRemaining > 0) {
-						this.mapController.tryOpenChestAt(unit.state, unit.state.coord);
-						await this.checkWinCondition(unit);
-						this.activeAi = null;
-						this.camera.unlock();
-						return;
-					}
-				}
-			}
-		}
-
-		this.mapController.tryOpenChestAt(unit.state, unit.state.coord);
-		await this.checkWinCondition(unit);
-
-		const selfAfter = this.toCombatant(unit.state);
-		const othersAfter = this.buildOtherCombatants(unit.state.id);
-		const selfForEngagement = { ...selfAfter, currentHp: preMoveHp };
-		const inRangeKeys = new Set(
-			this.adjacentTiles(unit.state.coord).map((c) => `${c.x},${c.y}`),
-		);
-
-		const victim = RH.pickEngagementTarget(
-			unit.archetype,
-			selfForEngagement,
-			othersAfter,
-			inRangeKeys,
-		);
-
-		if (victim) {
-			const victimUnit = this.units.find((u) => u.state.id === victim.id);
-			const canFight =
-				victimUnit &&
-				victimUnit.state.currentHp > 0 &&
-				unit.turnManager.spendAttack();
-
-			if (canFight && victimUnit) {
-				this.showFeedback(
-					`⚔ ${this.getUnitLabel(unit)} attacks ${this.getUnitLabel(victimUnit)}`,
-				);
-
-				if (victimUnit.pilot === "local") {
-					this.showTargetMarker(victimUnit.mercenary);
-					await this.delay(500);
-					this.hideTargetMarker();
-					await this.aiInitiateCombat(unit, victimUnit);
-				} else {
-					this.showTargetMarker(victimUnit.mercenary);
-					await this.delay(500);
-					this.hideTargetMarker();
-					await this.resolveAiVsAi(unit, victimUnit);
-				}
-			} else {
-				await this.runFallbackBehavior(unit, selfAfter, othersAfter);
-			}
-		} else {
-			await this.runFallbackBehavior(unit, selfAfter, othersAfter);
-		}
-
-		this.activeAi = null;
-		this.camera.unlock();
-	}
-
-	/**
-	 * A downed unit's own turn is entirely consumed recovering — no move, no attack,
-	 * nothing else. Heals to the reduced ceiling set at defeat time and stands back up.
-	 */
-	private async processRecoveryTurn(unit: PilotedMercenary): Promise<void> {
-		this.activeAi = unit;
-		await this.camera.panTo(
-			{ x: unit.mercenary.view.x, y: unit.mercenary.view.y },
-			500,
-			this.game.app.screen.width,
-			this.game.app.screen.height,
-		);
-
-		unit.state.currentHp = 1;
-		this.showFeedback(
-			`✨ ${this.getUnitLabel(unit)} recovers and gets back up`,
-		);
-
-		this.activeAi = null;
-		this.camera.unlock();
-	}
-
-	private async runFallbackBehavior(
-		unit: PilotedMercenary,
-		selfAfter: RH.AiCombatant,
-		othersAfter: RH.AiCombatant[],
-	): Promise<void> {
-		if (!unit.archetype || !unit.memory) return;
-
-		const adjacentThreats = othersAfter.filter((o) =>
-			RH.isAdjacent(unit.state.coord, o.coord),
-		);
-		const fallback = RH.decideFallbackAction(
-			selfAfter,
-			adjacentThreats,
-			unit.archetype,
-			unit.turnManager.canDisengage,
-			unit.turnManager.canRest,
-		);
-		if (fallback === "rest") {
-			const restDrawn = unit.turnManager.spendRest();
-			if (restDrawn) {
-				unit.state.hand.push(...restDrawn);
-				RH.clearFleeMemory(unit.memory);
-				this.showFeedback(`💤 ${unit.archetype} hunter rests`);
-			}
-		} else if (fallback === "retreat" && unit.turnManager.beginDisengage()) {
-			const retreatBlocked = new Set(
-				othersAfter.map((o) => RH.coordKey(o.coord)),
-			);
-			const retreatRange = RH.computeMovementRange(
-				this.grid,
-				unit.state.coord,
-				unit.state.stats.movement,
-				retreatBlocked,
-			);
-			const retreatFrom = unit.state.coord;
-			const retreatTile = RH.pickRetreatTile(
-				retreatRange,
-				adjacentThreats[0].coord,
-				retreatFrom,
-				unit.memory,
-			);
-			if (retreatTile) {
-				const retreatPath = RH.getPathTo(retreatRange, retreatTile) ?? [];
-				if (retreatPath.length > 0) {
-					this.showFeedback(`💨 ${this.getUnitLabel(unit)} uses Disengage`);
-					unit.state.coord = retreatTile;
-					RH.recordFlee(unit.memory, retreatFrom, retreatTile);
-					// No applyZoneStrikes — Disengage is ZoC-immune, that's its whole point.
-					await unit.mercenary.moveAlongPath(retreatPath);
-				}
-			}
-		}
-	}
-
-	/**
-	 * Fires exactly once, the first round the shared deck genuinely
-	 * runs dry — warning, screen shake, then the boss spawns far from
-	 * every living hunter.
-	 */
-	private async checkDeckExhaustion(): Promise<void> {
-		if (this.tutorialConfig) return;
-		if (this.game.session.bossSpawned) return;
-		if ((this.game.session.sharedDeck?.length ?? 1) > 0) return;
-
-		this.game.session.bossSpawned = true;
-
-		this.showFeedback(
-			"⚠️ The deck is exhausted — something massive has arrived.",
-		);
-		this.audio.play("boss-theme", "/audio/boss-theme.mp3", {
-			loop: true,
-			volume: 0.6,
-		});
-
-		const SHAKE_MS = 5000;
-		await Promise.all([
-			this.hud.showBossAlert(SHAKE_MS),
-			Promise.race([
-				this.camera.shake(SHAKE_MS, 24),
-				this.delay(SHAKE_MS + 500),
-			]),
-		]);
-
-		const used = new Set<string>(
-			this.units.map((u) => RH.coordKey(u.state.coord)),
-		);
-		for (const key of this.mapController.monsterSystem.occupiedCoordKeys())
-			used.add(key);
-		const coord = this.pickEnemySpawnTile(used);
-		if (!coord) return;
-
-		const boss = this.mapController.monsterSystem.spawnBoss(coord);
-		this.showFeedback("👹 The boss has entered the map.");
-
-		const PAN_MS = 900;
-		await Promise.race([
-			this.camera.panTo(
-				{ x: boss.token.view.x, y: boss.token.view.y },
-				PAN_MS,
-				this.game.app.screen.width,
-				this.game.app.screen.height,
-			),
-			this.delay(PAN_MS + 500),
-		]);
-
-		await this.delay(1000);
-	}
-
-	private async processMonsterTurns(): Promise<void> {
-		const MONSTER_DELAY_MS = 1000;
-		let isFirst = true;
-
-		for (const monster of this.livingMonsters()) {
-			if (monster === this.mapController.monsterSystem.bossEntity) continue;
-			if (!isFirst) await this.delay(MONSTER_DELAY_MS);
-			isFirst = false;
-			await this.processOneMonsterTurn(monster);
-		}
-	}
-
-	private async processOneMonsterTurn(monster: MonsterEntity): Promise<void> {
-		if (monster.state.stunnedTurnsRemaining > 0) {
-			monster.state.stunnedTurnsRemaining -= 1;
-			this.showFeedback(
-				`🪤 A ${monster.state.tier} monster is stunned and skips its turn`,
-			);
-			return;
-		}
-		this.activeMonster = monster;
-		this.camera.centerOn(
-			{ x: monster.token.view.x, y: monster.token.view.y },
-			this.game.app.screen.width,
-			this.game.app.screen.height,
-		);
-
-		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
-		const hunters: RH.MonsterTargetCandidate[] = this.units
-			.filter((u) => u.state.currentHp > 0)
-			.map((u) => ({
-				id: u.state.id,
-				coord: u.state.coord,
-				stats: u.state.stats,
-				currentHp: u.state.currentHp,
-				isCarryingTarget: targetItemId
-					? u.state.items.some((i) => i?.id === targetItemId)
-					: false,
-			}));
-		const targetCandidate = RH.decideMonsterTarget(monster.state, hunters);
-		if (!targetCandidate) {
-			this.activeMonster = null;
-			return;
-		}
-
-		const targetUnit = this.units.find(
-			(u) => u.state.id === targetCandidate.id,
-		);
-		if (!targetUnit) {
-			this.activeMonster = null;
-			return;
-		}
-
-		const isAdjacentNow = RH.isAdjacent(
-			monster.state.coord,
-			targetUnit.state.coord,
-		);
-
-		if (!isAdjacentNow) {
-			const blocked = new Set([
-				...this.units
-					.filter((u) => u.state.currentHp > 0)
-					.map((u) => RH.coordKey(u.state.coord)),
-				...this.livingMonsterCoords()
-					.filter(
-						(c) =>
-							!(c.x === monster.state.coord.x && c.y === monster.state.coord.y),
-					)
-					.map(RH.coordKey),
-			]);
-			const range = RH.computeMovementRange(
-				this.grid,
-				monster.state.coord,
-				monster.state.stats.movement,
-				blocked,
-			);
-			const reachable =
-				RH.findNearestReachableTile(
-					this.grid,
-					range,
-					targetUnit.state.coord,
-					blocked,
-				) ?? monster.state.coord;
-			const path = RH.getPathTo(range, reachable) ?? [];
-
-			if (path.length > 0) {
-				monster.state.coord = reachable;
-				await this.moveEntityWithZoneStrikes(
-					monster,
-					path,
-					`A ${monster.state.tier} monster`,
-				);
-			}
-		}
-
-		if (RH.isAdjacent(monster.state.coord, targetUnit.state.coord)) {
-			await this.monsterAttack(monster, targetUnit);
-		}
-
-		this.activeMonster = null;
-	}
-
-	private async monsterAttack(
-		monster: MonsterEntity,
-		target: PilotedMercenary,
-	): Promise<void> {
-		await this.mapController.monsterAttack(monster, target);
-	}
-
-	private async aiInitiateCombat(
-		attacker: PilotedMercenary,
-		defender: PilotedMercenary,
-	): Promise<void> {
-		await this.mapController.aiInitiateCombat(attacker, defender);
-	}
-
-	private async resolveAiVsAi(
-		attacker: PilotedMercenary,
-		defender: PilotedMercenary,
-	): Promise<void> {
-		await this.mapController.resolveAiVsAi(attacker, defender);
-	}
 
 	// ---------- Spawn ----------
 
@@ -1826,7 +1286,7 @@ export class MapScene implements Scene, TutorialPort {
 		if (
 			this.localUnit.mercenary.isAnimating ||
 			this.exitCardInProgress ||
-			this.processingEnemyTurns ||
+			this.aiTurnController.processingEnemyTurns ||
 			this.cardDrawQueue.isActive
 		) {
 			return;
@@ -1840,7 +1300,7 @@ export class MapScene implements Scene, TutorialPort {
 		this.turnsTaken++;
 		this.tutorialConfig?.onTutorialEvent({ type: "turnEnded" });
 		this.trySpawnMonster();
-		void this.processEnemyTurns();
+		void this.aiTurnController.processEnemyTurns();
 	}
 
 	// ---------- Input ----------
@@ -1907,7 +1367,7 @@ export class MapScene implements Scene, TutorialPort {
 			return;
 		}
 		if (this.game.overlays.isOpen) return;
-		if (this.processingEnemyTurns) return;
+		if (this.aiTurnController.processingEnemyTurns) return;
 		if (this.cardDrawQueue.isActive) {
 			this.cardDrawQueue.tryCollect();
 			return;
