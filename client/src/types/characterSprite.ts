@@ -1,9 +1,7 @@
 /**
- * Character sprite types — map tokens only for phase 1.
- * Matches docs/15-character-sprite-system-design.md.
+ * Character sprite types — full-sheet atlas (128×128 cells).
  */
 
-/** Eight compass facings. Art is authored for SE; others via rotation table + flipX. */
 export type CharacterDirection =
 	| "n"
 	| "ne"
@@ -14,10 +12,6 @@ export type CharacterDirection =
 	| "w"
 	| "nw";
 
-/**
- * Animations we expect to generate. Phase 1 only needs idle + walk on the map;
- * combat names are reserved so sheets can be authored once.
- */
 export type CharacterAnimation =
 	| "idle"
 	| "walk"
@@ -29,39 +23,90 @@ export type CharacterAnimation =
 	| "defeated"
 	| "victory";
 
-/** Native frame size — matches TILE_WIDTH (64) footprint, tall humanoid. */
-export const SPRITE_FRAME_WIDTH = 64;
-export const SPRITE_FRAME_HEIGHT = 96;
+/** Cell size for the current Brawler full sheet. */
+export const SPRITE_FRAME_WIDTH = 128;
+export const SPRITE_FRAME_HEIGHT = 128;
+
+/** Map display scale — 128px body on 64×32 tiles. */
+export const MAP_SPRITE_SCALE = 0.5;
 
 export interface AnimationSheetSpec {
-	/** Frames in this strip (left → right). */
 	frameCount: number;
-	/** Frame rate while playing. */
 	fps: number;
-	/** Loop unless combat one-shots. */
 	loop: boolean;
+	frameWidth?: number;
+	frameHeight?: number;
 }
 
-/** Default playback specs — tune once real PixelLab strips land. */
 export const DEFAULT_ANIMATION_SPECS: Record<
 	CharacterAnimation,
 	AnimationSheetSpec
 > = {
-	idle: { frameCount: 4, fps: 6, loop: true },
-	walk: { frameCount: 6, fps: 10, loop: true },
-	run: { frameCount: 6, fps: 12, loop: true },
-	attack: { frameCount: 5, fps: 12, loop: false },
-	critical: { frameCount: 5, fps: 12, loop: false },
-	hit: { frameCount: 3, fps: 10, loop: false },
-	stunned: { frameCount: 4, fps: 6, loop: true },
-	defeated: { frameCount: 4, fps: 8, loop: false },
-	victory: { frameCount: 4, fps: 8, loop: false },
+	idle: {
+		frameCount: 12,
+		fps: 8,
+		loop: true,
+		frameWidth: 128,
+		frameHeight: 128,
+	},
+	walk: {
+		frameCount: 12,
+		fps: 10,
+		loop: true,
+		frameWidth: 128,
+		frameHeight: 128,
+	},
+	run: {
+		frameCount: 12,
+		fps: 12,
+		loop: true,
+		frameWidth: 128,
+		frameHeight: 128,
+	},
+	attack: {
+		frameCount: 12,
+		fps: 12,
+		loop: false,
+		frameWidth: 128,
+		frameHeight: 128,
+	},
+	critical: {
+		frameCount: 12,
+		fps: 12,
+		loop: false,
+		frameWidth: 128,
+		frameHeight: 128,
+	},
+	hit: {
+		frameCount: 4,
+		fps: 10,
+		loop: false,
+		frameWidth: 128,
+		frameHeight: 128,
+	},
+	stunned: {
+		frameCount: 4,
+		fps: 6,
+		loop: true,
+		frameWidth: 128,
+		frameHeight: 128,
+	},
+	defeated: {
+		frameCount: 4,
+		fps: 8,
+		loop: false,
+		frameWidth: 128,
+		frameHeight: 128,
+	},
+	victory: {
+		frameCount: 4,
+		fps: 8,
+		loop: false,
+		frameWidth: 128,
+		frameHeight: 128,
+	},
 };
 
-/**
- * Classes that will eventually have sheets. First pass: brawler only.
- * Keep the union wide so the registry can grow without API churn.
- */
 export type SpriteCharacterClass =
 	| "brawler"
 	| "hunter"
@@ -71,7 +116,6 @@ export type SpriteCharacterClass =
 	| "summoner"
 	| "trapper";
 
-/** Narrow shared class strings into a sprite key; unknown → brawler. */
 export function toSpriteCharacterClass(
 	characterClass: string | null | undefined,
 ): SpriteCharacterClass {

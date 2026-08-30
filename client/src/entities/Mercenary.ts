@@ -13,17 +13,8 @@ const SPHERE_RADIUS = 12;
 const MOVE_DURATION_PER_TILE_MS = 180;
 
 /**
- * Animated on-screen hunter token. Visual only — real position lives in MercenaryState.
- * Moves as one continuous ease across the whole path, not tile-by-tile.
- *
- * Visual children:
- * - ground shadow (Graphics)
- * - CharacterSprite (sheet), when assets load
- * - placeholder sphere body, hidden once the sheet is ready
- *
- * @param initialCoord - starting grid position
- * @param characterClass - sheet folder under assets/characters/{class}/
- * @param bodyColor - placeholder sphere fill until the sheet loads
+ * Animated on-screen hunter token. Visual only — position lives in MercenaryState.
+ * Children: ground shadow, CharacterSprite, placeholder sphere (hidden when sheet loads).
  */
 export class Mercenary {
 	readonly view = new Container();
@@ -40,7 +31,7 @@ export class Mercenary {
 	private readonly sprite: CharacterSprite;
 	private spriteReady = false;
 
-	/** Last grid step used for facing (updated when a path plays). */
+	/** Active move grid path — drives mid-path facing. */
 	private lastPathCoords: GridCoord[] = [];
 
 	constructor(
@@ -61,9 +52,7 @@ export class Mercenary {
 
 		void this.sprite.init().then((ok) => {
 			this.spriteReady = ok;
-			if (ok) {
-				this.placeholder.visible = false;
-			}
+			if (ok) this.placeholder.visible = false;
 		});
 
 		this.syncPosition();
@@ -73,11 +62,10 @@ export class Mercenary {
 		return this._isAnimating;
 	}
 
-	/**
-	 * Animate across the whole path with one ease curve.
-	 * Plays walk (run strip interim) for the duration, idle on complete.
-	 */
-	moveAlongPath(path: GridCoord[], durationMsOverride?: number): Promise<void> {
+	moveAlongPath(
+		path: GridCoord[],
+		durationMsOverride?: number,
+	): Promise<void> {
 		return new Promise((resolve) => {
 			if (path.length === 0 || this._isAnimating) {
 				resolve();
@@ -103,9 +91,6 @@ export class Mercenary {
 		});
 	}
 
-	/**
-	 * Instant relocate (teleports). Snaps facing unchanged; back to idle pose.
-	 */
 	setPositionInstant(screenPos: { x: number; y: number }): void {
 		this.currentScreenPos = { ...screenPos };
 		this.syncPosition();
@@ -114,7 +99,6 @@ export class Mercenary {
 		}
 	}
 
-	/** Advance path lerp + sprite frames — call once per frame. */
 	update(deltaTime: number): void {
 		if (this.spriteReady) {
 			this.sprite.update(deltaTime);
@@ -123,7 +107,6 @@ export class Mercenary {
 		if (!this._isAnimating || this.animPoints.length < 2) return;
 
 		this.animElapsedMs += (deltaTime / 60) * 1000;
-
 		const t = Math.min(this.animElapsedMs / this.animDurationMs, 1);
 		const eased = easeInOutCubic(t);
 
@@ -135,8 +118,6 @@ export class Mercenary {
 		}
 
 		if (t >= 1) {
-			// ... existing snap / idle / callback ...
-			this.lastPathCoords = []; // clear when done
 			const final = this.animPoints[this.animPoints.length - 1]!;
 			this.currentScreenPos = { x: final.x, y: final.y };
 			this.syncPosition();
@@ -145,6 +126,7 @@ export class Mercenary {
 			this.animPoints = [];
 			this.animElapsedMs = 0;
 			this.animDurationMs = 0;
+			this.lastPathCoords = [];
 
 			if (this.spriteReady) {
 				void this.sprite.play("idle");
@@ -159,21 +141,12 @@ export class Mercenary {
 	private applyFacingFromPath(path: GridCoord[]): void {
 		if (path.length >= 2) {
 			this.sprite.setDirection(getCharacterDirection(path[0]!, path[1]!));
-			return;
 		}
-		// Single tile: face from current screen toward that tile is awkward without
-		// a from-coord; leave facing as-is.
 	}
 
-	/**
-	 * Which path segment we're on from progress t ∈ [0,1].
-	 * animPoints = [startScreen, ...pathScreens], so segment i (1..path.length)
-	 * corresponds to entering path[i-1].
-	 */
 	private updateFacingForProgress(t: number): void {
 		if (this.lastPathCoords.length < 2 || this.animPoints.length < 2) return;
 
-		// Same length-based progress as interpolatePolyline
 		const points = this.animPoints;
 		const lengths: number[] = [0];
 		let total = 0;
@@ -195,8 +168,6 @@ export class Mercenary {
 			segmentIndex = i;
 		}
 
-		// segmentIndex 1 = moving toward path[0] from start (unknown grid)
-		// segmentIndex k (k>=2) = moving path[k-2] → path[k-1]
 		if (segmentIndex >= 2) {
 			const from = this.lastPathCoords[segmentIndex - 2]!;
 			const to = this.lastPathCoords[segmentIndex - 1]!;
@@ -215,12 +186,11 @@ export class Mercenary {
 
 	private drawShadow(): Graphics {
 		const g = new Graphics();
-		g.ellipse(0, 4, SPHERE_RADIUS * 0.8, SPHERE_RADIUS * 0.3);
+		g.ellipse(0, 4, SPHERE_RADIUS * 0.9, SPHERE_RADIUS * 0.35);
 		g.fill({ color: 0x000000, alpha: 0.35 });
 		return g;
 	}
 
-	/** Sphere body only — no second shadow (shadow is a sibling). */
 	private drawPlaceholderBody(): Graphics {
 		const g = new Graphics();
 		g.circle(0, -SPHERE_RADIUS, SPHERE_RADIUS);
@@ -231,7 +201,6 @@ export class Mercenary {
 	}
 }
 
-/** Point along a polyline at normalized t, constant speed via cumulative segment lengths. */
 export function interpolatePolyline(
 	points: { x: number; y: number }[],
 	t: number,
@@ -248,11 +217,9 @@ export function interpolatePolyline(
 		total += Math.sqrt(dx * dx + dy * dy);
 		lengths.push(total);
 	}
-
 	if (total === 0) return { ...points[0]! };
 
 	const targetDist = t * total;
-
 	for (let i = 1; i < lengths.length; i++) {
 		if (targetDist <= lengths[i]!) {
 			const segStart = lengths[i - 1]!;
@@ -266,6 +233,5 @@ export function interpolatePolyline(
 			};
 		}
 	}
-
 	return { ...points[points.length - 1]! };
 }
