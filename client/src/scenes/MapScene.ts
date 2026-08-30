@@ -1007,6 +1007,7 @@ export class MapScene implements Scene, TutorialPort {
 			);
 			const mercenary = new Mercenary(
 				coord,
+				state.characterClass, // or aiClass
 				MapScene.ENEMY_COLORS[i] ?? 0xe67e22,
 			);
 			this.mercenaryContainer.addChild(mercenary.view);

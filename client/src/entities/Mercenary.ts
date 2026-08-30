@@ -1,7 +1,13 @@
 import { Container, Graphics } from "pixi.js";
-import { GridCoord } from "@relic-hunter/shared";
-import { gridToScreen } from "../math/isoGridMath";
+import type { GridCoord } from "@relic-hunter/shared";
+import { gridToScreen } from "@/math/isoGridMath";
 import { easeInOutCubic } from "@/math/easeInOutCubic";
+import { CharacterSprite } from "@/entities/CharacterSprite";
+import {
+	toSpriteCharacterClass,
+	type SpriteCharacterClass,
+} from "@/types/characterSprite";
+import { getCharacterDirection } from "@/math/characterDirection";
 
 const SPHERE_RADIUS = 12;
 const MOVE_DURATION_PER_TILE_MS = 180;
@@ -9,14 +15,19 @@ const MOVE_DURATION_PER_TILE_MS = 180;
 /**
  * Animated on-screen hunter token. Visual only — real position lives in MercenaryState.
  * Moves as one continuous ease across the whole path, not tile-by-tile.
+ *
+ * Visual children:
+ * - ground shadow (Graphics)
+ * - CharacterSprite (sheet), when assets load
+ * - placeholder sphere body, hidden once the sheet is ready
+ *
  * @param initialCoord - starting grid position
- * @param bodyColor - sphere fill color, defaults to player red
- * @author ShaAnder
+ * @param characterClass - sheet folder under assets/characters/{class}/
+ * @param bodyColor - placeholder sphere fill until the sheet loads
  */
 export class Mercenary {
 	readonly view = new Container();
 
-	// Animation state — polyline is [startPos, ...pathTiles]
 	private currentScreenPos: { x: number; y: number };
 	private animPoints: { x: number; y: number }[] = [];
 	private animElapsedMs = 0;
@@ -24,32 +35,57 @@ export class Mercenary {
 	private onPathComplete: (() => void) | null = null;
 	private _isAnimating = false;
 
+	private readonly shadow: Graphics;
+	private readonly placeholder: Graphics;
+	private readonly sprite: CharacterSprite;
+	private spriteReady = false;
+
+	/** Last grid step used for facing (updated when a path plays). */
+	private lastPathCoords: GridCoord[] = [];
+
 	constructor(
 		initialCoord: GridCoord,
+		characterClass: string | SpriteCharacterClass = "brawler",
 		private bodyColor: number = 0xe74c3c,
 	) {
 		this.currentScreenPos = gridToScreen(initialCoord);
-		this.view.addChild(this.drawSphere());
+
+		this.shadow = this.drawShadow();
+		this.view.addChild(this.shadow);
+
+		this.sprite = new CharacterSprite(toSpriteCharacterClass(characterClass));
+		this.view.addChild(this.sprite.view);
+
+		this.placeholder = this.drawPlaceholderBody();
+		this.view.addChild(this.placeholder);
+
+		void this.sprite.init().then((ok) => {
+			this.spriteReady = ok;
+			if (ok) {
+				this.placeholder.visible = false;
+			}
+		});
+
 		this.syncPosition();
 	}
 
-	/** True while a move animation is in progress. */
 	get isAnimating(): boolean {
 		return this._isAnimating;
 	}
 
 	/**
 	 * Animate across the whole path with one ease curve.
-	 * @param path - tiles to visit in order
-	 * @param durationMsOverride - explicit duration, for non-walked flights (e.g. Exit card)
+	 * Plays walk (run strip interim) for the duration, idle on complete.
 	 */
 	moveAlongPath(path: GridCoord[], durationMsOverride?: number): Promise<void> {
 		return new Promise((resolve) => {
-			// Empty path or already animating: resolve immediately, don't hang
 			if (path.length === 0 || this._isAnimating) {
 				resolve();
 				return;
 			}
+
+			this.lastPathCoords = path;
+			this.applyFacingFromPath(path);
 
 			this.animPoints = [
 				{ ...this.currentScreenPos },
@@ -60,22 +96,30 @@ export class Mercenary {
 				durationMsOverride ?? path.length * MOVE_DURATION_PER_TILE_MS;
 			this._isAnimating = true;
 			this.onPathComplete = resolve;
+
+			if (this.spriteReady) {
+				void this.sprite.play("walk");
+			}
 		});
 	}
 
 	/**
-	 * Instantly relocates the token, bypassing animation — used for teleports,
-	 * where there's no path to walk, just an immediate repositioning.
-	 * Keeps the internal tracked position in sync with the view, so a
-	 * LATER animation (the unit's next move) doesn't start from stale pre-teleport data.
+	 * Instant relocate (teleports). Snaps facing unchanged; back to idle pose.
 	 */
 	setPositionInstant(screenPos: { x: number; y: number }): void {
 		this.currentScreenPos = { ...screenPos };
 		this.syncPosition();
+		if (this.spriteReady) {
+			void this.sprite.play("idle");
+		}
 	}
 
-	/** Advance the animation — call once per frame. */
+	/** Advance path lerp + sprite frames — call once per frame. */
 	update(deltaTime: number): void {
+		if (this.spriteReady) {
+			this.sprite.update(deltaTime);
+		}
+
 		if (!this._isAnimating || this.animPoints.length < 2) return;
 
 		this.animElapsedMs += (deltaTime / 60) * 1000;
@@ -86,9 +130,14 @@ export class Mercenary {
 		this.currentScreenPos = interpolatePolyline(this.animPoints, eased);
 		this.syncPosition();
 
+		if (this.spriteReady) {
+			this.updateFacingForProgress(eased);
+		}
+
 		if (t >= 1) {
-			// Snap to kill float drift
-			const final = this.animPoints[this.animPoints.length - 1];
+			// ... existing snap / idle / callback ...
+			this.lastPathCoords = []; // clear when done
+			const final = this.animPoints[this.animPoints.length - 1]!;
 			this.currentScreenPos = { x: final.x, y: final.y };
 			this.syncPosition();
 
@@ -97,31 +146,87 @@ export class Mercenary {
 			this.animElapsedMs = 0;
 			this.animDurationMs = 0;
 
+			if (this.spriteReady) {
+				void this.sprite.play("idle");
+			}
+
 			const cb = this.onPathComplete;
 			this.onPathComplete = null;
 			cb?.();
 		}
 	}
 
-	/** Push tracked position onto the Pixi view. */
+	private applyFacingFromPath(path: GridCoord[]): void {
+		if (path.length >= 2) {
+			this.sprite.setDirection(getCharacterDirection(path[0]!, path[1]!));
+			return;
+		}
+		// Single tile: face from current screen toward that tile is awkward without
+		// a from-coord; leave facing as-is.
+	}
+
+	/**
+	 * Which path segment we're on from progress t ∈ [0,1].
+	 * animPoints = [startScreen, ...pathScreens], so segment i (1..path.length)
+	 * corresponds to entering path[i-1].
+	 */
+	private updateFacingForProgress(t: number): void {
+		if (this.lastPathCoords.length < 2 || this.animPoints.length < 2) return;
+
+		// Same length-based progress as interpolatePolyline
+		const points = this.animPoints;
+		const lengths: number[] = [0];
+		let total = 0;
+		for (let i = 1; i < points.length; i++) {
+			const dx = points[i]!.x - points[i - 1]!.x;
+			const dy = points[i]!.y - points[i - 1]!.y;
+			total += Math.sqrt(dx * dx + dy * dy);
+			lengths.push(total);
+		}
+		if (total === 0) return;
+
+		const targetDist = Math.min(1, Math.max(0, t)) * total;
+		let segmentIndex = 1;
+		for (let i = 1; i < lengths.length; i++) {
+			if (targetDist <= lengths[i]!) {
+				segmentIndex = i;
+				break;
+			}
+			segmentIndex = i;
+		}
+
+		// segmentIndex 1 = moving toward path[0] from start (unknown grid)
+		// segmentIndex k (k>=2) = moving path[k-2] → path[k-1]
+		if (segmentIndex >= 2) {
+			const from = this.lastPathCoords[segmentIndex - 2]!;
+			const to = this.lastPathCoords[segmentIndex - 1]!;
+			this.sprite.setDirection(getCharacterDirection(from, to));
+		} else if (this.lastPathCoords.length >= 2) {
+			this.sprite.setDirection(
+				getCharacterDirection(this.lastPathCoords[0]!, this.lastPathCoords[1]!),
+			);
+		}
+	}
+
 	private syncPosition(): void {
 		this.view.x = this.currentScreenPos.x;
 		this.view.y = this.currentScreenPos.y;
 	}
 
-	/** Placeholder sphere until the sprite sheet lands. */
-	private drawSphere(): Graphics {
+	private drawShadow(): Graphics {
 		const g = new Graphics();
-
 		g.ellipse(0, 4, SPHERE_RADIUS * 0.8, SPHERE_RADIUS * 0.3);
 		g.fill({ color: 0x000000, alpha: 0.35 });
+		return g;
+	}
 
+	/** Sphere body only — no second shadow (shadow is a sibling). */
+	private drawPlaceholderBody(): Graphics {
+		const g = new Graphics();
 		g.circle(0, -SPHERE_RADIUS, SPHERE_RADIUS);
 		g.fill(this.bodyColor);
-
 		g.circle(-SPHERE_RADIUS * 0.3, -SPHERE_RADIUS * 1.4, SPHERE_RADIUS * 0.4);
 		g.fill({ color: 0xffffff, alpha: 0.5 });
-
 		return g;
 	}
 }
@@ -132,29 +237,29 @@ export function interpolatePolyline(
 	t: number,
 ): { x: number; y: number } {
 	if (points.length === 0) return { x: 0, y: 0 };
-	if (t <= 0) return { ...points[0] };
-	if (t >= 1) return { ...points[points.length - 1] };
+	if (t <= 0) return { ...points[0]! };
+	if (t >= 1) return { ...points[points.length - 1]! };
 
 	const lengths: number[] = [0];
 	let total = 0;
 	for (let i = 1; i < points.length; i++) {
-		const dx = points[i].x - points[i - 1].x;
-		const dy = points[i].y - points[i - 1].y;
+		const dx = points[i]!.x - points[i - 1]!.x;
+		const dy = points[i]!.y - points[i - 1]!.y;
 		total += Math.sqrt(dx * dx + dy * dy);
 		lengths.push(total);
 	}
 
-	if (total === 0) return { ...points[0] };
+	if (total === 0) return { ...points[0]! };
 
 	const targetDist = t * total;
 
 	for (let i = 1; i < lengths.length; i++) {
-		if (targetDist <= lengths[i]) {
-			const segStart = lengths[i - 1];
-			const segLen = lengths[i] - segStart;
+		if (targetDist <= lengths[i]!) {
+			const segStart = lengths[i - 1]!;
+			const segLen = lengths[i]! - segStart;
 			const localT = segLen === 0 ? 0 : (targetDist - segStart) / segLen;
-			const a = points[i - 1];
-			const b = points[i];
+			const a = points[i - 1]!;
+			const b = points[i]!;
 			return {
 				x: a.x + (b.x - a.x) * localT,
 				y: a.y + (b.y - a.y) * localT,
@@ -162,5 +267,5 @@ export function interpolatePolyline(
 		}
 	}
 
-	return { ...points[points.length - 1] };
+	return { ...points[points.length - 1]! };
 }
