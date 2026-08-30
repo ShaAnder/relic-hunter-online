@@ -3,12 +3,7 @@ import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
 import { CameraController } from "@/core/cameras/CameraController";
 import { MapRenderer } from "@/rendering/MapRenderer";
-import {
-	gridToScreen,
-	screenToGrid,
-	TILE_WIDTH,
-	TILE_HEIGHT,
-} from "@/math/isoGridMath";
+import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
 import { computeUiScale, uiPx } from "@/math/uiScale";
 import { Mercenary } from "@/entities/Mercenary";
 
@@ -30,7 +25,6 @@ import type {
 	TutorialConfig,
 	TutorialUiPointerTarget,
 } from "@/tutorial/tutorialTypes";
-import { MatchResultScene } from "./MatchResultScene";
 import { getActiveHunterWorldPos } from "@/core/cameras/TurnCamera";
 import { PlayZone } from "@/ui/PlayZone";
 import type { PilotedMercenary, MovableToken } from "@/types/entities";
@@ -41,6 +35,12 @@ import { ChestSystem } from "@/systems/ChestSystem";
 import { ExitRelicSystem } from "@/systems/ExitRelicSystem";
 import { ZoneQuery } from "@/systems/ZoneQuery";
 import { TutorialMarkers } from "@/systems/TutorialMarkers";
+import { MatchController, isCarryingTarget } from "@/systems/MatchController";
+import { TargetingVisuals } from "@/systems/TargetingVisuals";
+import {
+	getScreenPoint as getScreenPointUtil,
+	screenPointToGrid as screenPointToGridUtil,
+} from "@/math/screenInput";
 import { TrapSystem } from "@/systems/TrapSystem";
 import type { MonsterEntity } from "@/types/entities";
 import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
@@ -91,8 +91,7 @@ export class MapScene implements Scene, TutorialPort {
 	// Targeting mode — active while choosing which enemy to attack
 	private targetingActive = false;
 
-	private targetReticle = new Graphics();
-	private attackRangeContainer = new Container();
+	private targetingVisuals = new TargetingVisuals();
 
 	private movePointerDragging = false;
 	private suppressNextClick = false;
@@ -149,6 +148,7 @@ export class MapScene implements Scene, TutorialPort {
 	private tutorialMarkers = new TutorialMarkers();
 
 	private battleHost: BattleHost;
+	private matchController: MatchController;
 
 	private audio = new AudioController();
 
@@ -254,6 +254,7 @@ export class MapScene implements Scene, TutorialPort {
 			);
 		}
 		this.battleHost = new BattleHost(this.game);
+		this.matchController = new MatchController(this.game);
 		// Item popup rides along as a child of the mercenary's own view,
 		// so it moves with the token automatically — no manual per-frame
 		// position syncing needed.
@@ -264,8 +265,7 @@ export class MapScene implements Scene, TutorialPort {
 		this.itemPopupText.anchor.set(0.5, 1);
 		this.itemPopup.addChild(this.itemPopupIcon, this.itemPopupText);
 
-		this.targetReticle.visible = false;
-		this.mercenaryContainer.addChild(this.targetReticle);
+		this.mercenaryContainer.addChild(this.targetingVisuals.reticleView);
 
 		if (!this.tutorialConfig || this.tutorialConfig.spawnChests) {
 			this.spawnChests();
@@ -325,7 +325,7 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.moveController = this.createMoveController();
 		this.boardContainer.addChild(this.moveController.view);
-		this.boardContainer.addChild(this.attackRangeContainer);
+		this.boardContainer.addChild(this.targetingVisuals.attackRangeView);
 
 		this.boardContainer.addChild(this.trapSystem.markerContainer);
 
@@ -1844,7 +1844,12 @@ export class MapScene implements Scene, TutorialPort {
 		if (unit.state.coord.x !== exitTile.x || unit.state.coord.y !== exitTile.y)
 			return;
 
-		if (this.isCarryingTarget(unit)) {
+		if (
+			isCarryingTarget(
+				unit.state.items,
+				this.game.session.chestPlan?.targetItem?.id,
+			)
+		) {
 			if (unit.pilot === "local") {
 				this.triggerWin();
 			} else {
@@ -1859,35 +1864,22 @@ export class MapScene implements Scene, TutorialPort {
 		await this.teleportEntity(unit.state, unit.mercenary);
 	}
 
-	/** Whether the given unit currently holds this match's target item. */
-	private isCarryingTarget(unit: PilotedMercenary): boolean {
-		const target = this.game.session.chestPlan?.targetItem;
-		if (!target) return false;
-		return unit.state.items.some((item) => item?.id === target.id);
-	}
-
 	/** Record the match result and transition to MatchResultScene. */
 	private triggerWin(): void {
-		this.game.session.matchResult = {
-			won: true,
-			turnsTaken: this.turnsTaken,
-			itemsExtracted: this.localUnit.state.items.filter((i) => i !== null)
-				.length,
-			hunterScores: this.buildHunterScoreEntries(),
-		};
-		void this.game.sceneManager.changeScene(new MatchResultScene(this.game));
+		this.matchController.triggerWin(
+			this.turnsTaken,
+			this.localUnit.state.items.filter((i) => i !== null).length,
+			this.buildHunterScoreEntries(),
+		);
 	}
 
 	/** An AI hunter reached the exit with the target first — a real loss, not a variant of winning. */
 	private triggerLoss(winner: PilotedMercenary): void {
 		this.showFeedback(`${this.getUnitLabel(winner)} escaped with the relic!`);
-		this.game.session.matchResult = {
-			won: false,
-			turnsTaken: this.turnsTaken,
-			itemsExtracted: 0,
-			hunterScores: this.buildHunterScoreEntries(),
-		};
-		void this.game.sceneManager.changeScene(new MatchResultScene(this.game));
+		this.matchController.triggerLoss(
+			this.turnsTaken,
+			this.buildHunterScoreEntries(),
+		);
 	}
 
 	// ---------- Actions ----------
@@ -1930,51 +1922,24 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.targetingActive = true;
 		this.game.app.canvas.style.cursor = "crosshair";
-		this.renderAttackRange();
+		this.targetingVisuals.showRange(
+			this.adjacentTiles(this.localUnit.state.coord),
+		);
 	}
 
 	private exitTargetingMode(): void {
 		this.targetingActive = false;
-		this.attackRangeContainer.removeChildren();
+		this.targetingVisuals.clearRange();
 		this.game.app.canvas.style.cursor = "default";
-	}
-
-	private renderAttackRange(): void {
-		this.attackRangeContainer.removeChildren();
-		const local = this.localUnit.state;
-
-		for (const coord of this.adjacentTiles(local.coord)) {
-			const pos = gridToScreen(coord);
-			const g = new Graphics();
-			g.poly([
-				0,
-				-TILE_HEIGHT / 2,
-				TILE_WIDTH / 2,
-				0,
-				0,
-				TILE_HEIGHT / 2,
-				-TILE_WIDTH / 2,
-				0,
-			]);
-			g.fill({ color: 0xffd700, alpha: 0.35 });
-			g.x = pos.x;
-			g.y = pos.y;
-			this.attackRangeContainer.addChild(g);
-		}
 	}
 
 	/** Points the shared marker at any entity's token — used by the player's manual targeting, and by any AI/monster/boss engagement preview. */
 	private showTargetMarker(target: { view: { x: number; y: number } }): void {
-		this.targetReticle.visible = true;
-		this.targetReticle.clear();
-		this.targetReticle.poly([0, 0, 8, -12, -8, -12]);
-		this.targetReticle.fill(0xffd700);
-		this.targetReticle.x = target.view.x;
-		this.targetReticle.y = target.view.y - 50;
+		this.targetingVisuals.showMarker(target);
 	}
 
 	private hideTargetMarker(): void {
-		this.targetReticle.visible = false;
+		this.targetingVisuals.hideMarker();
 	}
 
 	private tryStartCombat(unit: PilotedMercenary): void {
@@ -2899,9 +2864,8 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.spawnEnemyHunters();
 
-		this.targetReticle.visible = false;
-		this.mercenaryContainer.addChild(this.targetReticle);
-
+		this.targetingVisuals.hideMarker();
+		this.mercenaryContainer.addChild(this.targetingVisuals.reticleView);
 		this.game.session.chestPlan = null;
 		this.game.session.chestPlacements = null;
 		this.game.session.playerSpawn = null;
@@ -2933,23 +2897,12 @@ export class MapScene implements Scene, TutorialPort {
 
 	/** Convert a mouse event to canvas-local screen coordinates. */
 	private getScreenPoint(event: MouseEvent) {
-		const canvas = this.game.app.canvas;
-		const rect = canvas.getBoundingClientRect();
-		const scaleX = canvas.width / Math.max(1, rect.width);
-		const scaleY = canvas.height / Math.max(1, rect.height);
-		return {
-			screenX: (event.clientX - rect.left) * scaleX,
-			screenY: (event.clientY - rect.top) * scaleY,
-		};
+		return getScreenPointUtil(this.game.app.canvas, event);
 	}
 
 	/** Convert canvas-local screen coordinates to a grid tile. */
 	private screenPointToGrid(screenX: number, screenY: number): RH.GridCoord {
-		const localX =
-			(screenX - this.boardContainer.x) / this.boardContainer.scale.x;
-		const localY =
-			(screenY - this.boardContainer.y) / this.boardContainer.scale.y;
-		return screenToGrid(localX, localY);
+		return screenPointToGridUtil(this.boardContainer, screenX, screenY);
 	}
 
 	/**
