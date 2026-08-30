@@ -10,11 +10,9 @@ import { Mercenary } from "@/entities/Mercenary";
 import * as RH from "@relic-hunter/shared";
 
 import { PauseOverlay } from "@/ui/overlay/PauseOverlay";
-import { BattleHost, type BattleHostResult } from "@/combat/BattleHost";
 import {
 	buildBattleRequest,
 	describeLocalPlayer,
-	describeHunter,
 	describeMonster,
 } from "@/combat/buildBattleRequest";
 import { MoveController } from "@/systems/MoveController";
@@ -30,18 +28,14 @@ import { PlayZone } from "@/ui/PlayZone";
 import type { PilotedMercenary, MovableToken } from "@/types/entities";
 import { logMatchEvent } from "@/core/game/GameSession";
 import type { HunterSummaryEntry } from "@/ui/HunterSummaryPanel";
-import { MonsterSystem } from "@/systems/MonsterSystem";
-import { ChestSystem } from "@/systems/ChestSystem";
-import { ExitRelicSystem } from "@/systems/ExitRelicSystem";
-import { ZoneQuery } from "@/systems/ZoneQuery";
+import { MapController } from "@/systems/MapController";
 import { TutorialMarkers } from "@/systems/TutorialMarkers";
-import { MatchController, isCarryingTarget } from "@/systems/MatchController";
+import { MatchController } from "@/systems/MatchController";
 import { TargetingVisuals } from "@/systems/TargetingVisuals";
 import {
 	getScreenPoint as getScreenPointUtil,
 	screenPointToGrid as screenPointToGridUtil,
 } from "@/math/screenInput";
-import { TrapSystem } from "@/systems/TrapSystem";
 import type { MonsterEntity } from "@/types/entities";
 import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
 import { AudioController } from "@/core/audio/audioController";
@@ -79,8 +73,7 @@ export class MapScene implements Scene, TutorialPort {
 	// Entities — one array, pilot type is the only thing distinguishing them
 	private units: PilotedMercenary[] = [];
 
-	private monsterSystem!: MonsterSystem;
-	private chestSystem = new ChestSystem();
+	private mapController!: MapController;
 
 	// True during the Exit card's two-flight teleport sequence — blocks
 	// End Turn / regenerate from interrupting mid-sequence, same role
@@ -102,8 +95,6 @@ export class MapScene implements Scene, TutorialPort {
 	private cameraDragActive = false;
 	private lastDragScreenPos: { x: number; y: number } | null = null;
 
-	// Which AI unit is mid-fight, so onBattleComplete knows who to update
-	private activeCombatUnit: PilotedMercenary | null = null;
 	// Guards End Turn from re-firing while enemies are mid-move/mid-fight
 	private processingEnemyTurns = false;
 	private activeAi: PilotedMercenary | null = null;
@@ -126,8 +117,6 @@ export class MapScene implements Scene, TutorialPort {
 	private cardDrawQueue!: CardDrawQueue;
 	private drawLayer = new Container();
 
-	private trapSystem = new TrapSystem();
-
 	// Map config — dimensions and seed come from GameSession (set by
 	// LoadingScene) rather than being hardcoded, so mission map size
 	// selection actually does something.
@@ -147,7 +136,6 @@ export class MapScene implements Scene, TutorialPort {
 
 	private tutorialMarkers = new TutorialMarkers();
 
-	private battleHost: BattleHost;
 	private matchController: MatchController;
 
 	private audio = new AudioController();
@@ -213,11 +201,28 @@ export class MapScene implements Scene, TutorialPort {
 		this.grid = this.buildMap();
 
 		this.boardContainer.addChild(this.tilesContainer);
-		this.boardContainer.addChild(this.chestSystem.container);
 		this.boardContainer.addChild(this.mercenaryContainer);
 		this.view.addChild(this.boardContainer);
 
-		this.monsterSystem = new MonsterSystem(this.mercenaryContainer);
+		this.mapController = new MapController(this.game, this.mercenaryContainer, {
+			showFeedback: (message) => this.showFeedback(message),
+			showItemPopup: (item, isTarget) => this.showItemPopup(item, isTarget),
+			getUnitLabel: (unit) => this.getUnitLabel(unit),
+			teleportEntity: (state, mercenary) =>
+				this.teleportEntity(state, mercenary as Mercenary),
+			syncUI: () => this.syncUI(),
+			onTutorialEvent: (event) => this.tutorialConfig?.onTutorialEvent(event),
+			getLocalUnit: () => this.localUnit,
+			getUnits: () => this.units,
+			getGrid: () => this.grid,
+			rebuildMapRender: () => this.mapRenderer.build(this.grid, 0),
+			exitTargetingMode: () => this.exitTargetingMode(),
+			pickEnemySpawnTile: (used) => this.pickEnemySpawnTile(used),
+			delay: (ms) => this.delay(ms),
+			triggerWin: () => this.triggerWin(),
+			triggerLoss: (winner) => this.triggerLoss(winner),
+		});
+		this.boardContainer.addChild(this.mapController.chestSystem.container);
 
 		{
 			const sw = this.game.app.screen.width;
@@ -253,7 +258,6 @@ export class MapScene implements Scene, TutorialPort {
 				this.mercenaryContainer,
 			);
 		}
-		this.battleHost = new BattleHost(this.game);
 		this.matchController = new MatchController(this.game);
 		// Item popup rides along as a child of the mercenary's own view,
 		// so it moves with the token automatically — no manual per-frame
@@ -327,7 +331,7 @@ export class MapScene implements Scene, TutorialPort {
 		this.boardContainer.addChild(this.moveController.view);
 		this.boardContainer.addChild(this.targetingVisuals.attackRangeView);
 
-		this.boardContainer.addChild(this.trapSystem.markerContainer);
+		this.boardContainer.addChild(this.mapController.trapSystem.markerContainer);
 
 		this.hud = new MapHud(this.game);
 		this.hud.setActionMenuSubmenuToggled((open) => {
@@ -424,7 +428,7 @@ export class MapScene implements Scene, TutorialPort {
 			unit.mercenary.update(deltaTime);
 			unit.mercenary.view.alpha = unit.state.currentHp <= 0 ? 0.4 : 1;
 		}
-		for (const monster of this.monsterSystem.all) {
+		for (const monster of this.mapController.monsterSystem.all) {
 			monster.token.update(deltaTime);
 		}
 
@@ -790,7 +794,7 @@ export class MapScene implements Scene, TutorialPort {
 		const local = this.localUnit;
 
 		const { truncatedPath, hazardHit, resists } =
-			this.trapSystem.resolveAlongPath(
+			this.mapController.trapSystem.resolveAlongPath(
 				path,
 				local.state.stats,
 				local.state.temporaryStatBonus.defense,
@@ -812,7 +816,7 @@ export class MapScene implements Scene, TutorialPort {
 		if (ignoresZoc) {
 			await local.mercenary.moveAlongPath(truncatedPath);
 		} else {
-			await this.moveEntityWithZoneStrikes(
+			await this.mapController.moveEntityWithZoneStrikes(
 				{ state: local.state, token: local.mercenary },
 				truncatedPath,
 				this.getUnitLabel(local),
@@ -820,12 +824,16 @@ export class MapScene implements Scene, TutorialPort {
 		}
 
 		if (hazardHit) {
-			this.applyHazardEffect(local, hazardHit.kind, hazardHit.result);
+			this.mapController.applyHazardEffect(
+				local,
+				hazardHit.kind,
+				hazardHit.result,
+			);
 		}
-		this.refreshTrapMarkers();
+		this.mapController.refreshTrapMarkers();
 
-		this.tryOpenChestAt(local.state, target);
-		await this.checkWinCondition(local);
+		this.mapController.tryOpenChestAt(local.state, target);
+		await this.mapController.checkWinCondition(local);
 
 		// Trap stun: no more actions this turn (attack / move / rest / etc.)
 		if (local.state.stunnedTurnsRemaining > 0) {
@@ -870,92 +878,22 @@ export class MapScene implements Scene, TutorialPort {
 
 	// ---------- Zone of Control ----------
 
-	private buildZoneOwners(excludeId: string): RH.ZoneOwner[] {
-		return ZoneQuery.buildZoneOwners(
-			this.units.map((u) => ({
-				id: u.state.id,
-				coord: u.state.coord,
-				stats: u.state.stats,
-				currentHp: u.state.currentHp,
-				special: u.state.special,
-			})),
-			excludeId,
-		);
-	}
-
 	private buildThreatZoneOwners(excludeId: string): RH.ThreatOwner[] {
-		return ZoneQuery.buildThreatZoneOwners(
-			this.units.map((u) => ({
-				id: u.state.id,
-				coord: u.state.coord,
-				stats: u.state.stats,
-				currentHp: u.state.currentHp,
-				special: u.state.special,
-			})),
-			excludeId,
-		);
+		return this.mapController.buildThreatZoneOwners(excludeId);
 	}
 
 	/**
 	 * Animates a path in segments, pausing exactly at each zone crossing to
 	 * apply the reaction strike and log it. Works for ANY entity with a
 	 * mutable RH.EntityCore-shaped state and a MovableToken — hunters and
-	 * monsters both satisfy this structurally, so this single function
-	 * replaces what used to be two near-identical copies (moveWithZoneStrikes
-	 * for hunters, moveMonsterWithZoneStrikes for monsters).
+	 * monsters both satisfy this structurally.
 	 */
 	private async moveEntityWithZoneStrikes(
 		entity: { state: RH.EntityCore; token: MovableToken },
 		path: RH.GridCoord[],
 		label: string,
 	): Promise<void> {
-		const owners = this.buildZoneOwners(entity.state.id);
-		const crossings = RH.findZonesCrossed(this.grid, path, owners);
-
-		let segmentStart = 0;
-		for (const crossing of crossings) {
-			const segment = path.slice(segmentStart, crossing.pathIndex + 1);
-			if (segment.length > 0) {
-				await entity.token.moveAlongPath(segment);
-			}
-			segmentStart = crossing.pathIndex + 1;
-
-			const ownerUnit = this.units.find(
-				(u) => u.state.id === crossing.owner.id,
-			);
-			if (ownerUnit) {
-				const bonus =
-					"temporaryStatBonus" in entity.state
-						? (entity.state as RH.MercenaryState).temporaryStatBonus.defense
-						: 0;
-				const syntheticCard: RH.CardData | undefined =
-					bonus !== 0
-						? {
-								id: "__temp_defense__",
-								color: "yellow",
-								name: "Defense",
-								value: bonus,
-								description: "",
-								actionType: "defense",
-							}
-						: undefined;
-				const strike = RH.resolveReactionStrike(
-					ownerUnit.state.stats,
-					entity.state.stats,
-					syntheticCard,
-				);
-				entity.state.currentHp -= strike.damage;
-				this.showFeedback(
-					`⚔ ${label} entered ${this.getUnitLabel(ownerUnit)}'s zone of control — took ${strike.damage} damage`,
-				);
-				await this.delay(400);
-			}
-		}
-
-		const remaining = path.slice(segmentStart);
-		if (remaining.length > 0) {
-			await entity.token.moveAlongPath(remaining);
-		}
+		await this.mapController.moveEntityWithZoneStrikes(entity, path, label);
 	}
 
 	// ---------- Chests & Items ----------
@@ -963,83 +901,13 @@ export class MapScene implements Scene, TutorialPort {
 	/** Place chests from the session plan onto walkable tiles. No-ops if plan is missing. */
 
 	private spawnChests(): void {
-		const sessionPlacements = this.game.session.chestPlacements;
-		if (sessionPlacements && sessionPlacements.length > 0) {
-			this.chestSystem.spawnFromPlacements(sessionPlacements);
-			return;
-		}
-
-		const plan = this.game.session.chestPlan;
-		if (!plan) return;
-
-		// No exit at match start — only reserve the local spawn tile.
 		const reserved = new Set<string>();
 		reserved.add(RH.coordKey(this.localUnit.state.coord));
-		this.chestSystem.spawnFromPlan(plan, this.grid, reserved);
+		this.mapController.spawnChests(reserved);
 	}
 
 	private isPointOverUiSurface(screenX: number, screenY: number): boolean {
 		return this.uiSurfaces.some((c) => pointInContainer(screenX, screenY, c));
-	}
-
-	/** Open the chest at coord if unopened, for whichever unit reached it. Stays closed if inventory full. */
-	private tryOpenChestAt(state: RH.MercenaryState, coord: RH.GridCoord): void {
-		const outcome = this.chestSystem.tryOpen(coord, state.items);
-		const isLocal = state.id === this.localUnit.state.id;
-
-		switch (outcome.kind) {
-			case "noChest":
-				return;
-
-			case "inventoryFull":
-				if (isLocal) {
-					this.showFeedback("🎒 Inventory full — chest left unopened");
-				}
-				return;
-
-			case "opened":
-				if (outcome.isTarget) {
-					this.game.session.relicFound = true;
-					this.triggerFrenzy();
-					this.spawnExitFarFrom(coord);
-					this.mapRenderer.build(this.grid, 0);
-					this.showFeedback(
-						isLocal
-							? `🎯 Found the target: ${outcome.item.name}! The Exit has revealed itself.`
-							: "⚠️ An enemy hunter found the target item! The Exit has revealed itself.",
-					);
-				} else if (isLocal) {
-					this.showFeedback(`📦 Found: ${outcome.item.name}`);
-				}
-
-				if (isLocal) this.showItemPopup(outcome.item, outcome.isTarget);
-		}
-	}
-
-	/**
-	 * Every living regular monster gets a one-time, permanent stat bump
-	 * the moment the relic is found. Boss is explicitly exempt
-	 * it's already the endgame threat, frenzy doesn't apply on top of it.
-	 */
-	private triggerFrenzy(): void {
-		RH.applyFrenzy(this.monsterSystem.all.map((m) => m.state));
-	}
-
-	/**
-	 * Spawns the match Exit far from the relic-find location, deferring
-	 * to ExitRelicSystem for the actual tile-picking — this just builds
-	 * the blocked set from the units/monsters MapScene already tracks.
-	 */
-	private spawnExitFarFrom(from: RH.GridCoord): void {
-		const blocked = new Set<string>();
-		for (const u of this.units) {
-			if (u.state.currentHp > 0) blocked.add(RH.coordKey(u.state.coord));
-		}
-		for (const m of this.monsterSystem.all) {
-			if (m.state.currentHp > 0) blocked.add(RH.coordKey(m.state.coord));
-		}
-
-		ExitRelicSystem.spawnFarFrom(this.grid, from, blocked);
 	}
 
 	/** Float an icon + item name above the mercenary's head briefly. */
@@ -1116,11 +984,13 @@ export class MapScene implements Scene, TutorialPort {
 			await this.processMonsterTurns();
 
 			if (
-				this.monsterSystem.bossEntity &&
-				this.monsterSystem.bossEntity.state.currentHp > 0
+				this.mapController.monsterSystem.bossEntity &&
+				this.mapController.monsterSystem.bossEntity.state.currentHp > 0
 			) {
 				await this.delay(400);
-				await this.processOneMonsterTurn(this.monsterSystem.bossEntity);
+				await this.processOneMonsterTurn(
+					this.mapController.monsterSystem.bossEntity,
+				);
 			}
 		} finally {
 			this.processingEnemyTurns = false;
@@ -1152,10 +1022,12 @@ export class MapScene implements Scene, TutorialPort {
 		const preMoveHp = self.currentHp;
 		const others = this.buildOtherCombatants(unit.state.id);
 
-		const chestInfos: RH.ChestInfo[] = this.chestSystem.all.map((c) => ({
-			coord: c.coord,
-			isOpen: c.entity.isOpen,
-		}));
+		const chestInfos: RH.ChestInfo[] = this.mapController.chestSystem.all.map(
+			(c) => ({
+				coord: c.coord,
+				isOpen: c.entity.isOpen,
+			}),
+		);
 
 		const exitCoord = RH.findExitTile(this.grid);
 		const monsterCoords = this.livingMonsters().map((m) => m.state.coord);
@@ -1179,7 +1051,7 @@ export class MapScene implements Scene, TutorialPort {
 
 		if (!wouldDeclineOnArrival) {
 			this.showFeedback(`🤔 ${this.getUnitLabel(unit)} avoids a fight`);
-			const visibleTraps = this.trapSystem.visibleTo(
+			const visibleTraps = this.mapController.trapSystem.visibleTo(
 				unit.state.id,
 				unit.state.coord,
 				unit.state.characterClass === "hunter",
@@ -1261,7 +1133,7 @@ export class MapScene implements Scene, TutorialPort {
 					}
 
 					const { truncatedPath, hazardHit, resists } =
-						this.trapSystem.resolveAlongPath(
+						this.mapController.trapSystem.resolveAlongPath(
 							path,
 							unit.state.stats,
 							unit.state.temporaryStatBonus.defense,
@@ -1286,14 +1158,18 @@ export class MapScene implements Scene, TutorialPort {
 						this.getUnitLabel(unit),
 					);
 					if (hazardHit) {
-						this.applyHazardEffect(unit, hazardHit.kind, hazardHit.result);
+						this.mapController.applyHazardEffect(
+							unit,
+							hazardHit.kind,
+							hazardHit.result,
+						);
 					}
-					this.refreshTrapMarkers();
+					this.mapController.refreshTrapMarkers();
 
 					// Stunned mid-move: still on tile, but no fight / fallback this turn.
 					// Counter stays so the *next* turn is also skipped at loop start.
 					if (unit.state.stunnedTurnsRemaining > 0) {
-						this.tryOpenChestAt(unit.state, unit.state.coord);
+						this.mapController.tryOpenChestAt(unit.state, unit.state.coord);
 						await this.checkWinCondition(unit);
 						this.activeAi = null;
 						this.camera.unlock();
@@ -1303,7 +1179,7 @@ export class MapScene implements Scene, TutorialPort {
 			}
 		}
 
-		this.tryOpenChestAt(unit.state, unit.state.coord);
+		this.mapController.tryOpenChestAt(unit.state, unit.state.coord);
 		await this.checkWinCondition(unit);
 
 		const selfAfter = this.toCombatant(unit.state);
@@ -1462,11 +1338,12 @@ export class MapScene implements Scene, TutorialPort {
 		const used = new Set<string>(
 			this.units.map((u) => RH.coordKey(u.state.coord)),
 		);
-		for (const key of this.monsterSystem.occupiedCoordKeys()) used.add(key);
+		for (const key of this.mapController.monsterSystem.occupiedCoordKeys())
+			used.add(key);
 		const coord = this.pickEnemySpawnTile(used);
 		if (!coord) return;
 
-		const boss = this.monsterSystem.spawnBoss(coord);
+		const boss = this.mapController.monsterSystem.spawnBoss(coord);
 		this.showFeedback("👹 The boss has entered the map.");
 
 		const PAN_MS = 900;
@@ -1488,7 +1365,7 @@ export class MapScene implements Scene, TutorialPort {
 		let isFirst = true;
 
 		for (const monster of this.livingMonsters()) {
-			if (monster === this.monsterSystem.bossEntity) continue;
+			if (monster === this.mapController.monsterSystem.bossEntity) continue;
 			if (!isFirst) await this.delay(MONSTER_DELAY_MS);
 			isFirst = false;
 			await this.processOneMonsterTurn(monster);
@@ -1589,77 +1466,21 @@ export class MapScene implements Scene, TutorialPort {
 		monster: MonsterEntity,
 		target: PilotedMercenary,
 	): Promise<void> {
-		const attackerDescriptor = describeMonster(monster);
-		const defenderDescriptor = describeHunter(target);
-
-		await this.battleHost.run(
-			buildBattleRequest(attackerDescriptor, defenderDescriptor, {
-				isRangedInitiated: false,
-				onComplete: async (result) => {
-					monster.state.currentHp = attackerDescriptor.state.currentHp;
-
-					if (result.attackerMonsterDied) {
-						this.removeMonster(monster);
-					}
-
-					if (result.defenderNeedsTeleport) {
-						this.teleportEntity(target.state, target.mercenary);
-					}
-				},
-			}),
-		);
+		await this.mapController.monsterAttack(monster, target);
 	}
 
 	private async aiInitiateCombat(
 		attacker: PilotedMercenary,
 		defender: PilotedMercenary,
 	): Promise<void> {
-		this.activeCombatUnit = defender;
-
-		const attackerDescriptor = describeHunter(attacker);
-		const defenderDescriptor = describeHunter(defender);
-
-		const result = await this.battleHost.run(
-			buildBattleRequest(attackerDescriptor, defenderDescriptor, {
-				isRangedInitiated: !RH.isAdjacent(
-					attacker.state.coord,
-					defender.state.coord,
-				),
-			}),
-		);
-
-		if (result.attackerNeedsTeleport) {
-			this.teleportEntity(attacker.state, attacker.mercenary);
-		}
-
-		if (result.defenderNeedsTeleport) {
-			this.teleportEntity(defender.state, defender.mercenary);
-		}
+		await this.mapController.aiInitiateCombat(attacker, defender);
 	}
 
 	private async resolveAiVsAi(
 		attacker: PilotedMercenary,
 		defender: PilotedMercenary,
 	): Promise<void> {
-		const attackerDescriptor = describeHunter(attacker);
-		const defenderDescriptor = describeHunter(defender);
-
-		const result = await this.battleHost.run(
-			buildBattleRequest(attackerDescriptor, defenderDescriptor, {
-				isRangedInitiated: !RH.isAdjacent(
-					attacker.state.coord,
-					defender.state.coord,
-				),
-			}),
-		);
-
-		if (result.attackerNeedsTeleport) {
-			this.teleportEntity(attacker.state, attacker.mercenary);
-		}
-
-		if (result.defenderNeedsTeleport) {
-			this.teleportEntity(defender.state, defender.mercenary);
-		}
+		await this.mapController.resolveAiVsAi(attacker, defender);
 	}
 
 	// ---------- Spawn ----------
@@ -1776,33 +1597,20 @@ export class MapScene implements Scene, TutorialPort {
 
 	private trySpawnMonster(): void {
 		if (this.tutorialConfig && !this.tutorialConfig.spawnMonsters) return;
-		if (!this.monsterSystem.shouldSpawn()) return;
-
-		const used = new Set<string>(
-			this.units.map((u) => RH.coordKey(u.state.coord)),
-		);
-		for (const key of this.monsterSystem.occupiedCoordKeys()) used.add(key);
-
-		const coord = this.pickEnemySpawnTile(used);
-		if (!coord) return;
-
-		const tier = this.monsterSystem.trySpawn(coord);
-		if (tier) {
-			this.showFeedback(`👹 A ${tier} monster appears!`);
-		}
+		this.mapController.trySpawnMonster();
 	}
 
 	private livingMonsterCoords(): RH.GridCoord[] {
-		return this.monsterSystem.livingMonsterCoords();
+		return this.mapController.monsterSystem.livingMonsterCoords();
 	}
 
 	private livingMonsters(): MonsterEntity[] {
-		return this.monsterSystem.livingMonsters();
+		return this.mapController.monsterSystem.livingMonsters();
 	}
 
 	/** Removes a dead monster from the board entirely — array entry and visual token both, not just letting HP sit at 0 forever. */
 	private removeMonster(monster: MonsterEntity): void {
-		this.monsterSystem.remove(monster);
+		this.mapController.monsterSystem.remove(monster);
 	}
 
 	private pickEnemySpawnTile(used: Set<string>): RH.GridCoord | null {
@@ -1839,29 +1647,7 @@ export class MapScene implements Scene, TutorialPort {
 
 	/** Win check: standing on Exit with target held, via normal move only. PASS 4 TODO: local-only, revisit for multiplayer. */
 	private async checkWinCondition(unit: PilotedMercenary): Promise<void> {
-		const exitTile = RH.findExitTile(this.grid);
-		if (!exitTile) return;
-		if (unit.state.coord.x !== exitTile.x || unit.state.coord.y !== exitTile.y)
-			return;
-
-		if (
-			isCarryingTarget(
-				unit.state.items,
-				this.game.session.chestPlan?.targetItem?.id,
-			)
-		) {
-			if (unit.pilot === "local") {
-				this.triggerWin();
-			} else {
-				this.triggerLoss(unit);
-			}
-			return;
-		}
-
-		this.showFeedback(
-			`🌀 ${this.getUnitLabel(unit)} reached the exit without the relic and was cast away`,
-		);
-		await this.teleportEntity(unit.state, unit.mercenary);
+		await this.mapController.checkWinCondition(unit);
 	}
 
 	/** Record the match result and transition to MatchResultScene. */
@@ -1943,85 +1729,11 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	private tryStartCombat(unit: PilotedMercenary): void {
-		if (!unit || unit.state.currentHp <= 0) return;
-
-		const local = this.localUnit.state;
-		const inRange = RH.isAdjacent(local.coord, unit.state.coord);
-
-		if (!inRange) {
-			this.showFeedback("⚔ Target out of range");
-			return;
-		}
-
-		if (!this.localUnit.turnManager.spendAttack()) return;
-
-		this.exitTargetingMode();
-		this.activeCombatUnit = unit;
-
-		void this.battleHost.run(
-			buildBattleRequest(
-				describeLocalPlayer(this.localUnit),
-				describeHunter(unit),
-				{
-					isRangedInitiated: !RH.isAdjacent(local.coord, unit.state.coord),
-					onComplete: (result) => {
-						this.onBattleComplete(result);
-					},
-				},
-			),
-		);
+		this.mapController.tryStartCombat(unit);
 	}
 
 	private tryStartCombatVsMonster(monster: MonsterEntity): void {
-		const local = this.localUnit.state;
-		const inRange = RH.isAdjacent(local.coord, monster.state.coord);
-
-		if (!inRange) {
-			this.showFeedback("⚔ Target out of range");
-			return;
-		}
-
-		if (!this.localUnit.turnManager.spendAttack()) return;
-
-		this.exitTargetingMode();
-
-		const defenderDescriptor = describeMonster(monster);
-
-		this.tutorialConfig?.onTutorialEvent({
-			type: "combatStarted",
-			opponentType: "monster",
-		});
-
-		void this.battleHost.run(
-			buildBattleRequest(
-				describeLocalPlayer(this.localUnit),
-				defenderDescriptor,
-				{
-					isRangedInitiated: !RH.isAdjacent(local.coord, monster.state.coord),
-					onComplete: (result) => {
-						monster.state.currentHp = defenderDescriptor.state.currentHp;
-
-						if (result.defenderMonsterDied) {
-							this.removeMonster(monster);
-						}
-
-						if (result.attackerNeedsTeleport) {
-							this.teleportEntity(
-								this.localUnit.state,
-								this.localUnit.mercenary,
-							);
-						}
-
-						this.tutorialConfig?.onTutorialEvent({
-							type: "combatEnded",
-							won: !!result.defenderMonsterDied,
-						});
-
-						this.syncUI();
-					},
-				},
-			),
-		);
+		this.mapController.tryStartCombatVsMonster(monster);
 	}
 
 	/**
@@ -2067,23 +1779,6 @@ export class MapScene implements Scene, TutorialPort {
 
 		if (monsterHit) this.tryStartCombatVsMonster(monsterHit);
 		return true;
-	}
-
-	/** Enemy defeat/teleport are BattleOverlay's job via shared state; this handles the rest. */
-	private async onBattleComplete(result: BattleHostResult): Promise<void> {
-		const unit = this.activeCombatUnit;
-		this.activeCombatUnit = null;
-
-		if (result.defenderNeedsTeleport && unit) {
-			await this.teleportEntity(unit.state, unit.mercenary);
-			this.showFeedback("💨 Enemy hunter fled the fight!");
-		}
-
-		if (result.attackerNeedsTeleport) {
-			await this.teleportEntity(this.localUnit.state, this.localUnit.mercenary);
-		}
-
-		this.syncUI();
 	}
 
 	/** Spend 1 AP on Rest, lock Move, draw up to 2 cards. */
@@ -2448,7 +2143,7 @@ export class MapScene implements Scene, TutorialPort {
 	 * normal Attack flow.
 	 */
 	spawnTutorialMonster(coord: RH.GridCoord, tier: RH.MonsterTier): void {
-		const entity = this.monsterSystem.spawnSpecific(
+		const entity = this.mapController.monsterSystem.spawnSpecific(
 			`tutorial_monster_${tier}`,
 			tier,
 			coord,
@@ -2510,7 +2205,7 @@ export class MapScene implements Scene, TutorialPort {
 			opponentType: "monster",
 		});
 
-		return this.battleHost
+		return this.mapController.battleHost
 			.run(
 				buildBattleRequest(attackerDescriptor, defenderDescriptor, {
 					isRangedInitiated: false,
@@ -2659,54 +2354,11 @@ export class MapScene implements Scene, TutorialPort {
 			// TEMPORARY: routed through the Move flow because there's no
 			// dedicated RH.Trap action yet — every class, Trapper included
 			// once it exists, shares this path for now.
-			this.placeTrap(card);
+			this.mapController.placeTrap();
 			if (!local.turnManager.beginMovement("none", 0)) return;
 			this.moveController.requestEnter();
 			this.hud.setMoveActive(this.moveController.active);
 			return;
-		}
-	}
-
-	private placeTrapAtCurrentPosition(_card: RH.CardData): void {
-		const local = this.localUnit.state;
-		this.trapSystem.place({
-			coord: local.coord,
-			ownerId: local.id,
-			kind: "stun",
-		});
-		this.showFeedback("🪤 RH.Trap left behind");
-		this.refreshTrapMarkers();
-	}
-
-	private refreshTrapMarkers(): void {
-		const local = this.localUnit.state;
-		this.trapSystem.renderMarkersFor(
-			local.id,
-			local.coord,
-			local.characterClass === "hunter",
-		);
-	}
-
-	private placeTrap(card: RH.CardData): void {
-		switch (this.localUnit.state.characterClass) {
-			// case trapper goes here later
-
-			default:
-				this.placeTrapAtCurrentPosition(card);
-		}
-	}
-
-	private applyHazardEffect(
-		unit: PilotedMercenary,
-		kind: RH.TrapKind,
-		result: RH.HazardRollResult,
-	): void {
-		switch (kind) {
-			case "stun":
-				RH.applyStun(unit.state);
-				this.showFeedback(
-					`🪤 ${this.getUnitLabel(unit)} was stunned! (${result.hazardRoll} vs ${result.victimRoll})`,
-				);
 		}
 	}
 
@@ -2857,7 +2509,7 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.mercenaryContainer.removeChildren();
 		this.units = [];
-		this.monsterSystem = new MonsterSystem(this.mercenaryContainer);
+		this.mapController.monsterSystem.reset();
 		this.spawnLocalUnit();
 		this.localUnit.mercenary.view.addChild(this.itemPopup);
 		this.itemPopup.visible = false;

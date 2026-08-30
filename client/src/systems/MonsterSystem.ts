@@ -27,6 +27,18 @@ export class MonsterSystem {
 		return this.monsters;
 	}
 
+	/**
+	 * Clears the roster for a fresh map — caller (regenerateMap) already
+	 * wipes the visual container separately, this just resets the data
+	 * so shouldSpawn() doesn't stay permanently capped from a previous
+	 * map's monster count.
+	 */
+	reset(): void {
+		this.monsters = [];
+		this.boss = null;
+		this.monsterSpawnIndex = 0;
+	}
+
 	get bossEntity(): MonsterEntity | null {
 		return this.boss;
 	}
