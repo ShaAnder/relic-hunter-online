@@ -4,10 +4,7 @@ import type {
 	CharacterDirection,
 	SpriteCharacterClass,
 } from "@/types/characterSprite";
-import {
-	directionMirrorSource,
-	directionUsesFlipX,
-} from "@/math/characterDirection";
+import { MAP_SPRITE_SCALE } from "@/types/characterSprite";
 import {
 	loadCharacterAnimation,
 	type LoadedAnimationStrip,
@@ -15,14 +12,15 @@ import {
 
 export interface PlayOptions {
 	loop?: boolean;
-	/** Fired once when a non-looping anim finishes (or is interrupted). */
 	onComplete?: () => void;
 }
 
+// padding to nudge sprite down
+const SPRITE_OFFSET_Y = 4;
+
 /**
- * One parameterized sprite for any characterClass — not Brawler extends …
- * Anchor (0.5, 1): feet on the iso tile center, same pivot idea as Card.
- * Does not own world position — parent (Mercenary.view) does.
+ * Parameterized map sprite. Anchor (0.5, 1) = feet on tile.
+ * Parent (Mercenary.view) owns world position.
  */
 export class CharacterSprite {
 	readonly view = new Container();
@@ -36,17 +34,17 @@ export class CharacterSprite {
 	private loop = true;
 	private onComplete: (() => void) | null = null;
 	private direction: CharacterDirection = "se";
-	/** Optional external scale (BattleOverlay UI scale later). */
-	private externalScale = 1;
+	private externalScale = MAP_SPRITE_SCALE;
+	private flipX = false;
 
 	constructor(characterClass: SpriteCharacterClass) {
 		this.characterClass = characterClass;
 		this.sprite.anchor.set(0.5, 1);
+		this.sprite.y = SPRITE_OFFSET_Y;
 		this.view.addChild(this.sprite);
 		this.view.visible = false;
 	}
 
-	/** Load idle so something shows; call once after construct. */
 	async init(): Promise<boolean> {
 		const ok = await this.play("idle");
 		this.view.visible = ok;
@@ -59,18 +57,15 @@ export class CharacterSprite {
 	}
 
 	setDirection(dir: CharacterDirection): void {
+		if (this.direction === dir) return;
 		this.direction = dir;
-		const flip = directionUsesFlipX(dir);
-		// Mirror pairing reserved for multi-angle sheets; SE-only sheets
-		// still flip for west-ish facings so silhouette isn't locked SE.
-		void directionMirrorSource(dir);
-		this.sprite.scale.x = (flip ? -1 : 1) * this.externalScale;
-		this.sprite.scale.y = this.externalScale;
+		// Reload strip for the new facing (different file may apply).
+		void this.play(this.currentAnim, {
+			loop: this.loop,
+			onComplete: this.onComplete ?? undefined,
+		});
 	}
 
-	/**
-	 * Switch animation. Returns false if sheet missing (keep placeholder).
-	 */
 	async play(
 		animation: CharacterAnimation,
 		options: PlayOptions = {},
@@ -78,23 +73,24 @@ export class CharacterSprite {
 		const strip = await loadCharacterAnimation(
 			this.characterClass,
 			animation,
+			this.direction,
 		);
 		if (!strip || strip.frames.length === 0) return false;
 
 		this.strip = strip;
 		this.currentAnim = animation;
+		this.flipX = strip.flipX;
 		this.frameIndex = 0;
 		this.elapsedMs = 0;
 		this.loop = options.loop ?? strip.loop;
 		this.onComplete = options.onComplete ?? null;
 		this.playing = true;
-		this.sprite.texture = strip.frames[0];
+		this.sprite.texture = strip.frames[0]!;
 		this.applyScale();
 		this.view.visible = true;
 		return true;
 	}
 
-	/** Promise that resolves when a one-shot finishes (combat sequencing). */
 	playAsync(
 		animation: CharacterAnimation,
 		options: Omit<PlayOptions, "onComplete"> = {},
@@ -114,7 +110,6 @@ export class CharacterSprite {
 		return this.currentAnim;
 	}
 
-	/** Advance frames — call from Mercenary.update / scene tick. */
 	update(deltaTime: number): void {
 		if (!this.playing || !this.strip) return;
 		const frameMs = 1000 / this.strip.fps;
@@ -137,13 +132,13 @@ export class CharacterSprite {
 				}
 			}
 
-			this.sprite.texture = this.strip.frames[this.frameIndex];
+			this.sprite.texture = this.strip.frames[this.frameIndex]!;
 		}
 	}
 
 	private applyScale(): void {
-		const flip = directionUsesFlipX(this.direction);
-		this.sprite.scale.x = (flip ? -1 : 1) * this.externalScale;
+		const sign = this.flipX ? -1 : 1;
+		this.sprite.scale.x = sign * this.externalScale;
 		this.sprite.scale.y = this.externalScale;
 	}
 }
