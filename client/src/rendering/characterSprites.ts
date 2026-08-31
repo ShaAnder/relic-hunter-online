@@ -2,108 +2,105 @@ import { Assets, Rectangle, Texture } from "pixi.js";
 import type {
 	CharacterAnimation,
 	CharacterDirection,
+	IsoFacing,
 	SpriteCharacterClass,
 } from "@/types/characterSprite";
 import {
 	DEFAULT_ANIMATION_SPECS,
 	SPRITE_FRAME_HEIGHT,
 	SPRITE_FRAME_WIDTH,
+	toIsoFacing,
 } from "@/types/characterSprite";
 import { resolveSheetDirection } from "@/math/characterDirection";
+import { getSpriteManifest } from "@/sprites/manifests/brawler";
 
 /**
- * Full-sheet atlas loader.
+ * Full-sheet atlas loader driven by packer output:
+ *   assets/characters/{class}/sheet.png
+ *   assets/characters/{class}/atlas.json   (row map from pack-character-sheet.mjs)
  *
- * Drop ONE file per class:
- *   client/src/assets/characters/brawler/sheet.png
- *
- * Current Brawler sheet: 1536×1024 = 12 columns × 8 rows of 128×128.
- * Rows (top → bottom) match the authored sheet layout.
- *
- * No strip splitting, no chroma key — frames are pure Rectangle crops
- * on the original texture.
+ * Falls back to built-in BRAWLER_ROW_MAP if atlas.json is missing.
  */
 
-/** Per-class atlas description. Add entries as new class sheets land. */
-interface ClassSheetAtlas {
-	/** Vite URL from import.meta.glob */
-	url: string;
+interface PackedAtlas {
 	frameWidth: number;
 	frameHeight: number;
 	columns: number;
-	/**
-	 * animation → row index, or animation/direction → row index.
-	 * Keys are "idle" | "walk" | "attack" | "walk/se" | "walk/sw" | …
-	 */
+	/** "walk/se" | "idle" → row index */
 	rows: Record<string, number>;
 }
 
-/**
- * Brawler row map — adjust indices if your sheet order differs.
- * Default assumes the 8-row merc sheet:
- *   0 idle SE, 1 walk SE, 2 attack SE,
- *   3 walk SW, 4 attack SW,
- *   5 walk NE, 6 walk N, 7 attack N
- */
-const BRAWLER_ROW_MAP: Record<string, number> = {
-	"idle": 0,
-	"idle/se": 0,
-	"walk": 1,
-	"walk/se": 1,
-	"run": 1, // no dedicated run row — reuse walk
-	"run/se": 1,
-	"attack": 2,
-	"attack/se": 2,
-	"walk/sw": 3,
-	"attack/sw": 4,
-	"walk/ne": 5,
-	"walk/n": 6,
-	"attack/n": 7,
-	// sensible mirrors until more rows exist
-	"idle/sw": 0,
-	"idle/ne": 0,
-	"idle/n": 0,
-	"walk/e": 1,
-	"walk/w": 3,
-	"walk/s": 1,
-	"walk/nw": 5,
-	"attack/e": 2,
-	"attack/w": 4,
-	"attack/s": 2,
-	"attack/nw": 7,
-	"attack/ne": 2,
-};
+interface ClassSheetAtlas extends PackedAtlas {
+	url: string;
+}
 
 const sheetModules = import.meta.glob("../assets/characters/*/sheet.png", {
 	eager: true,
 	import: "default",
 }) as Record<string, string>;
 
-function classFromPath(path: string): string | null {
+const atlasModules = import.meta.glob("../assets/characters/*/atlas.json", {
+	eager: true,
+	import: "default",
+}) as Record<string, PackedAtlas>;
+
+function classFromSheetPath(path: string): string | null {
 	const parts = path.replace(/\\/g, "/").split("/");
-	// …/assets/characters/brawler/sheet.png
 	const file = parts[parts.length - 1] ?? "";
 	if (file.toLowerCase() !== "sheet.png") return null;
-	const cls = (parts[parts.length - 2] ?? "").toLowerCase();
-	return cls || null;
+	return (parts[parts.length - 2] ?? "").toLowerCase() || null;
 }
+
+function classFromAtlasPath(path: string): string | null {
+	const parts = path.replace(/\\/g, "/").split("/");
+	const file = parts[parts.length - 1] ?? "";
+	if (file.toLowerCase() !== "atlas.json") return null;
+	return (parts[parts.length - 2] ?? "").toLowerCase() || null;
+}
+
+/** Temporary hardcoded rows until packer atlas.json exists. */
+const FALLBACK_BRAWLER_ROWS: Record<string, number> = {
+	"idle": 0,
+	"idle/se": 0,
+	"walk": 1,
+	"walk/se": 1,
+	"run": 1,
+	"run/se": 1,
+	"attack": 2,
+	"attack/se": 2,
+	"walk/sw": 3,
+	"attack/sw": 4,
+	"walk/ne": 5,
+	"walk/nw": 6,
+	"attack/nw": 7,
+	"attack/ne": 2,
+	"idle/sw": 0,
+	"idle/ne": 0,
+	"idle/nw": 0,
+};
 
 const ATLAS_BY_CLASS = new Map<string, ClassSheetAtlas>();
 
+// JSON atlases
+const jsonByClass = new Map<string, PackedAtlas>();
+for (const [path, data] of Object.entries(atlasModules)) {
+	const cls = classFromAtlasPath(path);
+	if (cls && data) jsonByClass.set(cls, data as PackedAtlas);
+}
+
 for (const [path, url] of Object.entries(sheetModules)) {
-	const cls = classFromPath(path);
+	const cls = classFromSheetPath(path);
 	if (!cls) continue;
 
-	// Only brawler has a known row map today; others can be added later.
-	const rows =
-		cls === "brawler" ? BRAWLER_ROW_MAP : { idle: 0, walk: 1, attack: 2 };
-
+	const packed = jsonByClass.get(cls);
 	ATLAS_BY_CLASS.set(cls, {
 		url,
-		frameWidth: SPRITE_FRAME_WIDTH,
-		frameHeight: SPRITE_FRAME_HEIGHT,
-		columns: 12,
-		rows,
+		frameWidth: packed?.frameWidth ?? SPRITE_FRAME_WIDTH,
+		frameHeight: packed?.frameHeight ?? SPRITE_FRAME_HEIGHT,
+		columns: packed?.columns ?? 12,
+		rows:
+			packed?.rows ??
+			(cls === "brawler" ? FALLBACK_BRAWLER_ROWS : { idle: 0, walk: 1 }),
 	});
 }
 
@@ -112,10 +109,11 @@ export interface LoadedAnimationStrip {
 	fps: number;
 	loop: boolean;
 	flipX: boolean;
+	/** Per-frame ms; if set, used instead of constant fps. */
+	durations?: number[];
 }
 
 const stripCache = new Map<string, LoadedAnimationStrip>();
-/** Base sheet textures, one per class. */
 const baseTextureCache = new Map<string, Texture>();
 
 function applyNearest(texture: Texture): void {
@@ -145,10 +143,7 @@ function sliceRow(
 	const frames: Texture[] = [];
 	const count = Math.min(frameCount, columns);
 	const y = row * frameHeight;
-	// Guard: row must sit inside the texture
-	if (y + frameHeight > base.height + 0.5) {
-		return frames;
-	}
+	if (y + frameHeight > base.height + 0.5) return frames;
 	for (let col = 0; col < count; col++) {
 		const x = col * frameWidth;
 		if (x + frameWidth > base.width + 0.5) break;
@@ -162,56 +157,74 @@ function sliceRow(
 	return frames;
 }
 
-/**
- * Pick a row index for this anim + facing.
- * Tries anim/dir, then anim, then walk←run, then row 0.
- */
 function resolveRow(
 	atlas: ClassSheetAtlas,
 	animation: CharacterAnimation,
-	sheetDir: CharacterDirection,
+	facing: IsoFacing,
 ): number | null {
-	const directed = atlas.rows[`${animation}/${sheetDir}`];
+	const directed = atlas.rows[`${animation}/${facing}`];
 	if (directed !== undefined) return directed;
 
 	const plain = atlas.rows[animation];
 	if (plain !== undefined) return plain;
 
-	if (animation === "walk" || animation === "run") {
-		const runDir = atlas.rows[`run/${sheetDir}`] ?? atlas.rows["run"];
-		if (runDir !== undefined) return runDir;
-		const walkDir = atlas.rows[`walk/${sheetDir}`] ?? atlas.rows["walk"];
-		if (walkDir !== undefined) return walkDir;
+	if (animation === "run") {
+		const w = atlas.rows[`walk/${facing}`] ?? atlas.rows["walk"];
+		if (w !== undefined) return w;
 	}
 
 	if (animation === "idle") {
-		const idleSe = atlas.rows["idle/se"] ?? atlas.rows["idle"];
-		if (idleSe !== undefined) return idleSe;
+		const se = atlas.rows["idle/se"] ?? atlas.rows["idle"];
+		if (se !== undefined) return se;
 	}
 
 	return null;
 }
 
+function resolveTiming(
+	characterClass: SpriteCharacterClass,
+	animation: CharacterAnimation,
+): { frameCount: number; fps: number; loop: boolean; durations?: number[] } {
+	const manifest = getSpriteManifest(characterClass);
+	const anim = manifest.animations[animation];
+	const fallback = DEFAULT_ANIMATION_SPECS[animation];
+	if (!anim) {
+		return {
+			frameCount: fallback.frameCount,
+			fps: fallback.fps,
+			loop: fallback.loop,
+			durations: fallback.durations,
+		};
+	}
+	return {
+		frameCount: anim.frames,
+		fps: anim.fps ?? fallback.fps,
+		loop: anim.loop,
+		durations: anim.durations,
+	};
+}
+
 export async function loadCharacterAnimation(
 	characterClass: SpriteCharacterClass,
 	animation: CharacterAnimation,
-	direction: CharacterDirection = "se",
+	direction: CharacterDirection | IsoFacing = "se",
 ): Promise<LoadedAnimationStrip | null> {
-	const cacheKey = `${characterClass}/${animation}/${direction}`;
+	const facing = toIsoFacing(direction);
+	const cacheKey = `${characterClass}/${animation}/${facing}`;
 	const cached = stripCache.get(cacheKey);
 	if (cached) return cached;
 
 	const atlas = ATLAS_BY_CLASS.get(characterClass);
 	if (!atlas) return null;
 
-	const { sheetDir, flipX } = resolveSheetDirection(direction);
+	const { sheetDir, flipX } = resolveSheetDirection(facing);
 	const row = resolveRow(atlas, animation, sheetDir);
 	if (row === null) return null;
 
+	const timing = resolveTiming(characterClass, animation);
 	const base = await getBaseTexture(atlas);
-	const spec = DEFAULT_ANIMATION_SPECS[animation];
-	const frameWidth = spec.frameWidth ?? atlas.frameWidth;
-	const frameHeight = spec.frameHeight ?? atlas.frameHeight;
+	const frameWidth = atlas.frameWidth;
+	const frameHeight = atlas.frameHeight;
 
 	const frames = sliceRow(
 		base,
@@ -219,15 +232,16 @@ export async function loadCharacterAnimation(
 		atlas.columns,
 		frameWidth,
 		frameHeight,
-		spec.frameCount,
+		timing.frameCount,
 	);
 	if (frames.length === 0) return null;
 
 	const strip: LoadedAnimationStrip = {
 		frames,
-		fps: spec.fps,
-		loop: spec.loop,
+		fps: timing.fps,
+		loop: timing.loop,
 		flipX,
+		durations: timing.durations,
 	};
 	stripCache.set(cacheKey, strip);
 	return strip;
@@ -245,10 +259,9 @@ export async function preloadCharacterClass(
 export function hasCharacterSheet(
 	characterClass: SpriteCharacterClass,
 	animation: CharacterAnimation = "idle",
-	direction: CharacterDirection = "se",
+	direction: CharacterDirection | IsoFacing = "se",
 ): boolean {
 	const atlas = ATLAS_BY_CLASS.get(characterClass);
 	if (!atlas) return false;
-	const { sheetDir } = resolveSheetDirection(direction);
-	return resolveRow(atlas, animation, sheetDir) !== null;
+	return resolveRow(atlas, animation, toIsoFacing(direction)) !== null;
 }

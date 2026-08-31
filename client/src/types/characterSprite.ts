@@ -1,7 +1,11 @@
 /**
- * Character sprite types — full-sheet atlas (128×128 cells).
+ * Character sprite types — strip-source + packed atlas pipeline.
  */
 
+/** Four isometric facings matching diamond grid movement. */
+export type IsoFacing = "ne" | "se" | "sw" | "nw";
+
+/** @deprecated Prefer IsoFacing; kept for gradual migration. */
 export type CharacterDirection =
 	| "n"
 	| "ne"
@@ -23,11 +27,8 @@ export type CharacterAnimation =
 	| "defeated"
 	| "victory";
 
-/** Cell size for the current Brawler full sheet. */
 export const SPRITE_FRAME_WIDTH = 128;
 export const SPRITE_FRAME_HEIGHT = 128;
-
-/** Map display scale — 128px body on 64×32 tiles. */
 export const MAP_SPRITE_SCALE = 0.5;
 
 export interface AnimationSheetSpec {
@@ -36,63 +37,71 @@ export interface AnimationSheetSpec {
 	loop: boolean;
 	frameWidth?: number;
 	frameHeight?: number;
+	/** Optional per-frame duration in ms (overrides constant fps). */
+	durations?: number[];
 }
 
+/**
+ * Fallback specs when a character has no manifest entry.
+ * Prefer getSpriteManifest(class).animations[anim] at runtime.
+ */
 export const DEFAULT_ANIMATION_SPECS: Record<
 	CharacterAnimation,
 	AnimationSheetSpec
 > = {
 	idle: {
-		frameCount: 12,
-		fps: 8,
+		frameCount: 1,
+		fps: 1,
 		loop: true,
 		frameWidth: 128,
 		frameHeight: 128,
 	},
 	walk: {
-		frameCount: 12,
-		fps: 10,
+		frameCount: 6,
+		fps: 9,
 		loop: true,
 		frameWidth: 128,
 		frameHeight: 128,
 	},
 	run: {
-		frameCount: 12,
+		frameCount: 4,
 		fps: 12,
 		loop: true,
 		frameWidth: 128,
 		frameHeight: 128,
 	},
 	attack: {
-		frameCount: 12,
+		frameCount: 5,
 		fps: 12,
 		loop: false,
 		frameWidth: 128,
 		frameHeight: 128,
+		durations: [100, 90, 45, 70, 120],
 	},
 	critical: {
-		frameCount: 12,
+		frameCount: 5,
 		fps: 12,
 		loop: false,
 		frameWidth: 128,
 		frameHeight: 128,
 	},
 	hit: {
-		frameCount: 4,
+		frameCount: 3,
 		fps: 10,
 		loop: false,
 		frameWidth: 128,
 		frameHeight: 128,
+		durations: [60, 100, 120],
 	},
 	stunned: {
-		frameCount: 4,
-		fps: 6,
+		frameCount: 2,
+		fps: 4,
 		loop: true,
 		frameWidth: 128,
 		frameHeight: 128,
 	},
 	defeated: {
-		frameCount: 4,
+		frameCount: 5,
 		fps: 8,
 		loop: false,
 		frameWidth: 128,
@@ -130,5 +139,27 @@ export function toSpriteCharacterClass(
 			return characterClass;
 		default:
 			return "brawler";
+	}
+}
+
+/** Narrow 8-way / string to IsoFacing. */
+export function toIsoFacing(
+	dir: CharacterDirection | IsoFacing | string,
+): IsoFacing {
+	switch (dir) {
+		case "ne":
+		case "nw":
+		case "se":
+		case "sw":
+			return dir;
+		case "e":
+		case "s":
+			return "se";
+		case "w":
+			return "sw";
+		case "n":
+			return "ne";
+		default:
+			return "se";
 	}
 }
