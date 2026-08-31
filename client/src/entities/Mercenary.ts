@@ -7,14 +7,13 @@ import {
 	toSpriteCharacterClass,
 	type SpriteCharacterClass,
 } from "@/types/characterSprite";
-import { getCharacterDirection } from "@/math/characterDirection";
+import { getIsoFacing } from "@/math/characterDirection";
 
 const SPHERE_RADIUS = 12;
 const MOVE_DURATION_PER_TILE_MS = 180;
 
 /**
- * Animated on-screen hunter token. Visual only — position lives in MercenaryState.
- * Children: ground shadow, CharacterSprite, placeholder sphere (hidden when sheet loads).
+ * Animated hunter token. Visual only — grid position lives in MercenaryState.
  */
 export class Mercenary {
 	readonly view = new Container();
@@ -30,8 +29,6 @@ export class Mercenary {
 	private readonly placeholder: Graphics;
 	private readonly sprite: CharacterSprite;
 	private spriteReady = false;
-
-	/** Active move grid path — drives mid-path facing. */
 	private lastPathCoords: GridCoord[] = [];
 
 	constructor(
@@ -62,10 +59,7 @@ export class Mercenary {
 		return this._isAnimating;
 	}
 
-	moveAlongPath(
-		path: GridCoord[],
-		durationMsOverride?: number,
-	): Promise<void> {
+	moveAlongPath(path: GridCoord[], durationMsOverride?: number): Promise<void> {
 		return new Promise((resolve) => {
 			if (path.length === 0 || this._isAnimating) {
 				resolve();
@@ -140,7 +134,7 @@ export class Mercenary {
 
 	private applyFacingFromPath(path: GridCoord[]): void {
 		if (path.length >= 2) {
-			this.sprite.setDirection(getCharacterDirection(path[0]!, path[1]!));
+			this.sprite.setDirection(getIsoFacing(path[0]!, path[1]!));
 		}
 	}
 
@@ -171,10 +165,10 @@ export class Mercenary {
 		if (segmentIndex >= 2) {
 			const from = this.lastPathCoords[segmentIndex - 2]!;
 			const to = this.lastPathCoords[segmentIndex - 1]!;
-			this.sprite.setDirection(getCharacterDirection(from, to));
+			this.sprite.setDirection(getIsoFacing(from, to));
 		} else if (this.lastPathCoords.length >= 2) {
 			this.sprite.setDirection(
-				getCharacterDirection(this.lastPathCoords[0]!, this.lastPathCoords[1]!),
+				getIsoFacing(this.lastPathCoords[0]!, this.lastPathCoords[1]!),
 			);
 		}
 	}
@@ -186,7 +180,7 @@ export class Mercenary {
 
 	private drawShadow(): Graphics {
 		const g = new Graphics();
-		g.ellipse(0, 4, SPHERE_RADIUS * 0.9, SPHERE_RADIUS * 0.35);
+		g.ellipse(0, 2, SPHERE_RADIUS * 0.9, SPHERE_RADIUS * 0.35);
 		g.fill({ color: 0x000000, alpha: 0.35 });
 		return g;
 	}

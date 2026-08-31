@@ -11,13 +11,14 @@
 		"lint": "eslint . --ext .ts,.tsx"
 	},
 	"devDependencies": {
+		"sharp": "^0.35.4",
 		"typescript": "~6.0.2",
 		"vite": "^8.1.1"
 	},
 	"dependencies": {
+		"@relic-hunter/shared": "*",
 		"@supabase/supabase-js": "^2.110.2",
 		"colyseus.js": "^0.16.22",
-		"pixi.js": "^8.19.0",
-		"@relic-hunter/shared": "*"
+		"pixi.js": "^8.19.0"
 	}
 }
