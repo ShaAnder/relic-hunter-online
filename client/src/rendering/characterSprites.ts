@@ -1,7 +1,6 @@
 import { Assets, Rectangle, Texture } from "pixi.js";
 import type {
 	CharacterAnimation,
-	CharacterDirection,
 	IsoFacing,
 	SpriteCharacterClass,
 } from "@/types/characterSprite";
@@ -11,7 +10,7 @@ import {
 	SPRITE_FRAME_WIDTH,
 	toIsoFacing,
 } from "@/types/characterSprite";
-import { resolveSheetDirection } from "@/math/characterDirection";
+import { mirrorPartner } from "@/math/characterDirection";
 import { getSpriteManifest } from "@/sprites/manifests/brawler";
 
 /**
@@ -19,7 +18,10 @@ import { getSpriteManifest } from "@/sprites/manifests/brawler";
  *   assets/characters/{class}/sheet.png
  *   assets/characters/{class}/atlas.json   (row map from pack-character-sheet.mjs)
  *
- * Falls back to built-in BRAWLER_ROW_MAP if atlas.json is missing.
+ * There is no silent fallback for a missing or malformed atlas — a
+ * class with no valid atlas simply has no sprite, and callers (via
+ * hasCharacterSheet) fall back to the placeholder token. A wrong-size
+ * sprite rendered without warning is worse than no sprite at all.
  */
 
 interface PackedAtlas {
@@ -58,30 +60,8 @@ function classFromAtlasPath(path: string): string | null {
 	return (parts[parts.length - 2] ?? "").toLowerCase() || null;
 }
 
-/** Temporary hardcoded rows until packer atlas.json exists. */
-const FALLBACK_BRAWLER_ROWS: Record<string, number> = {
-	"idle": 0,
-	"idle/se": 0,
-	"walk": 1,
-	"walk/se": 1,
-	"run": 1,
-	"run/se": 1,
-	"attack": 2,
-	"attack/se": 2,
-	"walk/sw": 3,
-	"attack/sw": 4,
-	"walk/ne": 5,
-	"walk/nw": 6,
-	"attack/nw": 7,
-	"attack/ne": 2,
-	"idle/sw": 0,
-	"idle/ne": 0,
-	"idle/nw": 0,
-};
-
 const ATLAS_BY_CLASS = new Map<string, ClassSheetAtlas>();
 
-// JSON atlases
 const jsonByClass = new Map<string, PackedAtlas>();
 for (const [path, data] of Object.entries(atlasModules)) {
 	const cls = classFromAtlasPath(path);
@@ -93,14 +73,35 @@ for (const [path, url] of Object.entries(sheetModules)) {
 	if (!cls) continue;
 
 	const packed = jsonByClass.get(cls);
+	if (!packed) {
+		console.error(
+			`[characterSprites] "${cls}" has sheet.png but no atlas.json — skipping. Run pack-character-sheet.mjs.`,
+		);
+		continue;
+	}
+
+	// Hard invariant, not a soft default: a sheet built at any other
+	// frame size is rejected outright rather than silently displayed
+	// at the wrong scale. This is exactly the failure mode that once
+	// produced a sprite a quarter the intended size with no warning.
+	if (
+		packed.frameWidth !== SPRITE_FRAME_WIDTH ||
+		packed.frameHeight !== SPRITE_FRAME_HEIGHT
+	) {
+		console.error(
+			`[characterSprites] "${cls}" atlas.json declares ${packed.frameWidth}×${packed.frameHeight} frames, ` +
+				`but the game requires exactly ${SPRITE_FRAME_WIDTH}×${SPRITE_FRAME_HEIGHT}. ` +
+				`Re-pack with the correct source art size — skipping this class's sprite entirely rather than rendering it wrong.`,
+		);
+		continue;
+	}
+
 	ATLAS_BY_CLASS.set(cls, {
 		url,
-		frameWidth: packed?.frameWidth ?? SPRITE_FRAME_WIDTH,
-		frameHeight: packed?.frameHeight ?? SPRITE_FRAME_HEIGHT,
-		columns: packed?.columns ?? 12,
-		rows:
-			packed?.rows ??
-			(cls === "brawler" ? FALLBACK_BRAWLER_ROWS : { idle: 0, walk: 1 }),
+		frameWidth: packed.frameWidth,
+		frameHeight: packed.frameHeight,
+		columns: packed.columns,
+		rows: packed.rows,
 	});
 }
 
@@ -115,6 +116,13 @@ export interface LoadedAnimationStrip {
 
 const stripCache = new Map<string, LoadedAnimationStrip>();
 const baseTextureCache = new Map<string, Texture>();
+const warnedOnce = new Set<string>();
+
+function warnOnce(key: string, message: string): void {
+	if (warnedOnce.has(key)) return;
+	warnedOnce.add(key);
+	console.warn(`[characterSprites] ${message}`);
+}
 
 function applyNearest(texture: Texture): void {
 	const source = texture.source;
@@ -157,25 +165,53 @@ function sliceRow(
 	return frames;
 }
 
+/**
+ * Resolves which row to slice and whether to flip it, trying in
+ * order: the exact authored direction, that direction's mirror
+ * partner (NE↔NW, SE↔SW only — see characterDirection.ts for why
+ * there is no N/S partner), run falling back to walk's own
+ * resolution, then whichever direction was authored first for this
+ * animation at all. Returns null only if the animation doesn't exist
+ * in this atlas in any direction.
+ */
 function resolveRow(
 	atlas: ClassSheetAtlas,
+	characterClass: string,
 	animation: CharacterAnimation,
 	facing: IsoFacing,
-): number | null {
-	const directed = atlas.rows[`${animation}/${facing}`];
-	if (directed !== undefined) return directed;
-
-	const plain = atlas.rows[animation];
-	if (plain !== undefined) return plain;
-
-	if (animation === "run") {
-		const w = atlas.rows[`walk/${facing}`] ?? atlas.rows["walk"];
-		if (w !== undefined) return w;
+): { row: number; flipX: boolean } | null {
+	const directKey = `${animation}/${facing}`;
+	if (atlas.rows[directKey] !== undefined) {
+		return { row: atlas.rows[directKey]!, flipX: false };
 	}
 
-	if (animation === "idle") {
-		const se = atlas.rows["idle/se"] ?? atlas.rows["idle"];
-		if (se !== undefined) return se;
+	const partner = mirrorPartner(facing);
+	const partnerKey = `${animation}/${partner}`;
+	if (atlas.rows[partnerKey] !== undefined) {
+		warnOnce(
+			`${characterClass}/${directKey}/mirror`,
+			`"${characterClass}" has no "${directKey}" — mirroring "${partnerKey}". Draw this direction for real when possible (a held weapon can flip to the wrong hand when mirrored).`,
+		);
+		return { row: atlas.rows[partnerKey]!, flipX: true };
+	}
+
+	if (animation === "run") {
+		const viaWalk = resolveRow(atlas, characterClass, "walk", facing);
+		if (viaWalk) {
+			warnOnce(
+				`${characterClass}/run/${facing}/viaWalk`,
+				`"${characterClass}" has no "run/${facing}" — using its walk animation instead.`,
+			);
+			return viaWalk;
+		}
+	}
+
+	if (atlas.rows[animation] !== undefined) {
+		warnOnce(
+			`${characterClass}/${animation}/anyDirection`,
+			`"${characterClass}" has no "${animation}" for any direction near "${facing}" — using whichever direction was authored first.`,
+		);
+		return { row: atlas.rows[animation]!, flipX: false };
 	}
 
 	return null;
@@ -207,7 +243,7 @@ function resolveTiming(
 export async function loadCharacterAnimation(
 	characterClass: SpriteCharacterClass,
 	animation: CharacterAnimation,
-	direction: CharacterDirection | IsoFacing = "se",
+	direction: IsoFacing | string = "se",
 ): Promise<LoadedAnimationStrip | null> {
 	const facing = toIsoFacing(direction);
 	const cacheKey = `${characterClass}/${animation}/${facing}`;
@@ -217,30 +253,33 @@ export async function loadCharacterAnimation(
 	const atlas = ATLAS_BY_CLASS.get(characterClass);
 	if (!atlas) return null;
 
-	const { sheetDir, flipX } = resolveSheetDirection(facing);
-	const row = resolveRow(atlas, animation, sheetDir);
-	if (row === null) return null;
+	const resolved = resolveRow(atlas, characterClass, animation, facing);
+	if (!resolved) return null;
 
 	const timing = resolveTiming(characterClass, animation);
 	const base = await getBaseTexture(atlas);
-	const frameWidth = atlas.frameWidth;
-	const frameHeight = atlas.frameHeight;
 
 	const frames = sliceRow(
 		base,
-		row,
+		resolved.row,
 		atlas.columns,
-		frameWidth,
-		frameHeight,
+		atlas.frameWidth,
+		atlas.frameHeight,
 		timing.frameCount,
 	);
-	if (frames.length === 0) return null;
+	if (frames.length === 0) {
+		warnOnce(
+			`${cacheKey}/sliceFailed`,
+			`"${characterClass}" row ${resolved.row} for "${animation}/${facing}" sliced zero frames — sheet.png may be smaller than atlas.json claims.`,
+		);
+		return null;
+	}
 
 	const strip: LoadedAnimationStrip = {
 		frames,
 		fps: timing.fps,
 		loop: timing.loop,
-		flipX,
+		flipX: resolved.flipX,
 		durations: timing.durations,
 	};
 	stripCache.set(cacheKey, strip);
@@ -259,9 +298,12 @@ export async function preloadCharacterClass(
 export function hasCharacterSheet(
 	characterClass: SpriteCharacterClass,
 	animation: CharacterAnimation = "idle",
-	direction: CharacterDirection | IsoFacing = "se",
+	direction: IsoFacing | string = "se",
 ): boolean {
 	const atlas = ATLAS_BY_CLASS.get(characterClass);
 	if (!atlas) return false;
-	return resolveRow(atlas, animation, toIsoFacing(direction)) !== null;
+	return (
+		resolveRow(atlas, characterClass, animation, toIsoFacing(direction)) !==
+		null
+	);
 }

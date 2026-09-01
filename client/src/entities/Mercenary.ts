@@ -49,7 +49,16 @@ export class Mercenary {
 
 		void this.sprite.init().then((ok) => {
 			this.spriteReady = ok;
-			if (ok) this.placeholder.visible = false;
+			if (!ok) return;
+			this.placeholder.visible = false;
+			// The load can finish mid-move (it's async, movement isn't
+			// blocked on it) — if that happens, show the walk animation
+			// immediately rather than the idle pose init() already set,
+			// which would otherwise pop in as a jarring "standing still
+			// while sliding across the tile" glitch for one frame.
+			if (this._isAnimating) {
+				void this.sprite.play("walk");
+			}
 		});
 
 		this.syncPosition();
@@ -174,8 +183,12 @@ export class Mercenary {
 	}
 
 	private syncPosition(): void {
-		this.view.x = this.currentScreenPos.x;
-		this.view.y = this.currentScreenPos.y;
+		// Integer-pixel snapping — sub-pixel positions combined with
+		// nearest-neighbor texture scaling (required for crisp pixel art
+		// at non-integer camera zoom) otherwise shimmer/jitter visibly as
+		// the fractional part crosses a pixel boundary each frame.
+		this.view.x = Math.round(this.currentScreenPos.x);
+		this.view.y = Math.round(this.currentScreenPos.y);
 	}
 
 	private drawShadow(): Graphics {

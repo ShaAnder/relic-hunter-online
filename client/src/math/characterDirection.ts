@@ -1,6 +1,5 @@
 import type { GridCoord } from "@relic-hunter/shared";
-import type { CharacterDirection, IsoFacing } from "@/types/characterSprite";
-import { toIsoFacing } from "@/types/characterSprite";
+import type { IsoFacing } from "@/types/characterSprite";
 
 /**
  * Grid step → isometric facing.
@@ -24,31 +23,23 @@ export function getIsoFacing(from: GridCoord, to: GridCoord): IsoFacing {
 	return Math.abs(dx) >= Math.abs(dy) ? "nw" : "ne";
 }
 
-/** @deprecated use getIsoFacing */
-export function getCharacterDirection(
-	from: GridCoord,
-	to: GridCoord,
-): CharacterDirection {
-	return getIsoFacing(from, to);
-}
-
 /**
- * Map logical facing → sheet facing + optional flipX.
- * With four authored iso facings, flipX is almost always false.
+ * The mirror partner for a facing — NE/NW mirror each other (both
+ * "away from camera"), SE/SW mirror each other (both "toward
+ * camera"). There is no partner across the N/S divide: a
+ * back-facing sprite cannot become a front-facing one by flipping
+ * left-right, since those are genuinely different views, not mirror
+ * images. Every IsoFacing here happens to have a real partner since
+ * all four are diagonals, not straight N/S — this exists purely so
+ * the loader has one place to ask "what's the other side of this."
  */
-export function resolveSheetDirection(
-	dir: CharacterDirection | IsoFacing,
-): { sheetDir: IsoFacing; flipX: boolean } {
-	const iso = toIsoFacing(dir);
-	return { sheetDir: iso, flipX: false };
-}
+const MIRROR_PARTNER: Record<IsoFacing, IsoFacing> = {
+	ne: "nw",
+	nw: "ne",
+	se: "sw",
+	sw: "se",
+};
 
-export function directionUsesFlipX(_dir: CharacterDirection): boolean {
-	return false;
-}
-
-export function directionMirrorSource(
-	dir: CharacterDirection,
-): CharacterDirection {
-	return toIsoFacing(dir);
+export function mirrorPartner(facing: IsoFacing): IsoFacing {
+	return MIRROR_PARTNER[facing];
 }

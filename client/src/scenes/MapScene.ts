@@ -199,7 +199,6 @@ export class MapScene implements Scene, TutorialPort {
 		this.grid = this.buildMap();
 
 		this.boardContainer.addChild(this.tilesContainer);
-		this.boardContainer.addChild(this.mercenaryContainer);
 		this.view.addChild(this.boardContainer);
 
 		this.mapController = new MapController(this.game, this.mercenaryContainer, {
@@ -363,6 +362,14 @@ export class MapScene implements Scene, TutorialPort {
 		this.boardContainer.addChild(this.targetingVisuals.attackRangeView);
 
 		this.boardContainer.addChild(this.mapController.trapSystem.markerContainer);
+
+		// Characters render above every ground-decal layer above (chests,
+		// move-preview, attack-range highlights, trap markers) — added
+		// last so Pixi draws it last. This game's own click handling does
+		// manual coordinate hit-testing (pointInCircle/pointInContainer),
+		// not Pixi's interactive event system, so draw order here has no
+		// effect on what's clickable — only on what's visually on top.
+		this.boardContainer.addChild(this.mercenaryContainer);
 
 		this.hud = new MapHud(this.game);
 		this.hud.setActionMenuSubmenuToggled((open) => {
@@ -960,7 +967,7 @@ export class MapScene implements Scene, TutorialPort {
 		if (this.tutorialConfig?.playerMovement !== undefined) {
 			state.stats.movement = this.tutorialConfig.playerMovement;
 		}
-		const mercenary = new Mercenary(state.coord);
+		const mercenary = new Mercenary(state.coord, state.characterClass);
 		this.mercenaryContainer.addChild(mercenary.view);
 
 		const turnManager = new TurnManager(
@@ -1007,7 +1014,7 @@ export class MapScene implements Scene, TutorialPort {
 			);
 			const mercenary = new Mercenary(
 				coord,
-				state.characterClass, // or aiClass
+				state.characterClass,
 				MapScene.ENEMY_COLORS[i] ?? 0xe67e22,
 			);
 			this.mercenaryContainer.addChild(mercenary.view);
@@ -1993,6 +2000,10 @@ export class MapScene implements Scene, TutorialPort {
 		this.boardContainer.removeChild(this.moveController.view);
 		this.moveController = this.createMoveController();
 		this.boardContainer.addChild(this.moveController.view);
+		// Re-adding moveController.view above moved it to the end of
+		// boardContainer's children — restore mercenaryContainer's
+		// on-top position, the same invariant the constructor sets up.
+		this.boardContainer.addChild(this.mercenaryContainer);
 
 		this.mapRenderer.build(this.grid, 0);
 		this.mapRenderer.centerCamera();

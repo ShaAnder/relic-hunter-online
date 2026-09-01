@@ -1,9 +1,14 @@
 /**
  * Per-character sprite manifest — source of truth for frame counts / timing.
  * Packer + runtime both align to this (runtime also reads atlas.json rows).
+ *
+ * Deliberately does NOT declare frameWidth/frameHeight or a
+ * footOffsetY here — every character sheet uses the one global
+ * SPRITE_FRAME_WIDTH/HEIGHT (see types/characterSprite.ts) and the
+ * fixed feet-at-frame-bottom convention, enforced by the packer.
+ * There is nothing per-character to tune for either.
  */
-import type { CharacterAnimation } from "@/types/characterSprite";
-import type { IsoFacing } from "@/types/characterSprite";
+import type { CharacterAnimation, IsoFacing } from "@/types/characterSprite";
 
 export interface AnimManifest {
 	/** Authored frames in the strip (packer / atlas). */
@@ -19,13 +24,9 @@ export interface AnimManifest {
 
 export interface CharacterSpriteManifest {
 	characterClass: string;
-	frameWidth: number;
-	frameHeight: number;
-	/** Map display scale (128 cell → ~64 on map). */
+	/** Map display scale — see MAP_SPRITE_SCALE; override only for a genuinely different silhouette size, not to compensate for wrong-size source art. */
 	scale: number;
-	/** Foot pad inside cell (texture px); applied as sprite.y after anchor. */
-	footOffsetY: number;
-	/** Integer-pixel idle bob amplitudes (texture px, pre-scale). */
+	/** Integer-pixel idle bob amplitudes (texture px, pre-scale), interpolated smoothly at runtime — not a discrete step sequence. */
 	idleBobY: number[];
 	idleBobPeriodMs: number;
 	animations: Partial<Record<CharacterAnimation, AnimManifest>>;
@@ -35,11 +36,7 @@ export interface CharacterSpriteManifest {
 
 export const brawlerSprite: CharacterSpriteManifest = {
 	characterClass: "brawler",
-	frameWidth: 128,
-	frameHeight: 128,
 	scale: 0.5,
-	// Negative = shift sprite up so boots sit on tile centre — tune in-game
-	footOffsetY: -16,
 	idleBobY: [0, -1, -2, -1, 0],
 	idleBobPeriodMs: 1400,
 	facings: ["se", "sw", "ne", "nw"],
