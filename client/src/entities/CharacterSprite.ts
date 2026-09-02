@@ -18,6 +18,12 @@ import { getSpriteManifest } from "@/sprites/manifests/brawler";
  * per-character vertical offset to tune; if a character's feet don't
  * land on the tile, the source art doesn't follow the convention, not
  * this component.
+ *
+ * Direction: setDirection() reloads the strip for the current anim at
+ * the new IsoFacing. The loader mirrors NE↔NW / SE↔SW when a facing
+ * has no authored row (flipX on the strip).
+ *
+ * Idle uses authored multi-frame strips from the atlas — no runtime bob.
  */
 export class CharacterSprite {
 	readonly view = new Container();
@@ -33,10 +39,6 @@ export class CharacterSprite {
 	private direction: IsoFacing = "se";
 	private externalScale: number;
 	private flipX = false;
-	private runtimeIdle = false;
-	private idleBobY: number[];
-	private idleBobPeriodMs: number;
-	private idleBobElapsedMs = 0;
 	/** Guards against an in-flight play() from an earlier direction overwriting a newer one — see docs/15. */
 	private playToken = 0;
 
@@ -44,8 +46,6 @@ export class CharacterSprite {
 		this.characterClass = characterClass;
 		const manifest = getSpriteManifest(characterClass);
 		this.externalScale = manifest.scale;
-		this.idleBobY = manifest.idleBobY;
-		this.idleBobPeriodMs = manifest.idleBobPeriodMs;
 
 		// Bottom-center anchor + y=0 is the entire positioning contract —
 		// this is what "feet at frame bottom" in the source art buys us.
@@ -115,10 +115,6 @@ export class CharacterSprite {
 			return false;
 		}
 
-		const manifest = getSpriteManifest(this.characterClass);
-		const animMeta = manifest.animations[animation];
-		this.runtimeIdle = !!animMeta?.runtimeIdle && animation === "idle";
-
 		const sameAnim = this.currentAnim === animation && this.strip !== null;
 		this.strip = strip;
 		this.currentAnim = animation;
@@ -126,7 +122,6 @@ export class CharacterSprite {
 		if (!preserveProgress || !sameAnim) {
 			this.frameIndex = 0;
 			this.frameElapsedMs = 0;
-			this.idleBobElapsedMs = 0;
 		}
 		this.frameIndex = Math.min(this.frameIndex, strip.frames.length - 1);
 		this.loop = options.loop ?? strip.loop;
@@ -157,17 +152,14 @@ export class CharacterSprite {
 		return this.currentAnim;
 	}
 
+	get facing(): IsoFacing {
+		return this.direction;
+	}
+
 	update(deltaTime: number): void {
-		const dtMs = (deltaTime / 60) * 1000;
-
-		if (this.runtimeIdle) {
-			this.idleBobElapsedMs += dtMs;
-			this.sprite.y = Math.round(this.sampleIdleBob());
-			return;
-		}
-
 		if (!this.playing || !this.strip) return;
 
+		const dtMs = (deltaTime / 60) * 1000;
 		const frameMs = this.currentFrameDurationMs();
 		this.frameElapsedMs += dtMs;
 
@@ -190,28 +182,6 @@ export class CharacterSprite {
 
 			this.sprite.texture = this.strip.frames[this.frameIndex]!;
 		}
-	}
-
-	/**
-	 * Smoothly interpolates between the manifest's idleBobY keyframes
-	 * instead of stepping discretely between them — a discrete lookup
-	 * here was a second, independent source of visible jitter, since
-	 * each step is a hard snap rather than a continuous motion.
-	 */
-	private sampleIdleBob(): number {
-		if (this.idleBobY.length === 0) return 0;
-		if (this.idleBobY.length === 1) return this.idleBobY[0]!;
-
-		const t =
-			(this.idleBobElapsedMs % this.idleBobPeriodMs) / this.idleBobPeriodMs;
-		const scaled = t * this.idleBobY.length;
-		const i0 = Math.floor(scaled) % this.idleBobY.length;
-		const i1 = (i0 + 1) % this.idleBobY.length;
-		const localT = scaled - Math.floor(scaled);
-
-		const a = this.idleBobY[i0]!;
-		const b = this.idleBobY[i1]!;
-		return a + (b - a) * localT;
 	}
 
 	private currentFrameDurationMs(): number {
