@@ -4,20 +4,20 @@
   "frameHeight": 128,
   "columns": 6,
   "rows": {
-    "idle/se": 0,
+    "idle/sw": 0,
     "idle": 0,
     "idle/ne": 1,
-    "walk/se": 2,
+    "walk/sw": 2,
     "walk": 2,
     "walk/ne": 3
   },
   "strips": [
     {
       "anim": "idle",
-      "facing": "se",
+      "facing": "sw",
       "row": 0,
       "frames": 4,
-      "source": "idle_se.png"
+      "source": "idle_sw.png"
     },
     {
       "anim": "idle",
@@ -28,10 +28,10 @@
     },
     {
       "anim": "walk",
-      "facing": "se",
+      "facing": "sw",
       "row": 2,
       "frames": 6,
-      "source": "walk_se.png"
+      "source": "walk_sw.png"
     },
     {
       "anim": "walk",
@@ -41,5 +41,5 @@
       "source": "walk_ne.png"
     }
   ],
-  "generatedAt": "2026-09-02T13:07:37.476Z"
+  "generatedAt": "2026-09-02T16:20:46.628Z"
 }

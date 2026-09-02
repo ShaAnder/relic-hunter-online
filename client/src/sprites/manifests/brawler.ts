@@ -42,10 +42,9 @@ export const brawlerSprite: CharacterSpriteManifest = {
 	facings: ["se", "sw", "ne", "nw"],
 	animations: {
 		idle: {
-			frames: 1,
+			frames: 4,
 			loop: true,
-			runtimeIdle: true,
-			fps: 1,
+			fps: 4,
 		},
 		walk: {
 			frames: 6,
