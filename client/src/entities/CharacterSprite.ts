@@ -50,7 +50,7 @@ export class CharacterSprite {
 		// Bottom-center anchor + y=0 is the entire positioning contract —
 		// this is what "feet at frame bottom" in the source art buys us.
 		this.sprite.anchor.set(0.5, 1);
-		this.sprite.y = 10;
+		this.sprite.y = 12;
 		this.view.addChild(this.sprite);
 		this.view.visible = false;
 	}
