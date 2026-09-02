@@ -43,3 +43,11 @@ const MIRROR_PARTNER: Record<IsoFacing, IsoFacing> = {
 export function mirrorPartner(facing: IsoFacing): IsoFacing {
 	return MIRROR_PARTNER[facing];
 }
+
+export function getIsoFacingFromScreenDelta(dx: number, dy: number): IsoFacing {
+	if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) return "se";
+	if (dy >= 0 && dx >= 0) return "se";
+	if (dy >= 0 && dx < 0) return "sw";
+	if (dy < 0 && dx < 0) return "nw";
+	return "ne";
+}

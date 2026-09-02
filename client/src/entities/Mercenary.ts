@@ -7,13 +7,18 @@ import {
 	toSpriteCharacterClass,
 	type SpriteCharacterClass,
 } from "@/types/characterSprite";
-import { getIsoFacing } from "@/math/characterDirection";
+import { getIsoFacingFromScreenDelta } from "@/math/characterDirection";
 
 const SPHERE_RADIUS = 12;
 const MOVE_DURATION_PER_TILE_MS = 180;
 
 /**
  * Animated hunter token. Visual only — grid position lives in MercenaryState.
+ *
+ * Facing is derived from the *active screen-space segment* of the path
+ * (current position → path[0] → path[1] → …), not from path[0]→path[1]
+ * alone. The path array does not include the unit's current tile, so
+ * using only grid pairs from `path` aimed the sprite at the *next* leg.
  */
 export class Mercenary {
 	readonly view = new Container();
@@ -29,7 +34,6 @@ export class Mercenary {
 	private readonly placeholder: Graphics;
 	private readonly sprite: CharacterSprite;
 	private spriteReady = false;
-	private lastPathCoords: GridCoord[] = [];
 
 	constructor(
 		initialCoord: GridCoord,
@@ -75,9 +79,6 @@ export class Mercenary {
 				return;
 			}
 
-			this.lastPathCoords = path;
-			this.applyFacingFromPath(path);
-
 			this.animPoints = [
 				{ ...this.currentScreenPos },
 				...path.map(gridToScreen),
@@ -87,6 +88,9 @@ export class Mercenary {
 				durationMsOverride ?? path.length * MOVE_DURATION_PER_TILE_MS;
 			this._isAnimating = true;
 			this.onPathComplete = resolve;
+
+			// Face along the first leg: current screen pos → first path tile
+			this.applyFacingFromScreenSegment(0);
 
 			if (this.spriteReady) {
 				void this.sprite.play("walk");
@@ -129,7 +133,6 @@ export class Mercenary {
 			this.animPoints = [];
 			this.animElapsedMs = 0;
 			this.animDurationMs = 0;
-			this.lastPathCoords = [];
 
 			if (this.spriteReady) {
 				void this.sprite.play("idle");
@@ -141,14 +144,20 @@ export class Mercenary {
 		}
 	}
 
-	private applyFacingFromPath(path: GridCoord[]): void {
-		if (path.length >= 2) {
-			this.sprite.setDirection(getIsoFacing(path[0]!, path[1]!));
-		}
+	/**
+	 * Face along animPoints[segmentIndex-1] → animPoints[segmentIndex].
+	 * segmentIndex is 1-based (first leg = 1).
+	 */
+	private applyFacingFromScreenSegment(segmentIndexZeroBased: number): void {
+		const i = segmentIndexZeroBased;
+		if (i < 0 || i + 1 >= this.animPoints.length) return;
+		const a = this.animPoints[i]!;
+		const b = this.animPoints[i + 1]!;
+		this.sprite.setDirection(getIsoFacingFromScreenDelta(b.x - a.x, b.y - a.y));
 	}
 
 	private updateFacingForProgress(t: number): void {
-		if (this.lastPathCoords.length < 2 || this.animPoints.length < 2) return;
+		if (this.animPoints.length < 2) return;
 
 		const points = this.animPoints;
 		const lengths: number[] = [0];
@@ -171,15 +180,8 @@ export class Mercenary {
 			segmentIndex = i;
 		}
 
-		if (segmentIndex >= 2) {
-			const from = this.lastPathCoords[segmentIndex - 2]!;
-			const to = this.lastPathCoords[segmentIndex - 1]!;
-			this.sprite.setDirection(getIsoFacing(from, to));
-		} else if (this.lastPathCoords.length >= 2) {
-			this.sprite.setDirection(
-				getIsoFacing(this.lastPathCoords[0]!, this.lastPathCoords[1]!),
-			);
-		}
+		// segmentIndex is 1-based index into the end of the active leg
+		this.applyFacingFromScreenSegment(segmentIndex - 1);
 	}
 
 	private syncPosition(): void {
@@ -193,7 +195,8 @@ export class Mercenary {
 
 	private drawShadow(): Graphics {
 		const g = new Graphics();
-		g.ellipse(0, 2, SPHERE_RADIUS * 0.9, SPHERE_RADIUS * 0.35);
+		// Slightly lower under boots so the blob sits on the tile face
+		g.ellipse(0, 4, SPHERE_RADIUS * 0.9, SPHERE_RADIUS * 0.35);
 		g.fill({ color: 0x000000, alpha: 0.35 });
 		return g;
 	}
