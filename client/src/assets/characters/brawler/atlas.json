@@ -16,14 +16,14 @@
       "anim": "idle",
       "facing": "se",
       "row": 0,
-      "frames": 1,
+      "frames": 4,
       "source": "idle_se.png"
     },
     {
       "anim": "idle",
       "facing": "ne",
       "row": 1,
-      "frames": 1,
+      "frames": 4,
       "source": "idle_ne.png"
     },
     {
@@ -41,5 +41,5 @@
       "source": "walk_ne.png"
     }
   ],
-  "generatedAt": "2026-09-02T10:56:49.027Z"
+  "generatedAt": "2026-09-02T13:07:37.476Z"
 }
