@@ -11,6 +11,15 @@ import { getIsoFacingFromScreenDelta } from "@/math/characterDirection";
 
 const SPHERE_RADIUS = 12;
 const MOVE_DURATION_PER_TILE_MS = 180;
+/**
+ * Shifts the whole token (sprite + shadow together, via syncPosition)
+ * slightly toward the tile's back edge in screen space. Negative =
+ * up/back. This moves the container, not just the sprite — a
+ * sprite-only offset would separate the character from its shadow
+ * and read as hovering, which is exactly what this avoids. Tune this
+ * value directly; it's a visual judgment call, not a derived number.
+ */
+const STANDING_POSITION_Y_OFFSET = -6;
 
 /**
  * Animated hunter token. Visual only — grid position lives in MercenaryState.
@@ -190,7 +199,9 @@ export class Mercenary {
 		// at non-integer camera zoom) otherwise shimmer/jitter visibly as
 		// the fractional part crosses a pixel boundary each frame.
 		this.view.x = Math.round(this.currentScreenPos.x);
-		this.view.y = Math.round(this.currentScreenPos.y);
+		this.view.y = Math.round(
+			this.currentScreenPos.y + STANDING_POSITION_Y_OFFSET,
+		);
 	}
 
 	private drawShadow(): Graphics {
