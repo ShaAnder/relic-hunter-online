@@ -1,0 +1,45 @@
+{
+  "characterClass": "brawler",
+  "frameWidth": 128,
+  "frameHeight": 128,
+  "columns": 6,
+  "rows": {
+    "idle/se": 0,
+    "idle": 0,
+    "idle/ne": 1,
+    "walk/se": 2,
+    "walk": 2,
+    "walk/ne": 3
+  },
+  "strips": [
+    {
+      "anim": "idle",
+      "facing": "se",
+      "row": 0,
+      "frames": 1,
+      "source": "idle_se.png"
+    },
+    {
+      "anim": "idle",
+      "facing": "ne",
+      "row": 1,
+      "frames": 1,
+      "source": "idle_ne.png"
+    },
+    {
+      "anim": "walk",
+      "facing": "se",
+      "row": 2,
+      "frames": 6,
+      "source": "walk_se.png"
+    },
+    {
+      "anim": "walk",
+      "facing": "ne",
+      "row": 3,
+      "frames": 6,
+      "source": "walk_ne.png"
+    }
+  ],
+  "generatedAt": "2026-09-02T10:56:49.027Z"
+}
