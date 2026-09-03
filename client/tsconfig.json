@@ -19,7 +19,7 @@
 		"baseUrl": ".",
 		"paths": {
 			"@/*": ["src/*"],
-			"@relic-hunter/shared": ["../shared/index.ts"],
+			"@relic-hunter/shared": ["../shared/src/index.ts"],
 			"@relic-hunter/shared/*": ["../shared/*"]
 		}
 	},

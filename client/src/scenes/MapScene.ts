@@ -842,6 +842,7 @@ export class MapScene implements Scene, TutorialPort {
 				path,
 				local.state.stats,
 				local.state.temporaryStatBonus.defense,
+				this.game.session.rng,
 			);
 		for (const r of resists) {
 			this.showFeedback(
@@ -972,7 +973,10 @@ export class MapScene implements Scene, TutorialPort {
 
 		const turnManager = new TurnManager(
 			() => state,
-			() => (this.game.session.sharedDeck ??= RH.buildSharedDeck()),
+			() =>
+				(this.game.session.sharedDeck ??= RH.buildSharedDeck(
+					this.game.session.rng,
+				)),
 			() => this.syncUI(),
 		);
 
@@ -1021,7 +1025,10 @@ export class MapScene implements Scene, TutorialPort {
 
 			const turnManager = new TurnManager(
 				() => state,
-				() => (this.game.session.sharedDeck ??= RH.buildSharedDeck()),
+				() =>
+					(this.game.session.sharedDeck ??= RH.buildSharedDeck(
+						this.game.session.rng,
+					)),
 				() => {},
 			);
 

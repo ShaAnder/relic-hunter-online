@@ -6,6 +6,7 @@ import type { CombatAction, CombatChoice } from "../combat/combat";
 import type { GridCoord } from "../world/grid";
 import type { AiMemory } from "./aiMemory";
 import type { EntityCore } from "../types/entity";
+import type { RandomFn } from "../math/random";
 
 /** Hostile hunter behavior profile */
 export type AiArchetype = "aggressive" | "treasure" | "balanced";
@@ -553,6 +554,7 @@ export function chooseCombatAction(
 	stats: MercenaryStats,
 	archetype: AiArchetype,
 	ctx: CombatAiContext,
+	rng: RandomFn,
 ): CombatChoice {
 	const currentHp = ctx.currentHp;
 	const opponentStats = ctx.opponentStats;
@@ -662,7 +664,7 @@ export function chooseCombatAction(
 	let bestScore = -Infinity;
 	for (const row of scores) {
 		if (row.score === -Infinity) continue;
-		const jittered = row.score + Math.random() * 4;
+		const jittered = row.score + rng() * 4;
 		if (jittered > bestScore) {
 			bestScore = jittered;
 			bestAction = row.action;
@@ -701,6 +703,7 @@ export function chooseCombatAction(
 export function decideLootChoice(
 	loserItems: (ItemData | null)[],
 	targetItemId: string | null,
+	rng: RandomFn,
 ): number | null {
 	if (targetItemId) {
 		const targetIndex = loserItems.findIndex((i) => i?.id === targetItemId);
@@ -712,7 +715,7 @@ export function decideLootChoice(
 		.filter((index) => index !== -1);
 
 	if (filledIndices.length === 0) return null;
-	return filledIndices[Math.floor(Math.random() * filledIndices.length)];
+	return filledIndices[Math.floor(rng() * filledIndices.length)];
 }
 
 /**
@@ -723,6 +726,7 @@ export function decideLootChoice(
 export function decideSurrenderChoice(
 	giverItems: (ItemData | null)[],
 	targetItemId: string | null,
+	rng: RandomFn,
 ): number | null {
 	const filledIndices = giverItems
 		.map((item, index) => (item !== null ? index : -1))
@@ -735,12 +739,10 @@ export function decideSurrenderChoice(
 			(i) => giverItems[i]?.id !== targetItemId,
 		);
 		if (nonTargetIndices.length > 0) {
-			return nonTargetIndices[
-				Math.floor(Math.random() * nonTargetIndices.length)
-			];
+			return nonTargetIndices[Math.floor(rng() * nonTargetIndices.length)];
 		}
 		// Only the target item remains — forced to give it up.
 	}
 
-	return filledIndices[Math.floor(Math.random() * filledIndices.length)];
+	return filledIndices[Math.floor(rng() * filledIndices.length)];
 }

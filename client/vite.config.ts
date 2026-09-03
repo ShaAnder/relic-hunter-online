@@ -5,7 +5,7 @@ export default defineConfig({
 	resolve: {
 		alias: {
 			"@": path.resolve(__dirname, "src"),
-			"@relic-hunter/shared": path.resolve(__dirname, "../shared/index.ts"),
+			"@relic-hunter/shared": path.resolve(__dirname, "../shared/src/index.ts"),
 		},
 	},
 	server: {

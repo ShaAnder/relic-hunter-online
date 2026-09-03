@@ -276,6 +276,7 @@ export class AiTurnController {
 							path,
 							unit.state.stats,
 							unit.state.temporaryStatBonus.defense,
+							this.game.session.rng,
 						);
 					for (const r of resists) {
 						this.cb.showFeedback(

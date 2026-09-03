@@ -52,13 +52,14 @@ export class ChestSystem {
 		plan: { chests: RH.ChestPlan[] },
 		grid: RH.Grid,
 		reserved: Set<string>,
+		rng: RH.RandomFn,
 	): void {
 		this.container.removeChildren();
 		this.placedChests = [];
 
 		const used = new Set(reserved);
 		for (const chestPlan of plan.chests) {
-			const coord = RH.pickSpreadWalkableTile(grid, used);
+			const coord = RH.pickSpreadWalkableTile(grid, used, rng);
 			if (!coord) break;
 			used.add(RH.coordKey(coord));
 			const entity = new Chest(coord);
@@ -89,6 +90,10 @@ export class ChestSystem {
 		placed.entity.open();
 		items[emptyIndex] = placed.plan.item;
 
-		return { kind: "opened", item: placed.plan.item, isTarget: placed.plan.isTarget };
+		return {
+			kind: "opened",
+			item: placed.plan.item,
+			isTarget: placed.plan.isTarget,
+		};
 	}
 }

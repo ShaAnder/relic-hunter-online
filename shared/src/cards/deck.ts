@@ -1,14 +1,15 @@
 import type { CardData } from "./card";
+import type { RandomFn } from "../math/random";
 
 /**
  * Fisher-Yates shuffle. Used here (rather than sort-by-random-key, a common
  * but statistically biased shortcut) so every permutation of the input is
  * equally likely.
  */
-function shuffle<T>(items: T[]): T[] {
+function shuffle<T>(items: T[], rng: RandomFn): T[] {
 	const result = [...items];
 	for (let i = result.length - 1; i > 0; i--) {
-		const j = Math.floor(Math.random() * (i + 1));
+		const j = Math.floor(rng() * (i + 1));
 		[result[i], result[j]] = [result[j], result[i]];
 	}
 	return result;
@@ -175,14 +176,14 @@ function buildGreenCards(): CardData[] {
  * every hunter on the map draws from this same deck, turn by turn, until
  * it's exhausted.
  */
-export function buildSharedDeck(): CardData[] {
+export function buildSharedDeck(rng: RandomFn): CardData[] {
 	const deck = [
 		...buildBlueCards(),
 		...buildRedCards(),
 		...buildYellowCards(),
 		...buildGreenCards(),
 	];
-	return shuffle(deck);
+	return shuffle(deck, rng);
 }
 
 /** Max cards any hunter can hold — player or AI. Single source of truth. */

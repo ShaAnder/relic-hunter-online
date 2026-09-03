@@ -248,6 +248,7 @@ export class BattleOverlay implements Overlay {
 						itemCount: this.attackerState.items.filter((i) => i !== null)
 							.length,
 					},
+					this.game.session.rng,
 				);
 		const defenderChoice = this.isDefenderMonster
 			? monsterCombatChoice(this.defenderState.stats, !this.isRangedInitiated)
@@ -264,6 +265,7 @@ export class BattleOverlay implements Overlay {
 						itemCount: this.defenderState.items.filter((i) => i !== null)
 							.length,
 					},
+					this.game.session.rng,
 				);
 		void this.resolveRound(attackerChoice, defenderChoice);
 	}
@@ -780,7 +782,11 @@ export class BattleOverlay implements Overlay {
 		if (!winnerIsLocal) {
 			await this.delay(1200);
 			const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
-			const index = decideLootChoice(loserState.items, targetItemId);
+			const index = decideLootChoice(
+				loserState.items,
+				targetItemId,
+				this.game.session.rng,
+			);
 			if (index !== null) this.applyLoot(index);
 			this.winnerLootPanel.view.visible = false;
 			this.loserLootPanel.view.visible = false;
@@ -831,7 +837,11 @@ export class BattleOverlay implements Overlay {
 		if (!giverIsLocal) {
 			await this.delay(1200);
 			const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
-			const index = decideSurrenderChoice(giverState.items, targetItemId);
+			const index = decideSurrenderChoice(
+				giverState.items,
+				targetItemId,
+				this.game.session.rng,
+			);
 			if (index !== null) {
 				this.surrenderLootPanel.sync(giverState.items);
 				await this.delay(400);
@@ -912,18 +922,26 @@ export class BattleOverlay implements Overlay {
 					otherState.stats,
 					this.localHumanRole === "defender" ? true : !this.isRangedInitiated,
 				)
-			: chooseCombatAction(otherState.hand, otherState.stats, otherArchetype, {
-					currentHp: otherState.currentHp,
-					opponentStats: localChoice.stats,
-					canAttack:
-						this.localHumanRole === "defender" ? true : !this.isRangedInitiated,
-					againstMonster:
-						this.localHumanRole === "attacker"
-							? this.isAttackerMonster
-							: this.isDefenderMonster,
-					committed: this.localHumanRole === "defender",
-					itemCount: otherState.items.filter((i) => i !== null).length,
-				});
+			: chooseCombatAction(
+					otherState.hand,
+					otherState.stats,
+					otherArchetype,
+					{
+						currentHp: otherState.currentHp,
+						opponentStats: localChoice.stats,
+						canAttack:
+							this.localHumanRole === "defender"
+								? true
+								: !this.isRangedInitiated,
+						againstMonster:
+							this.localHumanRole === "attacker"
+								? this.isAttackerMonster
+								: this.isDefenderMonster,
+						committed: this.localHumanRole === "defender",
+						itemCount: otherState.items.filter((i) => i !== null).length,
+					},
+					this.game.session.rng,
+				);
 
 		const attackerChoice =
 			this.localHumanRole === "attacker" ? localChoice : otherChoice;
@@ -947,6 +965,7 @@ export class BattleOverlay implements Overlay {
 			defenderChoice,
 			this.currentRound,
 			this.maxRounds,
+			this.game.session.rng,
 		);
 		const result = resolution.result;
 

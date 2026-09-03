@@ -1,3 +1,5 @@
+import type { RandomFn } from "../math/random";
+
 /**
  * Item categories.
  *
@@ -131,7 +133,7 @@ export function findItemById(id: string): ItemData | undefined {
  * target. Any item can be the target — there's no separate "relic" tier
  * gating eligibility.
  */
-export function pickTargetItem(): ItemData {
+export function pickTargetItem(rng: RandomFn): ItemData {
 	const pool = itemsByCategory("loot");
-	return pool[Math.floor(Math.random() * pool.length)];
+	return pool[Math.floor(rng() * pool.length)];
 }

@@ -1,4 +1,5 @@
 import { Grid, coordKey, GridCoord } from "./grid";
+import type { RandomFn } from "../math/random";
 
 /**
  * Orthogonal (Manhattan) distance — the natural metric on a 4-connected grid.
@@ -26,6 +27,7 @@ export const FALLBACK_DIST = 3;
 export function pickSpreadWalkableTile(
 	grid: Grid,
 	used: Set<string>,
+	rng: RandomFn,
 	minDistance: number = CHEST_MIN_DIST,
 	fallbackDistance: number = FALLBACK_DIST,
 ): GridCoord | null {
@@ -62,7 +64,7 @@ export function pickSpreadWalkableTile(
 			: candidates.filter((c) => meets(c, fallbackDistance));
 	const finalPool = pool.length > 0 ? pool : candidates;
 
-	return finalPool[Math.floor(Math.random() * finalPool.length)];
+	return finalPool[Math.floor(rng() * finalPool.length)];
 }
 
 /**
@@ -78,6 +80,7 @@ export function pickSpreadWalkableTile(
 export function pickExitFarFrom(
 	grid: Grid,
 	from: GridCoord,
+	rng: RandomFn,
 	blocked: Set<string> = new Set(),
 	minFraction: number = 0.35,
 ): GridCoord | null {
@@ -107,8 +110,8 @@ export function pickExitFarFrom(
 	if (farEnough.length === 0) {
 		const best = Math.max(...candidates.map((c) => c.dist));
 		const top = candidates.filter((c) => c.dist === best);
-		return top[Math.floor(Math.random() * top.length)].coord;
+		return top[Math.floor(rng() * top.length)].coord;
 	}
 
-	return farEnough[Math.floor(Math.random() * farEnough.length)].coord;
+	return farEnough[Math.floor(rng() * farEnough.length)].coord;
 }
