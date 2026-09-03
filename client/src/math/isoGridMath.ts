@@ -8,8 +8,8 @@ import type { GridCoord } from "@relic-hunter/shared";
  * Rendering problem so lives in client instead of shared
  */
 
-export const TILE_WIDTH = 64;
-export const TILE_HEIGHT = 32;
+export const TILE_WIDTH = 80;
+export const TILE_HEIGHT = 40;
 
 export function gridToScreen(coord: GridCoord): { x: number; y: number } {
 	return {

@@ -1,5 +1,6 @@
 import type { ItemData } from "../items/item";
 import { pickTargetItem, itemsByCategory } from "../items/item";
+import type { RandomFn } from "../math/random";
 
 const MIN_CHESTS = 10;
 const MAX_CHESTS = 15;
@@ -23,19 +24,20 @@ export interface ChestPlan {
  * on an actual walkable map tile is a MapScene/LoadingScene concern — this
  * function has no idea what the map even looks like.
  */
-export function planChests(): { chests: ChestPlan[]; targetItem: ItemData } {
+export function planChests(rng: RandomFn): {
+	chests: ChestPlan[];
+	targetItem: ItemData;
+} {
 	const chestCount =
-		MIN_CHESTS + Math.floor(Math.random() * (MAX_CHESTS - MIN_CHESTS + 1));
-	const targetItem = pickTargetItem();
+		MIN_CHESTS + Math.floor(rng() * (MAX_CHESTS - MIN_CHESTS + 1));
+	const targetItem = pickTargetItem(rng);
 	const pool = itemsByCategory("loot");
-	const targetChestIndex = Math.floor(Math.random() * chestCount);
+	const targetChestIndex = Math.floor(rng() * chestCount);
 
 	const chests: ChestPlan[] = [];
 	for (let i = 0; i < chestCount; i++) {
 		const isTarget = i === targetChestIndex;
-		const item = isTarget
-			? targetItem
-			: pool[Math.floor(Math.random() * pool.length)];
+		const item = isTarget ? targetItem : pool[Math.floor(rng() * pool.length)];
 
 		chests.push({ id: `chest_${i}`, item, isTarget });
 	}

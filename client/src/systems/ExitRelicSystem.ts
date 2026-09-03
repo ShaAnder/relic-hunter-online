@@ -16,15 +16,16 @@ export const ExitRelicSystem = {
 		grid: RH.Grid,
 		from: RH.GridCoord,
 		blockedExtra: Set<string>,
+		rng: RH.RandomFn,
 	): void {
 		if (RH.findExitTile(grid)) return;
 
 		const blocked = new Set(blockedExtra);
 		blocked.add(RH.coordKey(from));
 
-		const exitCoord = RH.pickExitFarFrom(grid, from, blocked, 0.35);
+		const exitCoord = RH.pickExitFarFrom(grid, from, rng, blocked, 0.35);
 		if (!exitCoord) {
-			const fallback = RH.pickSpreadWalkableTile(grid, blocked, 1, 1);
+			const fallback = RH.pickSpreadWalkableTile(grid, blocked, rng, 1, 1);
 			if (!fallback) return;
 			grid.setTileType(fallback, RH.TileType.Exit);
 			return;

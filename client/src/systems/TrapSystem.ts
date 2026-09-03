@@ -84,6 +84,7 @@ export class TrapSystem {
 		path: RH.GridCoord[],
 		victimStats: RH.MercenaryStats,
 		temporaryDefenseBonus: RH.CardData["value"] | 0,
+		rng: RH.RandomFn,
 	): {
 		truncatedPath: RH.GridCoord[];
 		hazardHit: TrapHazardHit | null;
@@ -114,7 +115,7 @@ export class TrapSystem {
 						}
 					: undefined;
 
-			const result = RH.resolveHazardRoll(victimStats, syntheticCard);
+			const result = RH.resolveHazardRoll(victimStats, rng, syntheticCard);
 
 			if (!result.landed) {
 				resists.push({

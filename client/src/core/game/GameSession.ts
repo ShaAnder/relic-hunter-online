@@ -5,7 +5,9 @@ import type {
 	GridCoord,
 	CardData,
 	MatchScore,
+	RandomFn,
 } from "@relic-hunter/shared";
+import { createSeededRandom } from "@relic-hunter/shared";
 
 export interface MissionParams {}
 
@@ -55,6 +57,35 @@ export class GameSession {
 	mapSeed: number | null = null;
 	relicFound = false;
 	bossSpawned = false;
+
+	/**
+	 * Seed for all match-affecting randomness — combat rolls, AI
+	 * decisions, loot/chest placement, card shuffling, monster
+	 * spawning. Deliberately separate from mapSeed (terrain layout
+	 * only) so the two don't become accidentally coupled — the same
+	 * mapSeed producing the same layout should not also force the
+	 * same combat outcomes.
+	 */
+	matchSeed: number | null = null;
+	private _rng: RandomFn | null = null;
+
+	/**
+	 * The one seeded RNG for this match's gameplay randomness. Created
+	 * lazily from matchSeed on first access and cached — every caller
+	 * gets the same ongoing sequence, not a fresh one each time.
+	 * matchSeed must be set before this is first read.
+	 */
+	get rng(): RandomFn {
+		if (!this._rng) {
+			if (this.matchSeed === null) {
+				throw new Error(
+					"GameSession.rng accessed before matchSeed was set — set matchSeed first.",
+				);
+			}
+			this._rng = createSeededRandom(this.matchSeed);
+		}
+		return this._rng;
+	}
 
 	/** Item plan only — still useful for target lookup. */
 	chestPlan: { chests: ChestPlan[]; targetItem: ItemData } | null = null;

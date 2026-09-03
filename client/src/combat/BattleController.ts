@@ -7,6 +7,7 @@ import type {
 	CombatChoice,
 	CombatRoundResult,
 	MercenaryState,
+	RandomFn,
 } from "@relic-hunter/shared";
 import type { LocalHumanRole } from "@/ui/overlay/BattleOverlay";
 
@@ -70,6 +71,7 @@ export const BattleController = {
 		defenderChoice: CombatChoice,
 		currentRound: number,
 		maxRounds: number,
+		rng: RandomFn,
 	): RoundResolution {
 		if (attackerChoice.card) {
 			const idx = attackerState.hand.findIndex(
@@ -84,7 +86,7 @@ export const BattleController = {
 			if (idx !== -1) defenderState.hand.splice(idx, 1);
 		}
 
-		const result = resolveCombatRound(attackerChoice, defenderChoice);
+		const result = resolveCombatRound(attackerChoice, defenderChoice, rng);
 		const bothAttacking =
 			attackerChoice.action === "attack" && defenderChoice.action === "attack";
 

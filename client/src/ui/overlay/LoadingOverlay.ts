@@ -142,6 +142,7 @@ export class LoadingOverlay implements Overlay {
 		const { width, height } = TEST_MAP_DIMENSIONS;
 		const seed = Math.floor(Math.random() * 1_000_000);
 		this.game.session.mapSeed = seed;
+		this.game.session.matchSeed = Math.floor(Math.random() * 1_000_000);
 
 		this.grid = generateDungeon(width, height, {
 			seed,
@@ -154,7 +155,7 @@ export class LoadingOverlay implements Overlay {
 	 * Writes the authoritative layout onto GameSession for MapScene.
 	 */
 	private setupChestsAndSpawn(): void {
-		const plan = planChests();
+		const plan = planChests(this.game.session.rng);
 		this.game.session.chestPlan = plan;
 
 		// Exit is not placed at generation — only reserve the player spawn.
@@ -168,7 +169,11 @@ export class LoadingOverlay implements Overlay {
 
 		this.placements = [];
 		for (const chestPlan of plan.chests) {
-			const coord = pickSpreadWalkableTile(this.grid, used);
+			const coord = pickSpreadWalkableTile(
+				this.grid,
+				used,
+				this.game.session.rng,
+			);
 			if (!coord) break;
 			used.add(coordKey(coord));
 			this.placements.push({ plan: chestPlan, coord });

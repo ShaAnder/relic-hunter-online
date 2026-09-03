@@ -57,13 +57,13 @@ export class MonsterSystem {
 	}
 
 	/** Cheap pre-check — call before doing any expensive spawn-tile search. */
-	shouldSpawn(): boolean {
-		return RH.shouldSpawnMonster(this.monsters.length);
+	shouldSpawn(rng: RH.RandomFn): boolean {
+		return RH.shouldSpawnMonster(this.monsters.length, rng);
 	}
 
 	/** Spawns the next-tier monster at coord. Returns the tier spawned, or null if shouldSpawn() would now say no. */
-	trySpawn(coord: RH.GridCoord): RH.MonsterTier | null {
-		if (!this.shouldSpawn()) return null;
+	trySpawn(coord: RH.GridCoord, rng: RH.RandomFn): RH.MonsterTier | null {
+		if (!this.shouldSpawn(rng)) return null;
 
 		const tier =
 			MonsterSystem.MONSTER_TIERS[

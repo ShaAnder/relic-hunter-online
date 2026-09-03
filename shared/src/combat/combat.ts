@@ -1,6 +1,7 @@
 import type { CardData } from "../cards/card";
 import type { MercenaryStats } from "../types/mercenary";
 import type { EntityCore, HasItems } from "../types/entity";
+import type { RandomFn } from "../math/random";
 
 /**
  * Combat is resolved as ONE simultaneous, single round — not sequential
@@ -60,6 +61,7 @@ export function applyRestHeal(state: EntityCore & HasItems): void {
 export function resolveCombatRound(
 	a: CombatChoice,
 	b: CombatChoice,
+	rng: RandomFn,
 ): CombatRoundResult {
 	// Surrender is unconditional — it resolves regardless of what the
 	// other side chose. You can't be "damaged through" a surrender.
@@ -71,7 +73,7 @@ export function resolveCombatRound(
 	}
 
 	if (a.action === "run" || b.action === "run") {
-		return resolveRoundWithRun(a, b);
+		return resolveRoundWithRun(a, b, rng);
 	}
 
 	return resolveAttackDefendRound(a, b);
@@ -142,6 +144,7 @@ function computeDamage(
 function resolveRoundWithRun(
 	a: CombatChoice,
 	b: CombatChoice,
+	rng: RandomFn,
 ): CombatRoundResult {
 	const aRuns = a.action === "run";
 	const bRuns = b.action === "run";
@@ -174,7 +177,7 @@ function resolveRoundWithRun(
 			: { a: otherOutcome, b: guaranteedOutcome };
 	}
 
-	const runResult = attemptRun(runner, other);
+	const runResult = attemptRun(runner, other, rng);
 
 	const runnerDamage = !runResult.success
 		? computeCaughtRunDamage(other, runner)
@@ -196,9 +199,15 @@ function resolveRoundWithRun(
 function attemptRun(
 	runner: CombatChoice,
 	opponent: CombatChoice,
+	rng: RandomFn,
 ): RunAttemptResult {
 	const opponentSpeed = opponent.stats.movement + computeSpeedBonus(opponent);
-	return resolveRunAttempt(runner.stats.movement, opponentSpeed, runner.card);
+	return resolveRunAttempt(
+		runner.stats.movement,
+		opponentSpeed,
+		rng,
+		runner.card,
+	);
 }
 
 /**
@@ -326,6 +335,7 @@ export interface RunAttemptResult {
 export function resolveRunAttempt(
 	runnerMovementStat: number,
 	opponentMovementStat: number,
+	rng: RandomFn,
 	runnerCard?: CardData,
 ): RunAttemptResult {
 	if (runnerCard?.value === "E") {
@@ -338,7 +348,7 @@ export function resolveRunAttempt(
 	const ratio = runnerSpeed / Math.max(1, opponentMovementStat);
 
 	const catchChancePercent = clamp(50 / ratio, 25, 75);
-	const roll = Math.random() * 100;
+	const roll = rng() * 100;
 	const success = roll >= catchChancePercent;
 
 	return { success, guaranteed: false, catchChancePercent };

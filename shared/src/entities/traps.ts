@@ -2,6 +2,7 @@ import type { GridCoord } from "../world/grid";
 import type { MercenaryStats } from "../types/mercenary";
 import type { CardData } from "../cards/card";
 import { rollDie } from "../math/dice";
+import type { RandomFn } from "../math/random";
 
 export type TrapKind = "stun";
 
@@ -56,9 +57,10 @@ const HAZARD_DIE_SIDES = 10;
  */
 export function resolveHazardRoll(
 	victimStats: MercenaryStats,
+	rng: RandomFn,
 	victimCard?: CardData,
 ): HazardRollResult {
-	const hazardRoll = rollDie(HAZARD_DIE_SIDES);
+	const hazardRoll = rollDie(HAZARD_DIE_SIDES, rng);
 
 	if (victimCard?.value === "A") {
 		return { landed: false, hazardRoll, victimRoll: Infinity };
@@ -71,6 +73,6 @@ export function resolveHazardRoll(
 		ceiling = victimStats.defense + victimCard.value;
 	}
 
-	const victimRoll = rollDie(ceiling);
+	const victimRoll = rollDie(ceiling, rng);
 	return { landed: hazardRoll > victimRoll, hazardRoll, victimRoll };
 }

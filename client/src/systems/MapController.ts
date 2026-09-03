@@ -15,7 +15,11 @@ import { ExitRelicSystem } from "@/systems/ExitRelicSystem";
 import { ZoneQuery } from "@/systems/ZoneQuery";
 import { isCarryingTarget } from "@/systems/MatchController";
 import type { TutorialEvent } from "@/tutorial/tutorialTypes";
-import type { PilotedMercenary, MovableToken, MonsterEntity } from "@/types/entities";
+import type {
+	PilotedMercenary,
+	MovableToken,
+	MonsterEntity,
+} from "@/types/entities";
 
 /**
  * Callbacks MapController needs back into MapScene — presentation
@@ -92,7 +96,12 @@ export class MapController {
 		const plan = this.game.session.chestPlan;
 		if (!plan) return;
 
-		this.chestSystem.spawnFromPlan(plan, this.cb.getGrid(), reserved);
+		this.chestSystem.spawnFromPlan(
+			plan,
+			this.cb.getGrid(),
+			reserved,
+			this.game.session.rng,
+		);
 	}
 
 	/** Open the chest at coord if unopened, for whichever unit reached it. Stays closed if inventory full. */
@@ -152,13 +161,19 @@ export class MapController {
 			if (m.state.currentHp > 0) blocked.add(RH.coordKey(m.state.coord));
 		}
 
-		ExitRelicSystem.spawnFarFrom(this.cb.getGrid(), from, blocked);
+		ExitRelicSystem.spawnFarFrom(
+			this.cb.getGrid(),
+			from,
+			blocked,
+			this.game.session.rng,
+		);
 	}
 
 	// ---------- Monster spawning ----------
 
 	trySpawnMonster(): void {
-		if (!this.monsterSystem.shouldSpawn()) return;
+		const rng = this.game.session.rng;
+		if (!this.monsterSystem.shouldSpawn(rng)) return;
 
 		const used = new Set<string>(
 			this.cb.getUnits().map((u) => RH.coordKey(u.state.coord)),
@@ -168,7 +183,7 @@ export class MapController {
 		const coord = this.cb.pickEnemySpawnTile(used);
 		if (!coord) return;
 
-		const tier = this.monsterSystem.trySpawn(coord);
+		const tier = this.monsterSystem.trySpawn(coord, rng);
 		if (tier) {
 			this.cb.showFeedback(`👹 A ${tier} monster appears!`);
 		}
