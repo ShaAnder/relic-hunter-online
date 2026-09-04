@@ -1797,13 +1797,17 @@ export class MapScene implements Scene, TutorialPort {
 	/** Removes card from real hand, spends AP. Blue E routes to handleExitCard; Attack doesn't reach here. */
 	private handleCardConfirmed(card: RH.CardData): void {
 		const local = this.localUnit;
-		const handIndex = local.state.hand.findIndex((c) => c.id === card.id);
-		if (handIndex !== -1) local.state.hand.splice(handIndex, 1);
 
+		// Blue E: handleExitCard may put the card back if the exit isn't ready.
 		if (card.color === "blue" && card.value === "E") {
+			const handIndex = local.state.hand.findIndex((c) => c.id === card.id);
+			if (handIndex !== -1) local.state.hand.splice(handIndex, 1);
 			void this.handleExitCard(card);
 			return;
 		}
+
+		const handIndex = local.state.hand.findIndex((c) => c.id === card.id);
+		if (handIndex !== -1) local.state.hand.splice(handIndex, 1);
 
 		const cardType = card.id === "__skip__" ? "none" : card.color;
 		const numericValue = typeof card.value === "number" ? card.value : 0;
@@ -1812,7 +1816,16 @@ export class MapScene implements Scene, TutorialPort {
 			type: cardType === "none" ? "skipChosen" : "cardChosen",
 		});
 
+		// Stun / trap: drop at current feet FIRST, then same move flow as other cards.
+		if (card.actionType === "stun") {
+			this.mapController.placeTrap();
+		}
+
 		if (!local.turnManager.beginMovement(cardType, numericValue)) {
+			// Move wasn't legal — restore card; trap stays if we already placed.
+			local.state.hand.push(card);
+			this.pendingMoveUsedCard = false;
+			this.syncUI();
 			return;
 		}
 
@@ -1821,24 +1834,15 @@ export class MapScene implements Scene, TutorialPort {
 			if (typeof v === "number" || v === "A" || v === "C") {
 				local.state.temporaryStatBonus.defense = v;
 			}
-		} else {
+		} else if (card.actionType !== "stun") {
 			local.state.temporaryStatBonus.movement = numericValue;
 		}
+		// stun: no movement stat bonus from the green value; base move budget only
+
 		this.syncUI();
 
 		this.moveController.requestEnter();
 		this.hud.setMoveActive(this.moveController.active);
-
-		if (card.actionType === "stun") {
-			// TEMPORARY: routed through the Move flow because there's no
-			// dedicated RH.Trap action yet — every class, Trapper included
-			// once it exists, shares this path for now.
-			this.mapController.placeTrap();
-			if (!local.turnManager.beginMovement("none", 0)) return;
-			this.moveController.requestEnter();
-			this.hud.setMoveActive(this.moveController.active);
-			return;
-		}
 	}
 
 	/**
