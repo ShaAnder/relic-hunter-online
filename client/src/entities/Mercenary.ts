@@ -38,6 +38,8 @@ export class Mercenary {
 	private animDurationMs = 0;
 	private onPathComplete: (() => void) | null = null;
 	private _isAnimating = false;
+	/** Persistent state (stunned/downed) — tracked so setIncapacitated doesn't retrigger play() every single frame, which would restart the loop from frame 0 continuously instead of letting it run. */
+	private _isIncapacitated = false;
 
 	private readonly shadow: Graphics;
 	private readonly placeholder: Graphics;
@@ -126,6 +128,33 @@ export class Mercenary {
 		if (!this.spriteReady) return;
 		await this.sprite.playAsync("victory");
 		void this.sprite.play("idle");
+	}
+
+	/**
+	 * Persistent state — stunned (turns remaining) or downed (0 HP).
+	 * Call every frame with the current truth (see MapScene.update's
+	 * per-unit loop); safe to call repeatedly since it only actually
+	 * triggers play() on a genuine state change, not every call, so
+	 * the loop keeps running rather than restarting from frame 0.
+	 */
+	setIncapacitated(active: boolean): void {
+		if (!this.spriteReady || active === this._isIncapacitated) return;
+		this._isIncapacitated = active;
+		void this.sprite.play(active ? "stunned" : "idle", { loop: active });
+	}
+
+	/**
+	 * Temporary state — a brief reaction to getting hit (a trap today,
+	 * any future hazard type later), resolving back to idle once it
+	 * plays through. If the hit also caused genuine incapacitation
+	 * (e.g. a stun trap), the caller should follow this with
+	 * setIncapacitated(true) so the persistent state takes over rather
+	 * than settling on idle.
+	 */
+	async playHazardReaction(): Promise<void> {
+		if (!this.spriteReady || this._isIncapacitated) return;
+		await this.sprite.playAsync("stunned");
+		if (!this._isIncapacitated) void this.sprite.play("idle");
 	}
 
 	update(deltaTime: number): void {

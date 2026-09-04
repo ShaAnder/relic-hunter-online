@@ -514,6 +514,11 @@ export class MapController {
 		kind: RH.TrapKind,
 		result: RH.HazardRollResult,
 	): void {
+		// Any hazard kind that lands gets the brief reaction — future
+		// trap kinds (damage, etc.) share this without needing their
+		// own wiring; only the persistent-vs-not outcome differs below.
+		void unit.mercenary.playHazardReaction();
+
 		switch (kind) {
 			case "stun":
 				RH.applyStun(unit.state);

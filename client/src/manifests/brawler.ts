@@ -49,7 +49,7 @@ export const brawlerSprite: CharacterSpriteManifest = {
 		walk: {
 			frames: 6,
 			loop: true,
-			fps: 4.5, // halved from 9 - was reading as a blur, not a clear stride
+			fps: 9,
 			// optional uneven contacts:
 			// durations: [100, 70, 100, 70, 100, 70],
 		},
@@ -59,17 +59,10 @@ export const brawlerSprite: CharacterSpriteManifest = {
 			fps: 12,
 		},
 		attack: {
-			frames: 4,
+			frames: 5,
 			loop: false,
-			// draw -> aim -> fire -> recover. Note: sw has 4 real frames,
-			// ne has 6 — this count matches sw; ne's last 2 frames are
-			// unused until the manifest supports a per-direction count.
-			durations: [220, 200, 160, 220],
-		},
-		defend: {
-			frames: 2,
-			loop: true,
-			fps: 3,
+			// ready → anticipation → STRIKE → follow → recover
+			durations: [100, 90, 45, 70, 120],
 		},
 		hit: {
 			frames: 3,
@@ -77,7 +70,7 @@ export const brawlerSprite: CharacterSpriteManifest = {
 			durations: [60, 100, 120],
 		},
 		stunned: {
-			frames: 2,
+			frames: 3,
 			loop: true,
 			fps: 4,
 		},

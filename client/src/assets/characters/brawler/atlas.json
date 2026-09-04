@@ -1,96 +1,113 @@
 {
-  "characterClass": "brawler",
-  "frameWidth": 128,
-  "frameHeight": 128,
-  "columns": 6,
-  "rows": {
-    "idle/sw": 0,
-    "idle": 0,
-    "idle/ne": 1,
-    "walk/sw": 2,
-    "walk": 2,
-    "walk/ne": 3,
-    "attack/sw": 4,
-    "attack": 4,
-    "attack/ne": 5,
-    "defend/sw": 6,
-    "defend": 6,
-    "defend/ne": 7,
-    "victory/sw": 8,
-    "victory": 8,
-    "victory/ne": 9
-  },
-  "strips": [
-    {
-      "anim": "idle",
-      "facing": "sw",
-      "row": 0,
-      "frames": 4,
-      "source": "idle_sw.png"
-    },
-    {
-      "anim": "idle",
-      "facing": "ne",
-      "row": 1,
-      "frames": 4,
-      "source": "idle_ne.png"
-    },
-    {
-      "anim": "walk",
-      "facing": "sw",
-      "row": 2,
-      "frames": 6,
-      "source": "walk_sw.png"
-    },
-    {
-      "anim": "walk",
-      "facing": "ne",
-      "row": 3,
-      "frames": 6,
-      "source": "walk_ne.png"
-    },
-    {
-      "anim": "attack",
-      "facing": "sw",
-      "row": 4,
-      "frames": 4,
-      "source": "attack_sw.png"
-    },
-    {
-      "anim": "attack",
-      "facing": "ne",
-      "row": 5,
-      "frames": 6,
-      "source": "attack_ne.png"
-    },
-    {
-      "anim": "defend",
-      "facing": "sw",
-      "row": 6,
-      "frames": 2,
-      "source": "defend_sw.png"
-    },
-    {
-      "anim": "defend",
-      "facing": "ne",
-      "row": 7,
-      "frames": 2,
-      "source": "defend_ne.png"
-    },
-    {
-      "anim": "victory",
-      "facing": "sw",
-      "row": 8,
-      "frames": 4,
-      "source": "victory_sw.png"
-    },
-    {
-      "anim": "victory",
-      "facing": "ne",
-      "row": 9,
-      "frames": 4,
-      "source": "victory_ne.png"
-    }
-  ],
-  "generatedAt": "2026-09-04T12:46:51.443Z"
+	"characterClass": "brawler",
+	"frameWidth": 128,
+	"frameHeight": 128,
+	"columns": 6,
+	"rows": {
+		"idle/sw": 0,
+		"idle": 0,
+		"idle/ne": 1,
+		"walk/sw": 2,
+		"walk": 2,
+		"walk/ne": 3,
+		"attack/sw": 4,
+		"attack": 4,
+		"attack/ne": 5,
+		"defend/sw": 6,
+		"defend": 6,
+		"defend/ne": 7,
+		"stunned/sw": 8,
+		"stunned": 8,
+		"stunned/ne": 9,
+		"victory/sw": 10,
+		"victory": 10,
+		"victory/ne": 11
+	},
+	"strips": [
+		{
+			"anim": "idle",
+			"facing": "sw",
+			"row": 0,
+			"frames": 4,
+			"source": "idle_sw.png"
+		},
+		{
+			"anim": "idle",
+			"facing": "ne",
+			"row": 1,
+			"frames": 4,
+			"source": "idle_ne.png"
+		},
+		{
+			"anim": "walk",
+			"facing": "sw",
+			"row": 2,
+			"frames": 6,
+			"source": "walk_sw.png"
+		},
+		{
+			"anim": "walk",
+			"facing": "ne",
+			"row": 3,
+			"frames": 6,
+			"source": "walk_ne.png"
+		},
+		{
+			"anim": "attack",
+			"facing": "sw",
+			"row": 4,
+			"frames": 4,
+			"source": "attack_sw.png"
+		},
+		{
+			"anim": "attack",
+			"facing": "ne",
+			"row": 5,
+			"frames": 6,
+			"source": "attack_ne.png"
+		},
+		{
+			"anim": "defend",
+			"facing": "sw",
+			"row": 6,
+			"frames": 2,
+			"source": "defend_sw.png"
+		},
+		{
+			"anim": "defend",
+			"facing": "ne",
+			"row": 7,
+			"frames": 2,
+			"source": "defend_ne.png"
+		},
+		{
+			"anim": "stunned",
+			"facing": "sw",
+			"row": 8,
+			"frames": 3,
+			"source": "stunned_sw.png"
+		},
+		{
+			"anim": "stunned",
+			"facing": "ne",
+			"row": 9,
+			"frames": 3,
+			"source": "stunned_ne.png"
+		},
+		{
+			"anim": "victory",
+			"facing": "sw",
+			"row": 10,
+			"frames": 4,
+			"source": "victory_sw.png"
+		},
+		{
+			"anim": "victory",
+			"facing": "ne",
+			"row": 11,
+			"frames": 4,
+			"source": "victory_ne.png"
+		}
+	],
+	"generatedAt": "2026-09-04T19:42:07.163Z"
 }

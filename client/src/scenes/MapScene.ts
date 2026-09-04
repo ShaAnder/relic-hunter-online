@@ -465,6 +465,9 @@ export class MapScene implements Scene, TutorialPort {
 		for (const unit of this.units) {
 			unit.mercenary.update(deltaTime);
 			unit.mercenary.view.alpha = unit.state.currentHp <= 0 ? 0.4 : 1;
+			unit.mercenary.setIncapacitated(
+				unit.state.currentHp <= 0 || unit.state.stunnedTurnsRemaining > 0,
+			);
 		}
 		for (const monster of this.mapController.monsterSystem.all) {
 			monster.token.update(deltaTime);
