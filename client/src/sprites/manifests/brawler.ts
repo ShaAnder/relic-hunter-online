@@ -59,10 +59,15 @@ export const brawlerSprite: CharacterSpriteManifest = {
 			fps: 12,
 		},
 		attack: {
-			frames: 5,
+			frames: 6,
 			loop: false,
-			// ready → anticipation → STRIKE → follow → recover
-			durations: [100, 90, 45, 70, 120],
+			// draw -> aim -> fire -> recover -> settle -> settle. The last
+			// two are idle's own first frame, appended so the animation
+			// eases back to neutral instead of cutting off abruptly at
+			// frame 4 (the "flash" reported earlier). Also lets ne use
+			// all 6 of its own real frames now, previously capped at 4
+			// to match sw's old, shorter count.
+			durations: [180, 160, 140, 180, 150, 150],
 		},
 		hit: {
 			frames: 3,
