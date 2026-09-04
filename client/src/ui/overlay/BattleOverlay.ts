@@ -163,6 +163,23 @@ export class BattleOverlay implements Overlay {
 	private currentWinnerState: MercenaryState | null = null;
 	private currentLoserState: MercenaryState | null = null;
 
+	/**
+	 * A stunned unit can't meaningfully act — no card, no chosen
+	 * defense, just whatever their base stats give them. Takes the
+	 * normal choice as a function (not an already-computed value) so
+	 * chooseCombatAction/monsterCombatChoice are never even called for
+	 * an incapacitated unit, not just discarded after the fact.
+	 */
+	private effectiveChoice(
+		state: MercenaryState,
+		computeChoice: () => CombatChoice,
+	): CombatChoice {
+		if (state.stunnedTurnsRemaining > 0) {
+			return { action: "defend", stats: state.stats };
+		}
+		return computeChoice();
+	}
+
 	private delay(ms: number): Promise<void> {
 		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
@@ -300,48 +317,67 @@ export class BattleOverlay implements Overlay {
 	}
 
 	/**
-	 * Visual sequence for a Run action. Always starts the same way
-	 * regardless of outcome — the runner plays walk in place, facing
-	 * away from the opponent (the flee direction), as the "attempt".
-	 * What happens next depends on whether the escape actually
-	 * succeeded (already decided by the combat roll before any of
-	 * this plays — the animation is revealing that outcome, not
-	 * deciding it):
-	 *  - Caught: the in-place walk stops, defend plays (stand-in for
-	 *    stagger — no dedicated sprite yet), then the runner turns
-	 *    back to face the opponent and settles to idle. No actual
-	 *    movement happens at all in this branch.
-	 *  - Escaped: the already-looping walk continues uninterrupted
-	 *    into genuine travel, off the edge of the arena in the exact
-	 *    direction the runner is already facing, fading out as it goes.
+	 * Visual sequence for a Run action. The runner starts fleeing in
+	 * place (walk looping, facing away from the opponent) as the
+	 * "attempt", while the chaser genuinely runs up to close the
+	 * distance — regardless of outcome, the chase has to visibly
+	 * happen before either branch resolves:
+	 *  - Caught: chaser arrives, runner stops fleeing and plays defend
+	 *    (stand-in for stagger — no dedicated sprite yet), then both
+	 *    turn back to face each other and settle to idle.
+	 *  - Escaped: only once the chaser has closed the distance does
+	 *    the runner actually break away — a narrow getaway, not an
+	 *    instant vanish — traveling off the edge of the arena in the
+	 *    exact direction it's already facing, fading out as it goes.
 	 */
 	private async playRunAwaySequence(
 		runnerToken: Container,
 		runnerSprite: CharacterSprite | undefined,
 		runnerHomeTile: { x: number; y: number },
 		runnerFacing: IsoFacing,
+		chaserToken: Container,
+		chaserSprite: CharacterSprite | undefined,
 		chaserHomeTile: { x: number; y: number },
+		chaserFacing: IsoFacing,
 		escaped: boolean,
 	): Promise<void> {
 		// "Away" is the opposite of the runner's normal toward-opponent
 		// facing. dx/dy is the same vector both the facing and the
 		// actual travel direction derive from, so the two can never
-		// diverge — a sprite facing one way while moving another was
-		// never possible here to begin with; verified getIsoFacing and
-		// gridToScreen share the same +x→se/-x→nw/+y→sw/-y→ne convention.
+		// diverge — verified getIsoFacing and gridToScreen share the
+		// same +x→se/-x→nw/+y→sw/-y→ne convention.
 		const dx = runnerHomeTile.x - chaserHomeTile.x;
 		const dy = runnerHomeTile.y - chaserHomeTile.y;
 		const fleeFacing = oppositeFacing(runnerFacing);
 
 		runnerSprite?.setDirection(fleeFacing);
 		void runnerSprite?.play("walk", { loop: true });
-		await this.delay(BEAT_PAUSE_MS);
+
+		// Chaser genuinely closes the distance — awaited, not
+		// fire-and-forget, so nothing resolves until this actually
+		// finishes. Stops one tile short, same approach logic melee
+		// strikes already use.
+		const chaseTile = this.computeApproachTile(
+			chaserHomeTile,
+			runnerHomeTile,
+			MELEE_APPROACH_TILES,
+		);
+		await this.playMoveTo(chaserToken, chaserSprite, chaseTile, chaserFacing);
 
 		if (!escaped) {
 			void runnerSprite?.play("defend");
+			void chaserSprite?.play("idle");
 			await this.delay(BEAT_PAUSE_MS);
 			runnerSprite?.setDirection(runnerFacing);
 			void runnerSprite?.play("idle");
+			await this.playMoveTo(
+				chaserToken,
+				chaserSprite,
+				chaserHomeTile,
+				oppositeFacing(chaserFacing),
+			);
+			chaserSprite?.setDirection(chaserFacing);
+			void chaserSprite?.play("idle");
 			return;
 		}
 
@@ -473,40 +509,44 @@ export class BattleOverlay implements Overlay {
 	private async runAutoFight(): Promise<void> {
 		await this.delay(700);
 		if (this.roundInProgress) return;
-		const attackerChoice = this.isAttackerMonster
-			? monsterCombatChoice(this.attackerState.stats)
-			: chooseCombatAction(
-					this.attackerState.hand,
-					this.attackerState.stats,
-					this.attackerArchetype,
-					{
-						currentHp: this.attackerState.currentHp,
-						opponentStats: this.defenderState.stats,
-						canAttack: true,
-						againstMonster: this.isDefenderMonster,
-						committed: true,
-						itemCount: this.attackerState.items.filter((i) => i !== null)
-							.length,
-					},
-					this.game.session.rng,
-				);
-		const defenderChoice = this.isDefenderMonster
-			? monsterCombatChoice(this.defenderState.stats, !this.isRangedInitiated)
-			: chooseCombatAction(
-					this.defenderState.hand,
-					this.defenderState.stats,
-					this.defenderArchetype,
-					{
-						currentHp: this.defenderState.currentHp,
-						opponentStats: this.attackerState.stats,
-						canAttack: !this.isRangedInitiated,
-						againstMonster: this.isAttackerMonster,
-						committed: false,
-						itemCount: this.defenderState.items.filter((i) => i !== null)
-							.length,
-					},
-					this.game.session.rng,
-				);
+		const attackerChoice = this.effectiveChoice(this.attackerState, () =>
+			this.isAttackerMonster
+				? monsterCombatChoice(this.attackerState.stats)
+				: chooseCombatAction(
+						this.attackerState.hand,
+						this.attackerState.stats,
+						this.attackerArchetype,
+						{
+							currentHp: this.attackerState.currentHp,
+							opponentStats: this.defenderState.stats,
+							canAttack: true,
+							againstMonster: this.isDefenderMonster,
+							committed: true,
+							itemCount: this.attackerState.items.filter((i) => i !== null)
+								.length,
+						},
+						this.game.session.rng,
+					),
+		);
+		const defenderChoice = this.effectiveChoice(this.defenderState, () =>
+			this.isDefenderMonster
+				? monsterCombatChoice(this.defenderState.stats, !this.isRangedInitiated)
+				: chooseCombatAction(
+						this.defenderState.hand,
+						this.defenderState.stats,
+						this.defenderArchetype,
+						{
+							currentHp: this.defenderState.currentHp,
+							opponentStats: this.attackerState.stats,
+							canAttack: !this.isRangedInitiated,
+							againstMonster: this.isAttackerMonster,
+							committed: false,
+							itemCount: this.defenderState.items.filter((i) => i !== null)
+								.length,
+						},
+						this.game.session.rng,
+					),
+		);
 		void this.resolveRound(attackerChoice, defenderChoice);
 	}
 
@@ -623,14 +663,31 @@ export class BattleOverlay implements Overlay {
 			this.buildDefenderIndicator();
 		} else if (this.localHumanRole === "attacker") {
 			this.buildDefenderIndicator();
-			this.buildActionSelector("attacker");
-			this.view.addChild(this.localHand.view);
-			this.localHand.syncFromHand(this.attackerState.hand);
+			if (this.attackerState.stunnedTurnsRemaining > 0) {
+				// Stunned going in — can't act at all, not even a UI
+				// choice. Same passive, cardless resolution as an AI
+				// unit gets via effectiveChoice.
+				void this.resolveLocalChoice({
+					action: "defend",
+					stats: this.attackerState.stats,
+				});
+			} else {
+				this.buildActionSelector("attacker");
+				this.view.addChild(this.localHand.view);
+				this.localHand.syncFromHand(this.attackerState.hand);
+			}
 		} else {
 			this.buildAttackerIndicator();
-			this.buildActionSelector("defender");
-			this.view.addChild(this.localHand.view);
-			this.localHand.syncFromHand(this.defenderState.hand);
+			if (this.defenderState.stunnedTurnsRemaining > 0) {
+				void this.resolveLocalChoice({
+					action: "defend",
+					stats: this.defenderState.stats,
+				});
+			} else {
+				this.buildActionSelector("defender");
+				this.view.addChild(this.localHand.view);
+				this.localHand.syncFromHand(this.defenderState.hand);
+			}
 		}
 
 		this.roundText = new Text({
@@ -1196,31 +1253,33 @@ export class BattleOverlay implements Overlay {
 			(this.localHumanRole !== "attacker" && this.isAttackerMonster) ||
 			(this.localHumanRole === "attacker" && this.isDefenderMonster);
 
-		const otherChoice = otherIsMonster
-			? monsterCombatChoice(
-					otherState.stats,
-					this.localHumanRole === "defender" ? true : !this.isRangedInitiated,
-				)
-			: chooseCombatAction(
-					otherState.hand,
-					otherState.stats,
-					otherArchetype,
-					{
-						currentHp: otherState.currentHp,
-						opponentStats: localChoice.stats,
-						canAttack:
-							this.localHumanRole === "defender"
-								? true
-								: !this.isRangedInitiated,
-						againstMonster:
-							this.localHumanRole === "attacker"
-								? this.isAttackerMonster
-								: this.isDefenderMonster,
-						committed: this.localHumanRole === "defender",
-						itemCount: otherState.items.filter((i) => i !== null).length,
-					},
-					this.game.session.rng,
-				);
+		const otherChoice = this.effectiveChoice(otherState, () =>
+			otherIsMonster
+				? monsterCombatChoice(
+						otherState.stats,
+						this.localHumanRole === "defender" ? true : !this.isRangedInitiated,
+					)
+				: chooseCombatAction(
+						otherState.hand,
+						otherState.stats,
+						otherArchetype,
+						{
+							currentHp: otherState.currentHp,
+							opponentStats: localChoice.stats,
+							canAttack:
+								this.localHumanRole === "defender"
+									? true
+									: !this.isRangedInitiated,
+							againstMonster:
+								this.localHumanRole === "attacker"
+									? this.isAttackerMonster
+									: this.isDefenderMonster,
+							committed: this.localHumanRole === "defender",
+							itemCount: otherState.items.filter((i) => i !== null).length,
+						},
+						this.game.session.rng,
+					),
+		);
 
 		const attackerChoice =
 			this.localHumanRole === "attacker" ? localChoice : otherChoice;
@@ -1290,6 +1349,11 @@ export class BattleOverlay implements Overlay {
 					applyDefenderDamage,
 					() => void this.attackerSprite?.play("defend"),
 				);
+				// The second (final) strike's receiving side has nothing
+				// after it to naturally supersede its block-flash — the
+				// first strike's receiver gets superseded by their own
+				// turn right after, but this one needs an explicit settle.
+				void this.attackerSprite?.play("idle");
 			} else {
 				await this.playMeleeStrike(
 					this.defenderTokenView,
@@ -1309,6 +1373,7 @@ export class BattleOverlay implements Overlay {
 					applyAttackerDamage,
 					() => void this.defenderSprite?.play("defend"),
 				);
+				void this.defenderSprite?.play("idle");
 			}
 		} else if (
 			attackerChoice.action === "attack" &&
@@ -1360,7 +1425,10 @@ export class BattleOverlay implements Overlay {
 				this.attackerSprite,
 				this.attackerTile(),
 				this.attackerBaseFacing,
+				this.defenderTokenView,
+				this.defenderSprite,
 				this.defenderTile(),
+				this.defenderBaseFacing,
 				!!result.a.escaped,
 			);
 		} else if (defenderChoice.action === "run") {
@@ -1371,7 +1439,10 @@ export class BattleOverlay implements Overlay {
 				this.defenderSprite,
 				this.defenderTile(),
 				this.defenderBaseFacing,
+				this.attackerTokenView,
+				this.attackerSprite,
 				this.attackerTile(),
+				this.attackerBaseFacing,
 				!!result.b.escaped,
 			);
 		} else {

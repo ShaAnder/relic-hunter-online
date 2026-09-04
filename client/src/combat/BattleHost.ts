@@ -158,6 +158,13 @@ export class BattleHost {
 				resolve(result);
 			};
 
+			// Someone stunned going into this fight can't meaningfully
+			// fight back for more than the one round — cap it here
+			// regardless of what the caller requested.
+			const eitherStunned =
+				request.attackerState.stunnedTurnsRemaining > 0 ||
+				request.defenderState.stunnedTurnsRemaining > 0;
+
 			const overlay = new BattleOverlay(
 				this.game,
 
@@ -187,7 +194,7 @@ export class BattleHost {
 				request.isAttackerMonster ?? false,
 				request.isDefenderMonster ?? false,
 
-				request.maxRounds ?? 3,
+				eitherStunned ? 1 : (request.maxRounds ?? 3),
 			);
 
 			/**
