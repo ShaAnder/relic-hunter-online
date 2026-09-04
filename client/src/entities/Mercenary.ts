@@ -115,6 +115,19 @@ export class Mercenary {
 		}
 	}
 
+	/**
+	 * One-off celebration pose (relic found, flawless round, etc.) —
+	 * awaits genuine completion then explicitly returns to idle. Never
+	 * leave this playing fire-and-forget: victory doesn't loop, so
+	 * without an explicit follow-up it freezes on its last frame
+	 * exactly like the same bug already fixed once in BattleOverlay.
+	 */
+	async playVictory(): Promise<void> {
+		if (!this.spriteReady) return;
+		await this.sprite.playAsync("victory");
+		void this.sprite.play("idle");
+	}
+
 	update(deltaTime: number): void {
 		if (this.spriteReady) {
 			this.sprite.update(deltaTime);

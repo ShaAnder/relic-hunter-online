@@ -947,6 +947,10 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.itemPopup.visible = true;
 		this.itemPopupTimer = 90;
+
+		if (isTarget) {
+			void this.localUnit.mercenary.playVictory();
+		}
 	}
 
 	// ---------- Enemy AI ----------

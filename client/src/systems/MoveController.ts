@@ -104,7 +104,10 @@ export class MoveController {
 				? budgetOverride
 				: this.options.getMovementRemaining();
 
-		this.options.camera.lockTo(gridToScreen(this.options.getMercenaryCoord()));
+		this.options.camera.lockTo({
+			x: this.options.mercenary.view.x,
+			y: this.options.mercenary.view.y,
+		});
 
 		this.blocked = new Set(this.options.getBlockedCoords().map(coordKey));
 		this.rebuildRangeFromUnit();
