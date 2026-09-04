@@ -1,45 +1,62 @@
 {
-	"characterClass": "brawler",
-	"frameWidth": 128,
-	"frameHeight": 128,
-	"columns": 6,
-	"rows": {
-		"idle/sw": 0,
-		"idle": 0,
-		"idle/ne": 1,
-		"walk/sw": 2,
-		"walk": 2,
-		"walk/ne": 3
-	},
-	"strips": [
-		{
-			"anim": "idle",
-			"facing": "sw",
-			"row": 0,
-			"frames": 4,
-			"source": "idle_sw.png"
-		},
-		{
-			"anim": "idle",
-			"facing": "ne",
-			"row": 1,
-			"frames": 4,
-			"source": "idle_ne.png"
-		},
-		{
-			"anim": "walk",
-			"facing": "sw",
-			"row": 2,
-			"frames": 6,
-			"source": "walk_sw.png"
-		},
-		{
-			"anim": "walk",
-			"facing": "ne",
-			"row": 3,
-			"frames": 6,
-			"source": "walk_ne.png"
-		}
-	],
-	"generatedAt": "2026-09-02T16:59:19.162Z"
+  "characterClass": "brawler",
+  "frameWidth": 128,
+  "frameHeight": 128,
+  "columns": 6,
+  "rows": {
+    "idle/sw": 0,
+    "idle": 0,
+    "idle/ne": 1,
+    "walk/sw": 2,
+    "walk": 2,
+    "walk/ne": 3,
+    "attack/sw": 4,
+    "attack": 4,
+    "attack/ne": 5
+  },
+  "strips": [
+    {
+      "anim": "idle",
+      "facing": "sw",
+      "row": 0,
+      "frames": 4,
+      "source": "idle_sw.png"
+    },
+    {
+      "anim": "idle",
+      "facing": "ne",
+      "row": 1,
+      "frames": 4,
+      "source": "idle_ne.png"
+    },
+    {
+      "anim": "walk",
+      "facing": "sw",
+      "row": 2,
+      "frames": 6,
+      "source": "walk_sw.png"
+    },
+    {
+      "anim": "walk",
+      "facing": "ne",
+      "row": 3,
+      "frames": 6,
+      "source": "walk_ne.png"
+    },
+    {
+      "anim": "attack",
+      "facing": "sw",
+      "row": 4,
+      "frames": 4,
+      "source": "attack_sw.png"
+    },
+    {
+      "anim": "attack",
+      "facing": "ne",
+      "row": 5,
+      "frames": 6,
+      "source": "attack_ne.png"
+    }
+  ],
+  "generatedAt": "2026-09-03T22:05:08.802Z"
 }

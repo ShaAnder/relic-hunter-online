@@ -8,6 +8,7 @@ import type {
 import { toIsoFacing } from "@/types/characterSprite";
 import {
 	loadCharacterAnimation,
+	hasCharacterSheet,
 	type LoadedAnimationStrip,
 } from "@/rendering/characterSprites";
 import { getSpriteManifest } from "@/sprites/manifests/brawler";
@@ -42,15 +43,46 @@ export class CharacterSprite {
 	/** Guards against an in-flight play() from an earlier direction overwriting a newer one — see docs/15. */
 	private playToken = 0;
 
-	constructor(characterClass: SpriteCharacterClass) {
-		this.characterClass = characterClass;
-		const manifest = getSpriteManifest(characterClass);
+	constructor(
+		characterClass: SpriteCharacterClass,
+		/**
+		 * Local vertical offset within the sprite's own view — NOT the
+		 * same thing as feet-at-frame-bottom (that's still always
+		 * true). Kept as a constructor parameter (not hardcoded) since
+		 * this component is shared between the map and the battle
+		 * arena, and there's no guarantee both will always want the
+		 * same value — but as of now, 12 is confirmed correct for
+		 * both. (An earlier attempt defaulted this to 0 for the map,
+		 * on the assumption the two contexts needed different values —
+		 * that was wrong: real-world testing showed 12 was already
+		 * correct on the map too, and reported map jitter during
+		 * move/disengage selection turned out to be unrelated to this
+		 * value at all, likely camera-related instead.)
+		 */
+		spriteYOffset = 12,
+	) {
+		// Fall back to "brawler" whenever the requested class genuinely
+		// has no built sheet — not just when the string itself is
+		// unrecognized. AI hunters get a random class from all 6, and
+		// only brawler has real art right now; without this, any of the
+		// other 5 silently never shows a sprite at all (init() fails,
+		// view stays invisible forever, with just a console.warn no one
+		// sees mid-battle).
+		this.characterClass = hasCharacterSheet(characterClass)
+			? characterClass
+			: "brawler";
+		if (this.characterClass !== characterClass) {
+			console.warn(
+				`[CharacterSprite] "${characterClass}" has no built sheet yet — showing "brawler" instead.`,
+			);
+		}
+		const manifest = getSpriteManifest(this.characterClass);
 		this.externalScale = manifest.scale;
 
 		// Bottom-center anchor + y=0 is the entire positioning contract —
 		// this is what "feet at frame bottom" in the source art buys us.
 		this.sprite.anchor.set(0.5, 1);
-		this.sprite.y = 12;
+		this.sprite.y = spriteYOffset;
 		this.view.addChild(this.sprite);
 		this.view.visible = false;
 	}
@@ -133,17 +165,47 @@ export class CharacterSprite {
 		return true;
 	}
 
+	/**
+	 * Resolves on genuine animation completion. Also resolves after a
+	 * generous timeout regardless — a missing per-frame update() call
+	 * on whatever owns this sprite (exactly the bug that shipped once
+	 * already) would otherwise hang this forever with no error, no
+	 * timeout, and no way to recover short of a page reload. A timeout
+	 * here can't break anything that's genuinely working — it only
+	 * ever fires when something already is.
+	 */
 	playAsync(
 		animation: CharacterAnimation,
 		options: Omit<PlayOptions, "onComplete"> = {},
 	): Promise<void> {
 		return new Promise((resolve) => {
+			let settled = false;
+			const settle = () => {
+				if (settled) return;
+				settled = true;
+				resolve();
+			};
+
+			const timeoutId = setTimeout(() => {
+				console.warn(
+					`[CharacterSprite] "${this.characterClass}" ${animation} never completed within 5s — ` +
+						`is something forgetting to call update() on this sprite? Resolving anyway.`,
+				);
+				settle();
+			}, 5000);
+
 			void this.play(animation, {
 				...options,
 				loop: options.loop ?? false,
-				onComplete: () => resolve(),
+				onComplete: () => {
+					clearTimeout(timeoutId);
+					settle();
+				},
 			}).then((ok) => {
-				if (!ok) resolve();
+				if (!ok) {
+					clearTimeout(timeoutId);
+					settle();
+				}
 			});
 		});
 	}
