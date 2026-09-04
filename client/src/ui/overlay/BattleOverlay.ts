@@ -4,7 +4,12 @@ import type { Game } from "@/core/game/Game";
 import { Hand, SKIP_CARD_ID } from "@/ui/Hand";
 import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
 import { computeUiScale, uiPx } from "@/math/uiScale";
+import { computeFitScale } from "@/math/fitScale";
 import { chooseCombatAction } from "@relic-hunter/shared";
+import { CharacterSprite } from "@/entities/CharacterSprite";
+import { toSpriteCharacterClass } from "@/types/characterSprite";
+import type { IsoFacing, CharacterAnimation } from "@/types/characterSprite";
+import { getIsoFacing, oppositeFacing } from "@/math/characterDirection";
 import type {
 	CardData,
 	CardColor,
@@ -46,7 +51,6 @@ const RESULT_LINGER_MS = 2200;
 // Artificial pacing beats — placeholders standing in for real animation
 // timing later. Tuned for "feels deliberate,"
 const REVEAL_PAUSE_MS = 600;
-const SEQUENTIAL_HIT_GAP_MS = 900;
 const POST_DAMAGE_PAUSE_MS = 600;
 const BETWEEN_ROUNDS_MS = 800;
 
@@ -54,6 +58,17 @@ const LANDSCAPE_COLS = 15;
 const LANDSCAPE_ROWS = 7;
 const PORTRAIT_COLS = 7;
 const PORTRAIT_ROWS = 15;
+/** Whole-arena zoom (tiles + characters together) so characters read as more prominent without looking oversized relative to the grid. */
+const ARENA_ZOOM = 1.25;
+/** Design size the arena is authored at — fixed scale above this, only ever shrinks (never grows) if the real viewport is smaller. Not computeUiScale, which continuously scales down with any screen shrink — the arena is a game-world view, not UI chrome. */
+const ARENA_DESIGN_W = 1000;
+const ARENA_DESIGN_H = 600;
+/** How long the run-up/run-back position tween takes, and how long walk plays alongside it. */
+const WALK_TWEEN_MS = 500;
+/** Pause at idle between each beat of a melee sequence (run up -> idle -> attack -> idle -> run back), per explicit request for a less rushed feel. */
+const BEAT_PAUSE_MS = 500;
+/** How many tiles short of the target's own tile a melee attacker stops. */
+const MELEE_APPROACH_TILES = 1;
 
 export type LocalHumanRole = "attacker" | "defender" | "none";
 
@@ -90,6 +105,21 @@ export class BattleOverlay implements Overlay {
 	private roundText!: Text;
 	private attackerIndicator?: Text;
 	private defenderIndicator?: Text;
+
+	/**
+	 * Real, animatable tokens — a CharacterSprite for hunter
+	 * combatants (feeding idle/walk/attack/defend/stunned), a plain
+	 * placeholder circle for monsters, since no monster sprite sheets
+	 * exist yet. Stored as fields (not local variables, which is what
+	 * this replaced) specifically so resolveRound() can reference and
+	 * animate them later.
+	 */
+	private attackerSprite?: CharacterSprite;
+	private defenderSprite?: CharacterSprite;
+	private attackerTokenView!: Container;
+	private defenderTokenView!: Container;
+	private attackerBaseFacing!: IsoFacing;
+	private defenderBaseFacing!: IsoFacing;
 
 	private attackerStatText!: Text;
 	private defenderStatText!: Text;
@@ -131,6 +161,131 @@ export class BattleOverlay implements Overlay {
 
 	private delay(ms: number): Promise<void> {
 		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
+	/**
+	 * Plays a named sequence of animations on a combatant's sprite,
+	 * each one awaited to genuine completion before the next starts —
+	 * not a fixed-duration guess. This is the one, general structure
+	 * every multi-beat combat animation (attack's run→strike→run,
+	 * future defend/stun sequences) should go through, rather than
+	 * each getting its own bespoke, hand-timed logic. Safe to call
+	 * with an undefined sprite (monster combatants, or a load that
+	 * failed) — it's just a no-op in that case.
+	 */
+	private async playAnimationSequence(
+		sprite: CharacterSprite | undefined,
+		sequence: CharacterAnimation[],
+		settleTo: CharacterAnimation = "idle",
+	): Promise<void> {
+		if (!sprite) return;
+		for (const animation of sequence) {
+			await sprite.playAsync(animation);
+		}
+		// idle (and other loops) never "complete" on their own — this is
+		// a deliberate fire-and-forget settle, not another awaited beat.
+		void sprite.play(settleTo);
+	}
+
+	/**
+	 * One tile short of `to`, along the straight line from `from` —
+	 * the arena only ever lays combatants out along a single row
+	 * (landscape) or column (portrait), so this never needs real
+	 * pathfinding, just linear interpolation.
+	 */
+	private computeApproachTile(
+		from: { x: number; y: number },
+		to: { x: number; y: number },
+		tilesShortOf: number,
+	): { x: number; y: number } {
+		const dx = to.x - from.x;
+		const dy = to.y - from.y;
+		const dist = Math.hypot(dx, dy);
+		if (dist <= tilesShortOf) return { ...from };
+		const t = (dist - tilesShortOf) / dist;
+		return {
+			x: Math.round(from.x + dx * t),
+			y: Math.round(from.y + dy * t),
+		};
+	}
+
+	/**
+	 * Genuine positional movement, not in-place animation — tweens the
+	 * token's actual screen position across the duration of the walk
+	 * animation, then plays the given animation once arrived. Used for
+	 * "run up to the enemy and strike" and, played with the from/to
+	 * reversed, "run back to start."
+	 */
+	private async playMoveTo(
+		token: Container,
+		sprite: CharacterSprite | undefined,
+		toGrid: { x: number; y: number },
+		facing?: IsoFacing,
+	): Promise<void> {
+		if (sprite && facing) sprite.setDirection(facing);
+
+		const toScreen = this.arenaGridToScreen(toGrid.x, toGrid.y);
+		const fromX = token.x;
+		const fromY = token.y;
+		const toX = toScreen.x;
+		const toY = toScreen.y - 14; // matches the -14 applied at initial placement
+
+		const walkPromise = sprite
+			? sprite.playAsync("walk")
+			: this.delay(WALK_TWEEN_MS);
+
+		const startTime = performance.now();
+		const tweenPromise = new Promise<void>((resolve) => {
+			const step = () => {
+				const t = Math.min(1, (performance.now() - startTime) / WALK_TWEEN_MS);
+				token.x = fromX + (toX - fromX) * t;
+				token.y = fromY + (toY - fromY) * t;
+				if (t < 1) requestAnimationFrame(step);
+				else resolve();
+			};
+			requestAnimationFrame(step);
+		});
+
+		// Both run concurrently — the walk animation plays WHILE the
+		// token physically travels, not one after the other.
+		await Promise.all([walkPromise, tweenPromise]);
+	}
+
+	/**
+	 * Full melee beat: run up (facing the target) to one tile short of
+	 * it, idle a moment, strike in place, idle a moment, then run back
+	 * home — facing flipped 180° for the return trip, since retreating
+	 * is travel in the opposite direction from the approach. Facing
+	 * flips back to the target once home, ready for the next round.
+	 * This is the one, general structure — attacker and defender both
+	 * go through it, just with their own tile/sprite/facing.
+	 */
+	private async playMeleeStrike(
+		token: Container,
+		sprite: CharacterSprite | undefined,
+		homeTile: { x: number; y: number },
+		targetTile: { x: number; y: number },
+		facing: IsoFacing,
+		applyDamage: () => void,
+	): Promise<void> {
+		const approachTile = this.computeApproachTile(
+			homeTile,
+			targetTile,
+			MELEE_APPROACH_TILES,
+		);
+		await this.playMoveTo(token, sprite, approachTile, facing);
+		void sprite?.play("idle");
+		await this.delay(BEAT_PAUSE_MS);
+
+		await this.playAnimationSequence(sprite, ["attack"]);
+		applyDamage();
+
+		void sprite?.play("idle");
+		await this.delay(BEAT_PAUSE_MS);
+		await this.playMoveTo(token, sprite, homeTile, oppositeFacing(facing));
+
+		sprite?.setDirection(facing);
+		void sprite?.play("idle");
 	}
 
 	constructor(
@@ -203,6 +358,8 @@ export class BattleOverlay implements Overlay {
 	}
 
 	update(deltaTime: number): void {
+		this.attackerSprite?.update(deltaTime);
+		this.defenderSprite?.update(deltaTime);
 		this.localHand.update(deltaTime);
 		this.localPlayZone.update(deltaTime);
 		this.winnerLootPanel.update(deltaTime);
@@ -398,7 +555,8 @@ export class BattleOverlay implements Overlay {
 			style: { fill: 0xffffff, fontSize: 18, fontWeight: "bold" },
 		});
 		this.roundText.anchor.set(0.5);
-		this.roundText.y = -150;
+		this.roundText.y = -150 / ARENA_ZOOM;
+		this.roundText.scale.set(1 / ARENA_ZOOM);
 		this.arena.addChild(this.roundText);
 
 		this.roundCounterText = new Text({
@@ -406,7 +564,8 @@ export class BattleOverlay implements Overlay {
 			style: { fill: 0xcccccc, fontSize: 14 },
 		});
 		this.roundCounterText.anchor.set(0.5);
-		this.roundCounterText.y = -180;
+		this.roundCounterText.y = -180 / ARENA_ZOOM;
+		this.roundCounterText.scale.set(1 / ARENA_ZOOM);
 		this.arena.addChild(this.roundCounterText);
 
 		this.syncHpDisplay();
@@ -524,27 +683,82 @@ export class BattleOverlay implements Overlay {
 	}
 
 	private buildCombatantTokens(): void {
+		// Face each other based on actual arena positions — not a
+		// hardcoded guess. attackerNear/tile assignment already varies
+		// based on real map position (see attackerTile()/defenderTile()),
+		// so a fixed facing was wrong as often as it was right.
+		this.attackerBaseFacing = getIsoFacing(
+			this.attackerTile(),
+			this.defenderTile(),
+		);
+		this.defenderBaseFacing = getIsoFacing(
+			this.defenderTile(),
+			this.attackerTile(),
+		);
+
 		const attackerPos = this.arenaGridToScreen(
 			this.attackerTile().x,
 			this.attackerTile().y,
 		);
-		const attackerToken = new Graphics();
-		attackerToken.circle(0, 0, 20);
-		attackerToken.fill(this.attackerColor);
-		attackerToken.x = attackerPos.x;
-		attackerToken.y = attackerPos.y - 14;
-		this.arena.addChild(attackerToken);
+		this.attackerTokenView = this.buildOneCombatantToken(
+			this.isAttackerMonster,
+			this.attackerColor,
+			this.attackerState.characterClass,
+			this.attackerBaseFacing,
+			(sprite) => (this.attackerSprite = sprite),
+		);
+		this.attackerTokenView.x = attackerPos.x;
+		this.attackerTokenView.y = attackerPos.y - 14;
+		this.arena.addChild(this.attackerTokenView);
 
 		const defenderPos = this.arenaGridToScreen(
 			this.defenderTile().x,
 			this.defenderTile().y,
 		);
-		const defenderToken = new Graphics();
-		defenderToken.circle(0, 0, 20);
-		defenderToken.fill(this.defenderColor);
-		defenderToken.x = defenderPos.x;
-		defenderToken.y = defenderPos.y - 14;
-		this.arena.addChild(defenderToken);
+		this.defenderTokenView = this.buildOneCombatantToken(
+			this.isDefenderMonster,
+			this.defenderColor,
+			this.defenderState.characterClass,
+			this.defenderBaseFacing,
+			(sprite) => (this.defenderSprite = sprite),
+		);
+		this.defenderTokenView.x = defenderPos.x;
+		this.defenderTokenView.y = defenderPos.y - 14;
+		this.arena.addChild(this.defenderTokenView);
+	}
+
+	/**
+	 * A real CharacterSprite for hunter combatants (idle/walk/attack/
+	 * defend/stunned all feed through it), or a plain placeholder
+	 * circle for monsters — no monster sprite sheets exist yet, so
+	 * this deliberately doesn't try to fake one.
+	 */
+	private buildOneCombatantToken(
+		isMonster: boolean,
+		color: number,
+		characterClass: string,
+		facing: IsoFacing,
+		onSpriteReady: (sprite: CharacterSprite) => void,
+	): Container {
+		if (isMonster) {
+			const token = new Graphics();
+			token.circle(0, 0, 20);
+			token.fill(color);
+			return token;
+		}
+
+		const sprite = new CharacterSprite(
+			toSpriteCharacterClass(characterClass),
+			12, // confirmed correct for the arena's specific camera/tile setup
+		);
+		sprite.setDirection(facing);
+		void sprite.init().then((ok) => {
+			if (ok) onSpriteReady(sprite);
+			// If loading fails, the view stays hidden (CharacterSprite's own
+			// fallback) — resolveRound()'s animation calls below no-op safely
+			// against an undefined attackerSprite/defenderSprite in that case.
+		});
+		return sprite.view;
 	}
 
 	private buildCornerPanels(): void {
@@ -993,13 +1207,39 @@ export class BattleOverlay implements Overlay {
 		if (resolution.bothAttacking) {
 			// this is our sequential combat case, two real hits, coin flip decides who goes first
 			if (resolution.attackerFirst) {
-				applyAttackerDamage();
-				await this.delay(SEQUENTIAL_HIT_GAP_MS);
-				applyDefenderDamage();
+				await this.playMeleeStrike(
+					this.attackerTokenView,
+					this.attackerSprite,
+					this.attackerTile(),
+					this.defenderTile(),
+					this.attackerBaseFacing,
+					applyAttackerDamage,
+				);
+				await this.playMeleeStrike(
+					this.defenderTokenView,
+					this.defenderSprite,
+					this.defenderTile(),
+					this.attackerTile(),
+					this.defenderBaseFacing,
+					applyDefenderDamage,
+				);
 			} else {
-				applyDefenderDamage();
-				await this.delay(SEQUENTIAL_HIT_GAP_MS);
-				applyAttackerDamage();
+				await this.playMeleeStrike(
+					this.defenderTokenView,
+					this.defenderSprite,
+					this.defenderTile(),
+					this.attackerTile(),
+					this.defenderBaseFacing,
+					applyDefenderDamage,
+				);
+				await this.playMeleeStrike(
+					this.attackerTokenView,
+					this.attackerSprite,
+					this.attackerTile(),
+					this.defenderTile(),
+					this.attackerBaseFacing,
+					applyAttackerDamage,
+				);
 			}
 		} else {
 			// Everything else — Attack/Defend, Defend/Defend, any Run
@@ -1116,8 +1356,14 @@ export class BattleOverlay implements Overlay {
 		this.backdrop.fill({ color: 0x000000, alpha: 1 });
 
 		const s = computeUiScale(width, height);
+		const arenaScale = computeFitScale(
+			width,
+			height,
+			ARENA_DESIGN_W,
+			ARENA_DESIGN_H,
+		);
 
-		this.arena.scale.set(s);
+		this.arena.scale.set(arenaScale * ARENA_ZOOM);
 		this.arena.x = width / 2;
 		this.arena.y = height / 2 - uiPx(30, s);
 		this.arena.rotation = 0;

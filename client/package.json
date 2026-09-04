@@ -11,6 +11,7 @@
 		"lint": "eslint . --ext .ts,.tsx"
 	},
 	"devDependencies": {
+		"@types/howler": "^2.2.13",
 		"sharp": "^0.35.4",
 		"typescript": "~6.0.2",
 		"vite": "^8.1.1"
@@ -19,6 +20,7 @@
 		"@relic-hunter/shared": "*",
 		"@supabase/supabase-js": "^2.110.2",
 		"colyseus.js": "^0.16.22",
+		"howler": "^2.2.4",
 		"pixi.js": "^8.19.0"
 	}
 }

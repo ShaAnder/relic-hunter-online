@@ -7,9 +7,6 @@
  * SPRITE_FRAME_WIDTH/HEIGHT (see types/characterSprite.ts) and the
  * fixed feet-at-frame-bottom convention, enforced by the packer.
  * There is nothing per-character to tune for either.
- *
- * Idle is authored multi-frame strips (no runtime bob). NW/SW come from
- * mirroring NE/SE in characterSprites.resolveRow when those rows are absent.
  */
 import type { CharacterAnimation, IsoFacing } from "@/types/characterSprite";
 
@@ -21,12 +18,17 @@ export interface AnimManifest {
 	fps?: number;
 	/** Per-frame ms — length should match frames when set. */
 	durations?: number[];
+	/** Use single pose + runtime bob instead of multi-frame idle. */
+	runtimeIdle?: boolean;
 }
 
 export interface CharacterSpriteManifest {
 	characterClass: string;
 	/** Map display scale — see MAP_SPRITE_SCALE; override only for a genuinely different silhouette size, not to compensate for wrong-size source art. */
 	scale: number;
+	/** Integer-pixel idle bob amplitudes (texture px, pre-scale), interpolated smoothly at runtime — not a discrete step sequence. */
+	idleBobY: number[];
+	idleBobPeriodMs: number;
 	animations: Partial<Record<CharacterAnimation, AnimManifest>>;
 	/** Preferred authored facings for this character. */
 	facings: IsoFacing[];
@@ -35,9 +37,10 @@ export interface CharacterSpriteManifest {
 export const brawlerSprite: CharacterSpriteManifest = {
 	characterClass: "brawler",
 	scale: 0.5,
+	idleBobY: [0, -1, -2, -1, 0],
+	idleBobPeriodMs: 1400,
 	facings: ["se", "sw", "ne", "nw"],
 	animations: {
-		// 4-frame authored idle per facing (idle_se.png / idle_ne.png = 512×128)
 		idle: {
 			frames: 4,
 			loop: true,
@@ -47,6 +50,8 @@ export const brawlerSprite: CharacterSpriteManifest = {
 			frames: 6,
 			loop: true,
 			fps: 9,
+			// optional uneven contacts:
+			// durations: [100, 70, 100, 70, 100, 70],
 		},
 		run: {
 			frames: 4,
@@ -54,9 +59,15 @@ export const brawlerSprite: CharacterSpriteManifest = {
 			fps: 12,
 		},
 		attack: {
-			frames: 5,
+			frames: 4,
 			loop: false,
-			durations: [100, 90, 45, 70, 120],
+			// draw -> aim -> fire -> recover. Lengthened from the original
+			// [100,90,45,70,120] — that timing made the whole sequence
+			// read as a single flash rather than four distinct beats.
+			// Note: sw has 4 real frames, ne has 6 — this count matches
+			// sw; ne's last 2 frames are currently unused until the
+			// manifest supports a per-direction frame count.
+			durations: [220, 200, 160, 220],
 		},
 		hit: {
 			frames: 3,
