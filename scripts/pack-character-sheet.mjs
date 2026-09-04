@@ -56,6 +56,7 @@ const ACTIONS = [
 	"walk",
 	"run",
 	"attack",
+	"defend",
 	"hit",
 	"stunned",
 	"defeated",
@@ -177,7 +178,9 @@ async function main() {
 
 		const feetRow = await findFeetRow(sharp, s.path, CELL, CELL);
 		if (feetRow === -1) {
-			warn(`${s.key}: frame 0 appears fully transparent — check the source art.`);
+			warn(
+				`${s.key}: frame 0 appears fully transparent — check the source art.`,
+			);
 		} else if (CELL - 1 - feetRow > FEET_TOLERANCE_PX) {
 			warn(
 				`${s.key}: lowest opaque pixel is at row ${feetRow} of ${CELL - 1} ` +

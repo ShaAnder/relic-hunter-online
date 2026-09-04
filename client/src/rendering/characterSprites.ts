@@ -30,6 +30,8 @@ interface PackedAtlas {
 	columns: number;
 	/** "walk/se" | "idle" → row index */
 	rows: Record<string, number>;
+	/** Per-row real frame count — a direction can genuinely have fewer (or more) authored frames than another direction of the same animation. */
+	strips?: { anim: string; facing: string; row: number; frames: number }[];
 }
 
 interface ClassSheetAtlas extends PackedAtlas {
@@ -259,13 +261,27 @@ export async function loadCharacterAnimation(
 	const timing = resolveTiming(characterClass, animation);
 	const base = await getBaseTexture(atlas);
 
+	// The manifest's frame count is shared across every direction of an
+	// animation, but different directions can genuinely have different
+	// real frame counts (e.g. attack/sw has 4, attack/ne has 6). Cap by
+	// whichever is smaller so playback never reads past what this
+	// specific row actually has — the manifest undershooting on purpose
+	// is fine, it overshooting into another row's pixels is not.
+	const packedFrameCount = atlas.strips?.find(
+		(s) => s.row === resolved.row,
+	)?.frames;
+	const frameCount =
+		packedFrameCount !== undefined
+			? Math.min(timing.frameCount, packedFrameCount)
+			: timing.frameCount;
+
 	const frames = sliceRow(
 		base,
 		resolved.row,
 		atlas.columns,
 		atlas.frameWidth,
 		atlas.frameHeight,
-		timing.frameCount,
+		frameCount,
 	);
 	if (frames.length === 0) {
 		warnOnce(

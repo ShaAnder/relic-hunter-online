@@ -1,4 +1,5 @@
 import { Container, Graphics, Text } from "pixi.js";
+import { easeInOutCubic } from "@/math/easeInOutCubic";
 import type { Overlay } from "@/core/overlays/Overlay";
 import type { Game } from "@/core/game/Game";
 import { Hand, SKIP_CARD_ID } from "@/ui/Hand";
@@ -60,13 +61,16 @@ const PORTRAIT_COLS = 7;
 const PORTRAIT_ROWS = 15;
 /** Whole-arena zoom (tiles + characters together) so characters read as more prominent without looking oversized relative to the grid. */
 const ARENA_ZOOM = 1.25;
+/** Character sprites specifically, on top of ARENA_ZOOM — requested as a modest 5-10% size-up, independent of the whole-arena scale. */
+const ARENA_SPRITE_SIZE_UP = 1.075;
 /** Design size the arena is authored at — fixed scale above this, only ever shrinks (never grows) if the real viewport is smaller. Not computeUiScale, which continuously scales down with any screen shrink — the arena is a game-world view, not UI chrome. */
 const ARENA_DESIGN_W = 1000;
 const ARENA_DESIGN_H = 600;
 /** How long the run-up/run-back position tween takes, and how long walk plays alongside it. */
-const WALK_TWEEN_MS = 500;
-/** Pause at idle between each beat of a melee sequence (run up -> idle -> attack -> idle -> run back), per explicit request for a less rushed feel. */
-const BEAT_PAUSE_MS = 500;
+/** Matches walk's own duration (6 frames @ 4.5fps) so the position tween and the animation finish together — mismatched durations mean the token either "runs in place" after arriving early, or snaps to position while still mid-stride. */
+const WALK_TWEEN_MS = 1333;
+/** Halved from 500 to accommodate the slower walk above — otherwise the whole run-up/attack/run-back sequence grows even longer on top of an already-longer walk. */
+const BEAT_PAUSE_MS = 250;
 /** How many tiles short of the target's own tile a melee attacker stops. */
 const MELEE_APPROACH_TILES = 1;
 
@@ -228,7 +232,7 @@ export class BattleOverlay implements Overlay {
 		const fromX = token.x;
 		const fromY = token.y;
 		const toX = toScreen.x;
-		const toY = toScreen.y - 14; // matches the -14 applied at initial placement
+		const toY = toScreen.y; // matches the corrected initial placement (no floating offset)
 
 		const walkPromise = sprite
 			? sprite.playAsync("walk")
@@ -267,6 +271,7 @@ export class BattleOverlay implements Overlay {
 		targetTile: { x: number; y: number },
 		facing: IsoFacing,
 		applyDamage: () => void,
+		onStrikeBegin?: () => void,
 	): Promise<void> {
 		const approachTile = this.computeApproachTile(
 			homeTile,
@@ -277,6 +282,11 @@ export class BattleOverlay implements Overlay {
 		void sprite?.play("idle");
 		await this.delay(BEAT_PAUSE_MS);
 
+		// Fires exactly as the strike begins, not before or after — the
+		// synchronization point a defending opponent's own reaction
+		// animation hangs off, so "defend" plays concurrently with the
+		// strike rather than sequentially before/after it.
+		onStrikeBegin?.();
 		await this.playAnimationSequence(sprite, ["attack"]);
 		applyDamage();
 
@@ -286,6 +296,122 @@ export class BattleOverlay implements Overlay {
 
 		sprite?.setDirection(facing);
 		void sprite?.play("idle");
+	}
+
+	/**
+	 * Visual sequence for a Run action. The runner always starts
+	 * fleeing (walk played in the direction opposite their normal
+	 * facing — away from the opponent, not toward them). What happens
+	 * next depends on whether the escape actually succeeded:
+	 *  - Success: runner keeps going off the edge of the arena while
+	 *    fading out; the chaser only gets partway before giving up.
+	 *  - Failure: chaser catches all the way up and attacks: the
+	 *    runner staggers (defend, since no dedicated stagger sprite
+	 *    exists yet), then both turn back to face each other and
+	 *    settle to idle for the next round.
+	 */
+	private async playRunAwaySequence(
+		runnerToken: Container,
+		runnerSprite: CharacterSprite | undefined,
+		runnerHomeTile: { x: number; y: number },
+		runnerFacing: IsoFacing,
+		chaserToken: Container,
+		chaserSprite: CharacterSprite | undefined,
+		chaserHomeTile: { x: number; y: number },
+		chaserFacing: IsoFacing,
+		escaped: boolean,
+	): Promise<void> {
+		// "Away" is the opposite of the runner's normal toward-opponent
+		// facing — continuing straight past their own home tile.
+		const dx = runnerHomeTile.x - chaserHomeTile.x;
+		const dy = runnerHomeTile.y - chaserHomeTile.y;
+		const fleeFacing = oppositeFacing(runnerFacing);
+
+		if (escaped) {
+			const offArenaTile = {
+				x: runnerHomeTile.x + dx * 2,
+				y: runnerHomeTile.y + dy * 2,
+			};
+			const chaserHalfway = {
+				x: Math.round(chaserHomeTile.x + dx * 0.4),
+				y: Math.round(chaserHomeTile.y + dy * 0.4),
+			};
+
+			const fleePromise = (async () => {
+				runnerSprite?.setDirection(fleeFacing);
+				const walkPromise = runnerSprite
+					? runnerSprite.playAsync("walk")
+					: this.delay(WALK_TWEEN_MS);
+				const toScreen = this.arenaGridToScreen(offArenaTile.x, offArenaTile.y);
+				const fromX = runnerToken.x;
+				const fromY = runnerToken.y;
+				const startTime = performance.now();
+				const fadeDurationMs = WALK_TWEEN_MS * 1.5;
+				await new Promise<void>((resolve) => {
+					const step = () => {
+						const t = Math.min(
+							1,
+							(performance.now() - startTime) / fadeDurationMs,
+						);
+						const eased = easeInOutCubic(t);
+						runnerToken.x = fromX + (toScreen.x - fromX) * eased;
+						runnerToken.y = fromY + (toScreen.y - fromY) * eased;
+						runnerToken.alpha = 1 - t;
+						if (t < 1) requestAnimationFrame(step);
+						else resolve();
+					};
+					requestAnimationFrame(step);
+				});
+				await walkPromise;
+			})();
+
+			const chasePromise = this.playMoveTo(
+				chaserToken,
+				chaserSprite,
+				chaserHalfway,
+				chaserFacing,
+			);
+
+			await Promise.all([fleePromise, chasePromise]);
+			// Battle-over handling (loot, onComplete) happens right
+			// after this returns — no need to reset positions/facing
+			// since the overlay is about to close.
+			return;
+		}
+
+		// Failed escape: a short flee attempt, then genuinely caught.
+		const fleeShortTile = {
+			x: runnerHomeTile.x + Math.sign(dx || 1),
+			y: runnerHomeTile.y + Math.sign(dy || 1),
+		};
+		await this.playMoveTo(runnerToken, runnerSprite, fleeShortTile, fleeFacing);
+
+		const catchUpTile = this.computeApproachTile(
+			chaserHomeTile,
+			fleeShortTile,
+			MELEE_APPROACH_TILES,
+		);
+		await this.playMoveTo(chaserToken, chaserSprite, catchUpTile, chaserFacing);
+		void chaserSprite?.play("idle");
+		await this.delay(BEAT_PAUSE_MS);
+
+		await this.playAnimationSequence(chaserSprite, ["attack"], "idle");
+		void runnerSprite?.play("defend"); // stagger stand-in — no dedicated sprite yet
+		await this.delay(BEAT_PAUSE_MS);
+
+		// Both turn back to face each other and head home.
+		await Promise.all([
+			this.playMoveTo(runnerToken, runnerSprite, runnerHomeTile, runnerFacing),
+			this.playMoveTo(
+				chaserToken,
+				chaserSprite,
+				chaserHomeTile,
+				oppositeFacing(chaserFacing),
+			),
+		]);
+		chaserSprite?.setDirection(chaserFacing);
+		void runnerSprite?.play("idle");
+		void chaserSprite?.play("idle");
 	}
 
 	constructor(
@@ -708,7 +834,7 @@ export class BattleOverlay implements Overlay {
 			(sprite) => (this.attackerSprite = sprite),
 		);
 		this.attackerTokenView.x = attackerPos.x;
-		this.attackerTokenView.y = attackerPos.y - 14;
+		this.attackerTokenView.y = attackerPos.y;
 		this.arena.addChild(this.attackerTokenView);
 
 		const defenderPos = this.arenaGridToScreen(
@@ -723,7 +849,7 @@ export class BattleOverlay implements Overlay {
 			(sprite) => (this.defenderSprite = sprite),
 		);
 		this.defenderTokenView.x = defenderPos.x;
-		this.defenderTokenView.y = defenderPos.y - 14;
+		this.defenderTokenView.y = defenderPos.y;
 		this.arena.addChild(this.defenderTokenView);
 	}
 
@@ -751,6 +877,7 @@ export class BattleOverlay implements Overlay {
 			toSpriteCharacterClass(characterClass),
 			12, // confirmed correct for the arena's specific camera/tile setup
 		);
+		sprite.setExternalScale(sprite.getExternalScale() * ARENA_SPRITE_SIZE_UP);
 		sprite.setDirection(facing);
 		void sprite.init().then((ok) => {
 			if (ok) onSpriteReady(sprite);
@@ -893,35 +1020,16 @@ export class BattleOverlay implements Overlay {
 		}
 	}
 
-	private buildAttackerIndicator(): void {
-		const pos = this.arenaGridToScreen(
-			this.attackerTile().x,
-			this.attackerTile().y,
-		);
-		this.attackerIndicator = new Text({
-			text: "?",
-			style: { fill: 0xffffff, fontSize: 24, fontWeight: "bold" },
-		});
-		this.attackerIndicator.anchor.set(0.5);
-		this.attackerIndicator.x = pos.x;
-		this.attackerIndicator.y = pos.y - 70;
-		this.arena.addChild(this.attackerIndicator);
-	}
+	/**
+	 * Intentionally a no-op — the "?"/action-name labels above each
+	 * combatant's head were removed per explicit request. Kept as a
+	 * method (not deleted outright) since it's called from onShow()
+	 * and the space above their heads is planned for something else
+	 * later.
+	 */
+	private buildAttackerIndicator(): void {}
 
-	private buildDefenderIndicator(): void {
-		const pos = this.arenaGridToScreen(
-			this.defenderTile().x,
-			this.defenderTile().y,
-		);
-		this.defenderIndicator = new Text({
-			text: "?",
-			style: { fill: 0xffffff, fontSize: 24, fontWeight: "bold" },
-		});
-		this.defenderIndicator.anchor.set(0.5);
-		this.defenderIndicator.x = pos.x;
-		this.defenderIndicator.y = pos.y - 70;
-		this.arena.addChild(this.defenderIndicator);
-	}
+	private buildDefenderIndicator(): void {}
 
 	private onHandCardConfirmed(card: CardData): void {
 		if (!this.pendingAction) return;
@@ -1241,10 +1349,76 @@ export class BattleOverlay implements Overlay {
 					applyAttackerDamage,
 				);
 			}
+		} else if (
+			attackerChoice.action === "attack" &&
+			defenderChoice.action === "defend"
+		) {
+			await this.playMeleeStrike(
+				this.attackerTokenView,
+				this.attackerSprite,
+				this.attackerTile(),
+				this.defenderTile(),
+				this.attackerBaseFacing,
+				() => {
+					applyAttackerDamage();
+					applyDefenderDamage();
+				},
+				() => void this.defenderSprite?.play("defend"),
+			);
+			// Defended successfully (0 damage taken) -> celebrate instead
+			// of just settling back to idle.
+			void this.defenderSprite?.play(
+				result.b.damageTaken === 0 ? "victory" : "idle",
+			);
+		} else if (
+			defenderChoice.action === "attack" &&
+			attackerChoice.action === "defend"
+		) {
+			await this.playMeleeStrike(
+				this.defenderTokenView,
+				this.defenderSprite,
+				this.defenderTile(),
+				this.attackerTile(),
+				this.defenderBaseFacing,
+				() => {
+					applyAttackerDamage();
+					applyDefenderDamage();
+				},
+				() => void this.attackerSprite?.play("defend"),
+			);
+			void this.attackerSprite?.play(
+				result.a.damageTaken === 0 ? "victory" : "idle",
+			);
+		} else if (attackerChoice.action === "run") {
+			applyAttackerDamage();
+			applyDefenderDamage();
+			await this.playRunAwaySequence(
+				this.attackerTokenView,
+				this.attackerSprite,
+				this.attackerTile(),
+				this.attackerBaseFacing,
+				this.defenderTokenView,
+				this.defenderSprite,
+				this.defenderTile(),
+				this.defenderBaseFacing,
+				!!result.a.escaped,
+			);
+		} else if (defenderChoice.action === "run") {
+			applyAttackerDamage();
+			applyDefenderDamage();
+			await this.playRunAwaySequence(
+				this.defenderTokenView,
+				this.defenderSprite,
+				this.defenderTile(),
+				this.defenderBaseFacing,
+				this.attackerTokenView,
+				this.attackerSprite,
+				this.attackerTile(),
+				this.attackerBaseFacing,
+				!!result.b.escaped,
+			);
 		} else {
-			// Everything else — Attack/Defend, Defend/Defend, any Run
-			// combination — has at most one real hit (or none), so both
-			// sides' outcomes apply together in a single beat.
+			// Defend/Defend — no real hit, no positional movement.
 			applyAttackerDamage();
 			applyDefenderDamage();
 		}
