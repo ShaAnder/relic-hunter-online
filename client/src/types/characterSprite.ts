@@ -39,6 +39,7 @@ export type CharacterAnimation =
 	| "walk"
 	| "run"
 	| "attack"
+	| "defend"
 	| "critical"
 	| "hit"
 	| "stunned"
@@ -71,6 +72,7 @@ export const DEFAULT_ANIMATION_SPECS: Record<
 		loop: false,
 		durations: [100, 90, 45, 70, 120],
 	},
+	defend: { frameCount: 2, fps: 3, loop: true },
 	critical: { frameCount: 5, fps: 12, loop: false },
 	hit: { frameCount: 3, fps: 10, loop: false, durations: [60, 100, 120] },
 	stunned: { frameCount: 2, fps: 4, loop: true },

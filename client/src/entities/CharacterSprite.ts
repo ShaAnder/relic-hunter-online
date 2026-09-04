@@ -107,6 +107,10 @@ export class CharacterSprite {
 		this.applyScale();
 	}
 
+	getExternalScale(): number {
+		return this.externalScale;
+	}
+
 	setDirection(dir: IsoFacing | string): void {
 		const next = toIsoFacing(dir);
 		if (this.direction === next) return;
