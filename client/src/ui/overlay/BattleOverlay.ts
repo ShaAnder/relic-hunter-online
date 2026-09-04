@@ -1279,6 +1279,7 @@ export class BattleOverlay implements Overlay {
 					this.defenderTile(),
 					this.attackerBaseFacing,
 					applyAttackerDamage,
+					() => void this.defenderSprite?.play("defend"),
 				);
 				await this.playMeleeStrike(
 					this.defenderTokenView,
@@ -1287,6 +1288,7 @@ export class BattleOverlay implements Overlay {
 					this.attackerTile(),
 					this.defenderBaseFacing,
 					applyDefenderDamage,
+					() => void this.attackerSprite?.play("defend"),
 				);
 			} else {
 				await this.playMeleeStrike(
@@ -1296,6 +1298,7 @@ export class BattleOverlay implements Overlay {
 					this.attackerTile(),
 					this.defenderBaseFacing,
 					applyDefenderDamage,
+					() => void this.attackerSprite?.play("defend"),
 				);
 				await this.playMeleeStrike(
 					this.attackerTokenView,
@@ -1304,6 +1307,7 @@ export class BattleOverlay implements Overlay {
 					this.defenderTile(),
 					this.attackerBaseFacing,
 					applyAttackerDamage,
+					() => void this.defenderSprite?.play("defend"),
 				);
 			}
 		} else if (

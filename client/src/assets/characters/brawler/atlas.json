@@ -56,7 +56,7 @@
 			"anim": "attack",
 			"facing": "sw",
 			"row": 4,
-			"frames": 4,
+			"frames": 6,
 			"source": "attack_sw.png"
 		},
 		{
@@ -109,5 +109,5 @@
 			"source": "victory_ne.png"
 		}
 	],
-	"generatedAt": "2026-09-04T19:42:07.163Z"
+	"generatedAt": "2026-09-04T20:02:07.892Z"
 }
