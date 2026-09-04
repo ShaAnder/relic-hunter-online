@@ -225,6 +225,7 @@ export class BattleOverlay implements Overlay {
 		sprite: CharacterSprite | undefined,
 		toGrid: { x: number; y: number },
 		facing?: IsoFacing,
+		durationMs: number = WALK_TWEEN_MS,
 	): Promise<void> {
 		if (sprite && facing) sprite.setDirection(facing);
 
@@ -234,14 +235,18 @@ export class BattleOverlay implements Overlay {
 		const toX = toScreen.x;
 		const toY = toScreen.y; // matches the corrected initial placement (no floating offset)
 
-		const walkPromise = sprite
-			? sprite.playAsync("walk")
-			: this.delay(WALK_TWEEN_MS);
+		// Loop walk for the actual duration of travel, whatever that
+		// turns out to be — a single playthrough freezing on its last
+		// frame while the token keeps moving (if travel outlasts one
+		// cycle, e.g. the longer escape-fade distance) is exactly the
+		// bug this replaces. Explicitly stopped once travel completes,
+		// not left to coincidentally finish at the same time.
+		void sprite?.play("walk", { loop: true });
 
 		const startTime = performance.now();
-		const tweenPromise = new Promise<void>((resolve) => {
+		await new Promise<void>((resolve) => {
 			const step = () => {
-				const t = Math.min(1, (performance.now() - startTime) / WALK_TWEEN_MS);
+				const t = Math.min(1, (performance.now() - startTime) / durationMs);
 				token.x = fromX + (toX - fromX) * t;
 				token.y = fromY + (toY - fromY) * t;
 				if (t < 1) requestAnimationFrame(step);
@@ -249,10 +254,6 @@ export class BattleOverlay implements Overlay {
 			};
 			requestAnimationFrame(step);
 		});
-
-		// Both run concurrently — the walk animation plays WHILE the
-		// token physically travels, not one after the other.
-		await Promise.all([walkPromise, tweenPromise]);
 	}
 
 	/**
@@ -299,119 +300,75 @@ export class BattleOverlay implements Overlay {
 	}
 
 	/**
-	 * Visual sequence for a Run action. The runner always starts
-	 * fleeing (walk played in the direction opposite their normal
-	 * facing — away from the opponent, not toward them). What happens
-	 * next depends on whether the escape actually succeeded:
-	 *  - Success: runner keeps going off the edge of the arena while
-	 *    fading out; the chaser only gets partway before giving up.
-	 *  - Failure: chaser catches all the way up and attacks: the
-	 *    runner staggers (defend, since no dedicated stagger sprite
-	 *    exists yet), then both turn back to face each other and
-	 *    settle to idle for the next round.
+	 * Visual sequence for a Run action. Always starts the same way
+	 * regardless of outcome — the runner plays walk in place, facing
+	 * away from the opponent (the flee direction), as the "attempt".
+	 * What happens next depends on whether the escape actually
+	 * succeeded (already decided by the combat roll before any of
+	 * this plays — the animation is revealing that outcome, not
+	 * deciding it):
+	 *  - Caught: the in-place walk stops, defend plays (stand-in for
+	 *    stagger — no dedicated sprite yet), then the runner turns
+	 *    back to face the opponent and settles to idle. No actual
+	 *    movement happens at all in this branch.
+	 *  - Escaped: the already-looping walk continues uninterrupted
+	 *    into genuine travel, off the edge of the arena in the exact
+	 *    direction the runner is already facing, fading out as it goes.
 	 */
 	private async playRunAwaySequence(
 		runnerToken: Container,
 		runnerSprite: CharacterSprite | undefined,
 		runnerHomeTile: { x: number; y: number },
 		runnerFacing: IsoFacing,
-		chaserToken: Container,
-		chaserSprite: CharacterSprite | undefined,
 		chaserHomeTile: { x: number; y: number },
-		chaserFacing: IsoFacing,
 		escaped: boolean,
 	): Promise<void> {
 		// "Away" is the opposite of the runner's normal toward-opponent
-		// facing — continuing straight past their own home tile.
+		// facing. dx/dy is the same vector both the facing and the
+		// actual travel direction derive from, so the two can never
+		// diverge — a sprite facing one way while moving another was
+		// never possible here to begin with; verified getIsoFacing and
+		// gridToScreen share the same +x→se/-x→nw/+y→sw/-y→ne convention.
 		const dx = runnerHomeTile.x - chaserHomeTile.x;
 		const dy = runnerHomeTile.y - chaserHomeTile.y;
 		const fleeFacing = oppositeFacing(runnerFacing);
 
-		if (escaped) {
-			const offArenaTile = {
-				x: runnerHomeTile.x + dx * 2,
-				y: runnerHomeTile.y + dy * 2,
-			};
-			const chaserHalfway = {
-				x: Math.round(chaserHomeTile.x + dx * 0.4),
-				y: Math.round(chaserHomeTile.y + dy * 0.4),
-			};
+		runnerSprite?.setDirection(fleeFacing);
+		void runnerSprite?.play("walk", { loop: true });
+		await this.delay(BEAT_PAUSE_MS);
 
-			const fleePromise = (async () => {
-				runnerSprite?.setDirection(fleeFacing);
-				const walkPromise = runnerSprite
-					? runnerSprite.playAsync("walk")
-					: this.delay(WALK_TWEEN_MS);
-				const toScreen = this.arenaGridToScreen(offArenaTile.x, offArenaTile.y);
-				const fromX = runnerToken.x;
-				const fromY = runnerToken.y;
-				const startTime = performance.now();
-				const fadeDurationMs = WALK_TWEEN_MS * 1.5;
-				await new Promise<void>((resolve) => {
-					const step = () => {
-						const t = Math.min(
-							1,
-							(performance.now() - startTime) / fadeDurationMs,
-						);
-						const eased = easeInOutCubic(t);
-						runnerToken.x = fromX + (toScreen.x - fromX) * eased;
-						runnerToken.y = fromY + (toScreen.y - fromY) * eased;
-						runnerToken.alpha = 1 - t;
-						if (t < 1) requestAnimationFrame(step);
-						else resolve();
-					};
-					requestAnimationFrame(step);
-				});
-				await walkPromise;
-			})();
-
-			const chasePromise = this.playMoveTo(
-				chaserToken,
-				chaserSprite,
-				chaserHalfway,
-				chaserFacing,
-			);
-
-			await Promise.all([fleePromise, chasePromise]);
-			// Battle-over handling (loot, onComplete) happens right
-			// after this returns — no need to reset positions/facing
-			// since the overlay is about to close.
+		if (!escaped) {
+			void runnerSprite?.play("defend");
+			await this.delay(BEAT_PAUSE_MS);
+			runnerSprite?.setDirection(runnerFacing);
+			void runnerSprite?.play("idle");
 			return;
 		}
 
-		// Failed escape: a short flee attempt, then genuinely caught.
-		const fleeShortTile = {
-			x: runnerHomeTile.x + Math.sign(dx || 1),
-			y: runnerHomeTile.y + Math.sign(dy || 1),
+		const offArenaTile = {
+			x: runnerHomeTile.x + dx * 2,
+			y: runnerHomeTile.y + dy * 2,
 		};
-		await this.playMoveTo(runnerToken, runnerSprite, fleeShortTile, fleeFacing);
-
-		const catchUpTile = this.computeApproachTile(
-			chaserHomeTile,
-			fleeShortTile,
-			MELEE_APPROACH_TILES,
-		);
-		await this.playMoveTo(chaserToken, chaserSprite, catchUpTile, chaserFacing);
-		void chaserSprite?.play("idle");
-		await this.delay(BEAT_PAUSE_MS);
-
-		await this.playAnimationSequence(chaserSprite, ["attack"], "idle");
-		void runnerSprite?.play("defend"); // stagger stand-in — no dedicated sprite yet
-		await this.delay(BEAT_PAUSE_MS);
-
-		// Both turn back to face each other and head home.
-		await Promise.all([
-			this.playMoveTo(runnerToken, runnerSprite, runnerHomeTile, runnerFacing),
-			this.playMoveTo(
-				chaserToken,
-				chaserSprite,
-				chaserHomeTile,
-				oppositeFacing(chaserFacing),
-			),
-		]);
-		chaserSprite?.setDirection(chaserFacing);
-		void runnerSprite?.play("idle");
-		void chaserSprite?.play("idle");
+		const toScreen = this.arenaGridToScreen(offArenaTile.x, offArenaTile.y);
+		const fromX = runnerToken.x;
+		const fromY = runnerToken.y;
+		const startTime = performance.now();
+		const fadeDurationMs = WALK_TWEEN_MS * 1.5;
+		await new Promise<void>((resolve) => {
+			const step = () => {
+				const t = Math.min(1, (performance.now() - startTime) / fadeDurationMs);
+				const eased = easeInOutCubic(t);
+				runnerToken.x = fromX + (toScreen.x - fromX) * eased;
+				runnerToken.y = fromY + (toScreen.y - fromY) * eased;
+				runnerToken.alpha = 1 - t;
+				if (t < 1) requestAnimationFrame(step);
+				else resolve();
+			};
+			requestAnimationFrame(step);
+		});
+		// Battle-over handling (loot, onComplete) happens right after
+		// this returns — no need to reset alpha/position/facing since
+		// the overlay is about to close.
 	}
 
 	constructor(
@@ -1367,9 +1324,10 @@ export class BattleOverlay implements Overlay {
 			);
 			// Defended successfully (0 damage taken) -> celebrate instead
 			// of just settling back to idle.
-			void this.defenderSprite?.play(
-				result.b.damageTaken === 0 ? "victory" : "idle",
-			);
+			if (result.b.damageTaken === 0) {
+				await this.defenderSprite?.playAsync("victory");
+			}
+			void this.defenderSprite?.play("idle");
 		} else if (
 			defenderChoice.action === "attack" &&
 			attackerChoice.action === "defend"
@@ -1386,9 +1344,10 @@ export class BattleOverlay implements Overlay {
 				},
 				() => void this.attackerSprite?.play("defend"),
 			);
-			void this.attackerSprite?.play(
-				result.a.damageTaken === 0 ? "victory" : "idle",
-			);
+			if (result.a.damageTaken === 0) {
+				await this.attackerSprite?.playAsync("victory");
+			}
+			void this.attackerSprite?.play("idle");
 		} else if (attackerChoice.action === "run") {
 			applyAttackerDamage();
 			applyDefenderDamage();
@@ -1397,10 +1356,7 @@ export class BattleOverlay implements Overlay {
 				this.attackerSprite,
 				this.attackerTile(),
 				this.attackerBaseFacing,
-				this.defenderTokenView,
-				this.defenderSprite,
 				this.defenderTile(),
-				this.defenderBaseFacing,
 				!!result.a.escaped,
 			);
 		} else if (defenderChoice.action === "run") {
@@ -1411,10 +1367,7 @@ export class BattleOverlay implements Overlay {
 				this.defenderSprite,
 				this.defenderTile(),
 				this.defenderBaseFacing,
-				this.attackerTokenView,
-				this.attackerSprite,
 				this.attackerTile(),
-				this.attackerBaseFacing,
 				!!result.b.escaped,
 			);
 		} else {
