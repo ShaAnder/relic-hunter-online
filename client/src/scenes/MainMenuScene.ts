@@ -6,6 +6,7 @@ import { computeFitScale } from "@/math/fitScale";
 import { CharacterCreationScene } from "./CharacterCreationScene";
 import { LoadGameScene } from "./LoadGameScene";
 import { TutorialsMenuScene } from "./TutorialScene";
+import { SettingsScene } from "./SettingsScene";
 
 /**
  * Top-level menu after the eventual Landing "Press Start".
@@ -73,8 +74,7 @@ export class MainMenuScene implements Scene {
 			{
 				label: "Settings",
 				action: () => {
-					// Stub — SettingsScene comes with the later nav pass
-					console.log("[MainMenu] Settings — Coming Soon");
+					void this.game.sceneManager.changeScene(new SettingsScene(this.game));
 				},
 			},
 		];

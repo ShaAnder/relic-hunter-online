@@ -23,6 +23,15 @@ import {
 	type SfxId,
 } from "./audioManifest";
 
+/** localStorage key — bump this suffix if the saved shape ever changes incompatibly, so old saves don't get misread. */
+const STORAGE_KEY = "rh_audio_settings_v1";
+
+interface StoredVolumes {
+	masterVolume: number;
+	musicVolume: number;
+	sfxVolume: number;
+}
+
 export interface AudioServiceOptions {
 	masterVolume?: number;
 	musicVolume?: number;
@@ -44,9 +53,12 @@ export class AudioService {
 	private sfxCache = new Map<SfxId, Howl>();
 
 	constructor(opts: AudioServiceOptions = {}) {
-		this.masterVolume = opts.masterVolume ?? 1;
-		this.musicVolume = opts.musicVolume ?? 1;
-		this.sfxVolume = opts.sfxVolume ?? 1;
+		// Saved values (if any) win over the constructor defaults —
+		// this is what makes a volume choice survive a page reload.
+		const saved = loadVolumes();
+		this.masterVolume = saved?.masterVolume ?? opts.masterVolume ?? 1;
+		this.musicVolume = saved?.musicVolume ?? opts.musicVolume ?? 1;
+		this.sfxVolume = saved?.sfxVolume ?? opts.sfxVolume ?? 1;
 		this.applyMaster();
 	}
 
@@ -71,15 +83,38 @@ export class AudioService {
 	setMasterVolume(v: number): void {
 		this.masterVolume = clamp01(v);
 		this.applyMaster();
+		this.saveVolumes();
 	}
 
 	setMusicVolume(v: number): void {
 		this.musicVolume = clamp01(v);
 		this.applyMusicVolumesImmediate();
+		this.saveVolumes();
 	}
 
 	setSfxVolume(v: number): void {
 		this.sfxVolume = clamp01(v);
+		this.saveVolumes();
+	}
+
+	getMasterVolume(): number {
+		return this.masterVolume;
+	}
+
+	getMusicVolume(): number {
+		return this.musicVolume;
+	}
+
+	getSfxVolume(): number {
+		return this.sfxVolume;
+	}
+
+	private saveVolumes(): void {
+		saveVolumes({
+			masterVolume: this.masterVolume,
+			musicVolume: this.musicVolume,
+			sfxVolume: this.sfxVolume,
+		});
 	}
 
 	private applyMaster(): void {
@@ -121,8 +156,9 @@ export class AudioService {
 		}
 
 		const targetVol = this.musicBusLevel(def.volume ?? 1);
+		const chosenSrc = pickOne(def.src);
 		const incoming = new Howl({
-			src: [def.src],
+			src: [chosenSrc],
 			loop: true,
 			html5: false,
 			preload: true,
@@ -216,7 +252,9 @@ export class AudioService {
 	/** Optional: call from a loading screen to warm decoders. */
 	preloadAll(): void {
 		for (const def of Object.values(MUSIC_TRACKS)) {
-			void new Howl({ src: [def.src], preload: true, volume: 0 });
+			for (const src of toArray(def.src)) {
+				void new Howl({ src: [src], preload: true, volume: 0 });
+			}
 		}
 		for (const def of Object.values(SFX)) {
 			if (this.sfxCache.has(def.id)) continue;
@@ -225,6 +263,51 @@ export class AudioService {
 				new Howl({ src: [def.src], preload: true, volume: 0 }),
 			);
 		}
+	}
+}
+
+/** Normalizes a single-src-or-pool into an array — makes "loop over every file" the same code whether there's one file or several. */
+function toArray(src: string | string[]): string[] {
+	return Array.isArray(src) ? src : [src];
+}
+
+/** Picks one entry from a single-src-or-pool. A plain string just passes through untouched — only an actual pool involves any randomness. */
+function pickOne(src: string | string[]): string {
+	if (!Array.isArray(src)) return src;
+	return src[Math.floor(Math.random() * src.length)];
+}
+
+/**
+ * localStorage can throw — some browsers disable it entirely in
+ * private/incognito modes, and it's technically a synchronous API that
+ * can fail on quota or permission grounds. A failed read just means
+ * "no saved settings," a failed write just means "this session's
+ * choice won't persist" — neither should ever break audio playback
+ * itself, so both are wrapped and degrade silently.
+ */
+function loadVolumes(): StoredVolumes | null {
+	try {
+		const raw = localStorage.getItem(STORAGE_KEY);
+		if (!raw) return null;
+		const parsed = JSON.parse(raw) as Partial<StoredVolumes>;
+		if (
+			typeof parsed.masterVolume !== "number" ||
+			typeof parsed.musicVolume !== "number" ||
+			typeof parsed.sfxVolume !== "number"
+		) {
+			return null;
+		}
+		return parsed as StoredVolumes;
+	} catch {
+		return null;
+	}
+}
+
+function saveVolumes(volumes: StoredVolumes): void {
+	try {
+		localStorage.setItem(STORAGE_KEY, JSON.stringify(volumes));
+	} catch {
+		// Ignore — this session just won't remember the choice.
 	}
 }
 

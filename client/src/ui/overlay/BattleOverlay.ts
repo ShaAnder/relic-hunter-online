@@ -71,6 +71,8 @@ const ARENA_DESIGN_H = 600;
 const WALK_TWEEN_MS = 1333;
 /** Halved from 500 to accommodate the slower walk above — otherwise the whole run-up/attack/run-back sequence grows even longer on top of an already-longer walk. */
 const BEAT_PAUSE_MS = 250;
+/** Matches attack's first 3 frame durations (draw+aim+fire = 180+160+140) — when the shot actually lands on screen, not the full 6-frame animation including the cosmetic settle tail. Keep in sync if brawler.ts's attack durations change. */
+const STRIKE_IMPACT_MS = 480;
 /** How many tiles short of the target's own tile a melee attacker stops. */
 const MELEE_APPROACH_TILES = 1;
 
@@ -305,8 +307,16 @@ export class BattleOverlay implements Overlay {
 		// animation hangs off, so "defend" plays concurrently with the
 		// strike rather than sequentially before/after it.
 		onStrikeBegin?.();
-		await this.playAnimationSequence(sprite, ["attack"]);
+		const attackAnimPromise = this.playAnimationSequence(sprite, ["attack"]);
+		// Damage lands when the shot actually fires on screen (end of
+		// the muzzle-flash frame), not after the full animation —
+		// which now includes two purely cosmetic settle frames added
+		// later to fix a different flash/clipping issue, and awaiting
+		// all of them first was exactly what desynced the HP bar from
+		// the visible hit.
+		await this.delay(STRIKE_IMPACT_MS);
 		applyDamage();
+		await attackAnimPromise;
 
 		void sprite?.play("idle");
 		await this.delay(BEAT_PAUSE_MS);
@@ -1413,12 +1423,14 @@ export class BattleOverlay implements Overlay {
 			if (defenderStunned) {
 				// Still incapacitated — stays on stunned, not idle/victory.
 				void this.defenderSprite?.play("stunned", { loop: true });
+			} else if (result.b.damageTaken === 0) {
+				// Defended successfully -> celebrate, and let the pose
+				// actually hold instead of idle snapping over it right
+				// after it finishes playing.
+				await this.defenderSprite?.playAsync("victory");
+				await this.delay(BEAT_PAUSE_MS);
+				void this.defenderSprite?.play("idle");
 			} else {
-				// Defended successfully (0 damage taken) -> celebrate
-				// instead of just settling back to idle.
-				if (result.b.damageTaken === 0) {
-					await this.defenderSprite?.playAsync("victory");
-				}
 				void this.defenderSprite?.play("idle");
 			}
 		} else if (
@@ -1444,10 +1456,11 @@ export class BattleOverlay implements Overlay {
 			);
 			if (attackerStunned) {
 				void this.attackerSprite?.play("stunned", { loop: true });
+			} else if (result.a.damageTaken === 0) {
+				await this.attackerSprite?.playAsync("victory");
+				await this.delay(BEAT_PAUSE_MS);
+				void this.attackerSprite?.play("idle");
 			} else {
-				if (result.a.damageTaken === 0) {
-					await this.attackerSprite?.playAsync("victory");
-				}
 				void this.attackerSprite?.play("idle");
 			}
 		} else if (attackerChoice.action === "run") {
