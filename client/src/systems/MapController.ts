@@ -130,6 +130,14 @@ export class MapController {
 							? `🎯 Found the target: ${outcome.item.name}! The Exit has revealed itself.`
 							: "⚠️ An enemy hunter found the target item! The Exit has revealed itself.",
 					);
+					// Celebrate on whoever actually found it, not just
+					// when it happens to be the local player — the UI
+					// popup below stays local-only (it's local-view UI),
+					// but the animation is a fact about that unit.
+					const opener = this.cb
+						.getUnits()
+						.find((u) => u.state.id === state.id);
+					void opener?.mercenary.playVictory();
 				} else if (isLocal) {
 					this.cb.showFeedback(`📦 Found: ${outcome.item.name}`);
 				}
