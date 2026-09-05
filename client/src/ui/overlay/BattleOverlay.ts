@@ -402,6 +402,10 @@ export class BattleOverlay implements Overlay {
 			};
 			requestAnimationFrame(step);
 		});
+		// Stop moving and settle to idle now that the escape has fully
+		// played out — walk was left looping this whole time, and
+		// nothing else was going to turn it off on its own.
+		void runnerSprite?.play("idle");
 		// Battle-over handling (loot, onComplete) happens right after
 		// this returns — no need to reset alpha/position/facing since
 		// the overlay is about to close.
@@ -845,7 +849,12 @@ export class BattleOverlay implements Overlay {
 			this.attackerColor,
 			this.attackerState.characterClass,
 			this.attackerBaseFacing,
-			(sprite) => (this.attackerSprite = sprite),
+			(sprite) => {
+				this.attackerSprite = sprite;
+				if (this.attackerState.stunnedTurnsRemaining > 0) {
+					void sprite.play("stunned", { loop: true });
+				}
+			},
 		);
 		this.attackerTokenView.x = attackerPos.x;
 		this.attackerTokenView.y = attackerPos.y;
@@ -860,7 +869,12 @@ export class BattleOverlay implements Overlay {
 			this.defenderColor,
 			this.defenderState.characterClass,
 			this.defenderBaseFacing,
-			(sprite) => (this.defenderSprite = sprite),
+			(sprite) => {
+				this.defenderSprite = sprite;
+				if (this.defenderState.stunnedTurnsRemaining > 0) {
+					void sprite.play("stunned", { loop: true });
+				}
+			},
 		);
 		this.defenderTokenView.x = defenderPos.x;
 		this.defenderTokenView.y = defenderPos.y;
@@ -1379,6 +1393,7 @@ export class BattleOverlay implements Overlay {
 			attackerChoice.action === "attack" &&
 			defenderChoice.action === "defend"
 		) {
+			const defenderStunned = this.defenderState.stunnedTurnsRemaining > 0;
 			await this.playMeleeStrike(
 				this.attackerTokenView,
 				this.attackerSprite,
@@ -1389,18 +1404,28 @@ export class BattleOverlay implements Overlay {
 					applyAttackerDamage();
 					applyDefenderDamage();
 				},
-				() => void this.defenderSprite?.play("defend"),
+				() =>
+					void this.defenderSprite?.play(
+						defenderStunned ? "stunned" : "defend",
+						{ loop: defenderStunned },
+					),
 			);
-			// Defended successfully (0 damage taken) -> celebrate instead
-			// of just settling back to idle.
-			if (result.b.damageTaken === 0) {
-				await this.defenderSprite?.playAsync("victory");
+			if (defenderStunned) {
+				// Still incapacitated — stays on stunned, not idle/victory.
+				void this.defenderSprite?.play("stunned", { loop: true });
+			} else {
+				// Defended successfully (0 damage taken) -> celebrate
+				// instead of just settling back to idle.
+				if (result.b.damageTaken === 0) {
+					await this.defenderSprite?.playAsync("victory");
+				}
+				void this.defenderSprite?.play("idle");
 			}
-			void this.defenderSprite?.play("idle");
 		} else if (
 			defenderChoice.action === "attack" &&
 			attackerChoice.action === "defend"
 		) {
+			const attackerStunned = this.attackerState.stunnedTurnsRemaining > 0;
 			await this.playMeleeStrike(
 				this.defenderTokenView,
 				this.defenderSprite,
@@ -1411,12 +1436,20 @@ export class BattleOverlay implements Overlay {
 					applyAttackerDamage();
 					applyDefenderDamage();
 				},
-				() => void this.attackerSprite?.play("defend"),
+				() =>
+					void this.attackerSprite?.play(
+						attackerStunned ? "stunned" : "defend",
+						{ loop: attackerStunned },
+					),
 			);
-			if (result.a.damageTaken === 0) {
-				await this.attackerSprite?.playAsync("victory");
+			if (attackerStunned) {
+				void this.attackerSprite?.play("stunned", { loop: true });
+			} else {
+				if (result.a.damageTaken === 0) {
+					await this.attackerSprite?.playAsync("victory");
+				}
+				void this.attackerSprite?.play("idle");
 			}
-			void this.attackerSprite?.play("idle");
 		} else if (attackerChoice.action === "run") {
 			applyAttackerDamage();
 			applyDefenderDamage();
