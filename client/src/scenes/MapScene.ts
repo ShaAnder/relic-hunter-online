@@ -39,7 +39,6 @@ import {
 } from "@/math/screenInput";
 import type { MonsterEntity } from "@/types/entities";
 import { pointInCircle, pointInContainer } from "@/rendering/HitTest";
-import { AudioController } from "@/core/audio/audioController";
 import { CardDrawQueue } from "@/ui/CardDrawQueue";
 import { MapHud } from "@/hud/MapHud";
 import { GestureRouter, type ScrollSurface } from "@/input/GestureRouter";
@@ -135,8 +134,6 @@ export class MapScene implements Scene, TutorialPort {
 	private tutorialMarkers = new TutorialMarkers();
 
 	private matchController: MatchController;
-
-	private audio = new AudioController();
 
 	private fpsAccumulator = 0;
 
@@ -259,11 +256,7 @@ export class MapScene implements Scene, TutorialPort {
 				syncDeckTracker: () =>
 					this.hud.syncDeckTracker(this.localUnit.turnManager),
 				showBossAlert: (ms) => this.hud.showBossAlert(ms),
-				playBossAudio: () =>
-					this.audio.play("boss-theme", "/audio/boss-theme.mp3", {
-						loop: true,
-						volume: 0.6,
-					}),
+				playBossAudio: () => this.game.audio.playMusic("boss"),
 				isTutorial: () => !!this.tutorialConfig,
 			},
 		);
@@ -392,6 +385,7 @@ export class MapScene implements Scene, TutorialPort {
 
 	/** Render the map, center the camera, and wire up input. */
 	onEnter(): void {
+		this.game.audio.playMusic("map");
 		this.mapRenderer.build(this.grid, 0);
 		this.centerCameraOnActiveHunter();
 		this.camera.attach(this.game.app.canvas);

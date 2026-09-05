@@ -3,6 +3,7 @@ import { SceneManager } from "../scenes/SceneManager";
 import type { Scene } from "../scenes/Scene";
 import { GameSession } from "./GameSession";
 import { OverlayManager } from "../overlays/OverlayManager";
+import { AudioService } from "../audio/AudioService";
 
 /**
  * Central controller for the PixiJS client.
@@ -27,6 +28,7 @@ export class Game {
 	readonly sceneManager: SceneManager;
 	readonly session = new GameSession();
 	readonly overlays: OverlayManager;
+	readonly audio = new AudioService();
 
 	/**
 	 * Private constructor to enforce the use of the async factory method `Game.create()`.
@@ -69,7 +71,22 @@ export class Game {
 
 		container.appendChild(app.canvas);
 
-		return new Game(app);
+		const game = new Game(app);
+
+		// Browsers refuse to play any audio at all until the page has
+		// received a genuine user gesture (click, keypress, or touch).
+		// LandingScene is the primary, deliberate way this gets
+		// satisfied — this is a harmless fallback in case that scene
+		// is ever skipped or replaced, not the main path.
+		const unlockOnce = () => {
+			game.audio.unlock();
+			window.removeEventListener("pointerdown", unlockOnce);
+			window.removeEventListener("keydown", unlockOnce);
+		};
+		window.addEventListener("pointerdown", unlockOnce);
+		window.addEventListener("keydown", unlockOnce);
+
+		return game;
 	}
 
 	/**

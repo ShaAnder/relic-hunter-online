@@ -3,6 +3,7 @@ import type { Overlay } from "@/core/overlays/Overlay";
 import type { Game } from "@/core/game/Game";
 import { Button } from "../generics/Button";
 import { MainMenuScene } from "@/scenes/MainMenuScene";
+import { SettingsOverlay } from "./SettingsOverlay";
 
 /**
  * Pause menu shown on top of MapScene (or any scene) without touching it —
@@ -93,7 +94,7 @@ export class PauseOverlay implements Overlay {
 	}
 
 	private onSettings(): void {
-		console.log("[PAUSE] Settings - coming soon");
+		void this.game.overlays.showOnTop(new SettingsOverlay(this.game));
 	}
 
 	private onMainMenu(): void {
