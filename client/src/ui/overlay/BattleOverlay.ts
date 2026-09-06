@@ -1414,7 +1414,7 @@ export class BattleOverlay implements Overlay {
 					}
 				} else {
 					void this.defenderSprite?.play("idle");
-					await this.playMeleeStrike(
+					const defenderDefeated = await this.playMeleeStrike(
 						this.defenderTokenView,
 						this.defenderSprite,
 						this.defenderTile(),
@@ -1423,9 +1423,14 @@ export class BattleOverlay implements Overlay {
 						applyDefenderDamage,
 						() => void this.attackerSprite?.play("defend"),
 					);
-					// Note: this branch's own melee strike already leaves
-					// the attacker on idle/stunned appropriately via its
-					// return value — nothing further needed either way.
+					// playMeleeStrike's return only governs its own
+					// striker (the defender here) — the attacker played
+					// "defend" as the receiving side via onStrikeBegin
+					// and needs its own explicit settle, same as the
+					// 0-damage branch above already does.
+					if (!defenderDefeated) {
+						void this.attackerSprite?.play("idle");
+					}
 				}
 			} else {
 				const defenderDefeated = await this.playMeleeStrike(
@@ -1443,7 +1448,7 @@ export class BattleOverlay implements Overlay {
 					await this.attackerSprite?.playAsync("victory");
 					await this.delay(BEAT_PAUSE_MS);
 					void this.attackerSprite?.play("idle");
-					await this.playMeleeStrike(
+					const attackerDefeated2 = await this.playMeleeStrike(
 						this.attackerTokenView,
 						this.attackerSprite,
 						this.attackerTile(),
@@ -1452,9 +1457,12 @@ export class BattleOverlay implements Overlay {
 						applyAttackerDamage,
 						() => void this.defenderSprite?.play("defend"),
 					);
+					if (!attackerDefeated2) {
+						void this.defenderSprite?.play("idle");
+					}
 				} else {
 					void this.attackerSprite?.play("idle");
-					await this.playMeleeStrike(
+					const attackerDefeated2 = await this.playMeleeStrike(
 						this.attackerTokenView,
 						this.attackerSprite,
 						this.attackerTile(),
@@ -1463,6 +1471,9 @@ export class BattleOverlay implements Overlay {
 						applyAttackerDamage,
 						() => void this.defenderSprite?.play("defend"),
 					);
+					if (!attackerDefeated2) {
+						void this.defenderSprite?.play("idle");
+					}
 				}
 			}
 		} else if (

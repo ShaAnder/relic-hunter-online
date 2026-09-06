@@ -51,6 +51,8 @@ export class AudioService {
 	private musicPrimary: "a" | "b" = "a";
 
 	private sfxCache = new Map<SfxId, Howl>();
+	/** Once a pool-based id (e.g. "map") has picked a file, it keeps that same file for the rest of the session — pickOne() only runs the first time an id is ever played, not on every re-entry. Without this, switching away (e.g. to "battle") and back would reroll the pool each time, which reads as the map theme randomly swapping mid-match rather than varying only between matches. */
+	private chosenSrcForId = new Map<MusicId, string>();
 
 	constructor(opts: AudioServiceOptions = {}) {
 		// Saved values (if any) win over the constructor defaults —
@@ -156,7 +158,11 @@ export class AudioService {
 		}
 
 		const targetVol = this.musicBusLevel(def.volume ?? 1);
-		const chosenSrc = pickOne(def.src);
+		let chosenSrc = this.chosenSrcForId.get(id);
+		if (!chosenSrc) {
+			chosenSrc = pickOne(def.src);
+			this.chosenSrcForId.set(id, chosenSrc);
+		}
 		const incoming = new Howl({
 			src: [chosenSrc],
 			loop: true,

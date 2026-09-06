@@ -28,6 +28,8 @@ export const ARCHETYPE_ZOC_COST_MULTIPLIER: Record<AiArchetype, number> = {
 	aggressive: 5,
 	balanced: 10,
 	treasure: 20,
+	passive: 30,
+	clever: 8,
 };
 
 /**
@@ -38,6 +40,8 @@ export const ARCHETYPE_ZOC_REFUSAL_THRESHOLD: Record<AiArchetype, number> = {
 	aggressive: 0.6,
 	balanced: 0.4,
 	treasure: 0.25,
+	passive: 0.15,
+	clever: 0.35,
 };
 
 /**

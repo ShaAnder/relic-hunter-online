@@ -958,10 +958,12 @@ export class MapScene implements Scene, TutorialPort {
 		0xe67e22, 0x9b59b6, 0x1abc9c,
 	] as const;
 
-	private static readonly ENEMY_ARCHETYPES: RH.AiArchetype[] = [
+	private static readonly ENEMY_ARCHETYPE_POOL: RH.AiArchetype[] = [
 		"aggressive",
 		"treasure",
 		"balanced",
+		"passive",
+		"clever",
 	];
 
 	private spawnLocalUnit(): void {
@@ -987,13 +989,25 @@ export class MapScene implements Scene, TutorialPort {
 	private spawnEnemyHunters(): void {
 		this.units = this.units.filter((u) => u.pilot === "local");
 
+		// Fisher-Yates shuffle, seeded RNG for match-to-match determinism
+		// consistency with everything else that draws randomness — pick
+		// 3 distinct archetypes fresh each match rather than the same
+		// fixed 3 every time, so all 5 personalities actually get
+		// exercised over time without changing headcount.
+		const shuffled = [...MapScene.ENEMY_ARCHETYPE_POOL];
+		for (let i = shuffled.length - 1; i > 0; i--) {
+			const j = Math.floor(this.game.session.rng() * (i + 1));
+			[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+		}
+		const enemyArchetypes = shuffled.slice(0, 3);
+
 		const used = new Set<string>();
 		used.add(RH.coordKey(this.localUnit.state.coord));
 		const exitTile = RH.findExitTile(this.grid);
 		if (exitTile) used.add(RH.coordKey(exitTile));
 
-		for (let i = 0; i < MapScene.ENEMY_ARCHETYPES.length; i++) {
-			const archetype = MapScene.ENEMY_ARCHETYPES[i];
+		for (let i = 0; i < enemyArchetypes.length; i++) {
+			const archetype = enemyArchetypes[i];
 			const coord = this.pickEnemySpawnTile(used) ?? {
 				x: this.localUnit.state.coord.x + 2 + i,
 				y: this.localUnit.state.coord.y,
