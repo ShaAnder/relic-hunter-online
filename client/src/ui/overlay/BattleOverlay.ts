@@ -290,9 +290,9 @@ export class BattleOverlay implements Overlay {
 		homeTile: { x: number; y: number },
 		targetTile: { x: number; y: number },
 		facing: IsoFacing,
-		applyDamage: () => void,
+		applyDamage: () => boolean,
 		onStrikeBegin?: () => void,
-	): Promise<void> {
+	): Promise<boolean> {
 		const approachTile = this.computeApproachTile(
 			homeTile,
 			targetTile,
@@ -315,8 +315,20 @@ export class BattleOverlay implements Overlay {
 		// all of them first was exactly what desynced the HP bar from
 		// the visible hit.
 		await this.delay(STRIKE_IMPACT_MS);
-		applyDamage();
+		// bothAttacking is a mutual exchange resolved upfront — this
+		// striker can end up at 0 HP from their own strike's damage
+		// callback (the other side's simultaneous counter), not just
+		// from a later, separate hit. A defeated unit can't complete
+		// its own attack sequence: no run-back, no settling to idle as
+		// if nothing happened — and the caller uses this return value
+		// to decide whether a follow-up strike should even happen.
+		const selfDefeated = applyDamage();
 		await attackAnimPromise;
+
+		if (selfDefeated) {
+			void sprite?.play("stunned", { loop: true });
+			return true;
+		}
 
 		void sprite?.play("idle");
 		await this.delay(BEAT_PAUSE_MS);
@@ -324,6 +336,7 @@ export class BattleOverlay implements Overlay {
 
 		sprite?.setDirection(facing);
 		void sprite?.play("idle");
+		return false;
 	}
 
 	/**
@@ -1349,27 +1362,23 @@ export class BattleOverlay implements Overlay {
 		}
 		await this.delay(REVEAL_PAUSE_MS);
 
-		const applyAttackerDamage = () => {
+		const applyAttackerDamage = (): boolean => {
 			this.attackerState.currentHp -= result.a.damageTaken;
 			this.attackerState.matchScore.damageDealt += result.b.damageTaken;
-			// Objective slot repurposed as an attack-weighted score for
-			// now, per design — not actual turns-holding-the-relic yet.
-			this.attackerState.matchScore.objectiveTurnsHeld =
-				this.attackerState.matchScore.damageDealt * 100;
 			this.syncHpDisplay();
+			return this.attackerState.currentHp <= 0;
 		};
-		const applyDefenderDamage = () => {
+		const applyDefenderDamage = (): boolean => {
 			this.defenderState.currentHp -= result.b.damageTaken;
 			this.defenderState.matchScore.damageDealt += result.a.damageTaken;
-			this.defenderState.matchScore.objectiveTurnsHeld =
-				this.defenderState.matchScore.damageDealt * 100;
 			this.syncHpDisplay();
+			return this.defenderState.currentHp <= 0;
 		};
 
 		if (resolution.bothAttacking) {
 			// this is our sequential combat case, two real hits, coin flip decides who goes first
 			if (resolution.attackerFirst) {
-				await this.playMeleeStrike(
+				const attackerDefeated = await this.playMeleeStrike(
 					this.attackerTokenView,
 					this.attackerSprite,
 					this.attackerTile(),
@@ -1378,22 +1387,48 @@ export class BattleOverlay implements Overlay {
 					applyAttackerDamage,
 					() => void this.defenderSprite?.play("defend"),
 				);
-				await this.playMeleeStrike(
-					this.defenderTokenView,
-					this.defenderSprite,
-					this.defenderTile(),
-					this.attackerTile(),
-					this.defenderBaseFacing,
-					applyDefenderDamage,
-					() => void this.attackerSprite?.play("defend"),
-				);
-				// The second (final) strike's receiving side has nothing
-				// after it to naturally supersede its block-flash — the
-				// first strike's receiver gets superseded by their own
-				// turn right after, but this one needs an explicit settle.
-				void this.attackerSprite?.play("idle");
+				// If the attacker's own strike revealed they took a fatal
+				// counter (bothAttacking resolves both hits together,
+				// upfront), playMeleeStrike already left them shown
+				// incapacitated — no follow-up strike, no victory check.
+				if (attackerDefeated) {
+					void this.defenderSprite?.play("idle");
+				} else if (result.b.damageTaken === 0) {
+					// Resolve the first strike's outcome on the receiving
+					// side fully — victory if it landed for 0 damage —
+					// before the counter-attack begins, not just at the end.
+					await this.defenderSprite?.playAsync("victory");
+					await this.delay(BEAT_PAUSE_MS);
+					void this.defenderSprite?.play("idle");
+					const defenderDefeated = await this.playMeleeStrike(
+						this.defenderTokenView,
+						this.defenderSprite,
+						this.defenderTile(),
+						this.attackerTile(),
+						this.defenderBaseFacing,
+						applyDefenderDamage,
+						() => void this.attackerSprite?.play("defend"),
+					);
+					if (!defenderDefeated) {
+						void this.attackerSprite?.play("idle");
+					}
+				} else {
+					void this.defenderSprite?.play("idle");
+					await this.playMeleeStrike(
+						this.defenderTokenView,
+						this.defenderSprite,
+						this.defenderTile(),
+						this.attackerTile(),
+						this.defenderBaseFacing,
+						applyDefenderDamage,
+						() => void this.attackerSprite?.play("defend"),
+					);
+					// Note: this branch's own melee strike already leaves
+					// the attacker on idle/stunned appropriately via its
+					// return value — nothing further needed either way.
+				}
 			} else {
-				await this.playMeleeStrike(
+				const defenderDefeated = await this.playMeleeStrike(
 					this.defenderTokenView,
 					this.defenderSprite,
 					this.defenderTile(),
@@ -1402,16 +1437,33 @@ export class BattleOverlay implements Overlay {
 					applyDefenderDamage,
 					() => void this.attackerSprite?.play("defend"),
 				);
-				await this.playMeleeStrike(
-					this.attackerTokenView,
-					this.attackerSprite,
-					this.attackerTile(),
-					this.defenderTile(),
-					this.attackerBaseFacing,
-					applyAttackerDamage,
-					() => void this.defenderSprite?.play("defend"),
-				);
-				void this.defenderSprite?.play("idle");
+				if (defenderDefeated) {
+					void this.attackerSprite?.play("idle");
+				} else if (result.a.damageTaken === 0) {
+					await this.attackerSprite?.playAsync("victory");
+					await this.delay(BEAT_PAUSE_MS);
+					void this.attackerSprite?.play("idle");
+					await this.playMeleeStrike(
+						this.attackerTokenView,
+						this.attackerSprite,
+						this.attackerTile(),
+						this.defenderTile(),
+						this.attackerBaseFacing,
+						applyAttackerDamage,
+						() => void this.defenderSprite?.play("defend"),
+					);
+				} else {
+					void this.attackerSprite?.play("idle");
+					await this.playMeleeStrike(
+						this.attackerTokenView,
+						this.attackerSprite,
+						this.attackerTile(),
+						this.defenderTile(),
+						this.attackerBaseFacing,
+						applyAttackerDamage,
+						() => void this.defenderSprite?.play("defend"),
+					);
+				}
 			}
 		} else if (
 			attackerChoice.action === "attack" &&
@@ -1425,8 +1477,9 @@ export class BattleOverlay implements Overlay {
 				this.defenderTile(),
 				this.attackerBaseFacing,
 				() => {
-					applyAttackerDamage();
+					const attackerDefeated = applyAttackerDamage();
 					applyDefenderDamage();
+					return attackerDefeated;
 				},
 				() =>
 					void this.defenderSprite?.play(
@@ -1459,8 +1512,9 @@ export class BattleOverlay implements Overlay {
 				this.attackerTile(),
 				this.defenderBaseFacing,
 				() => {
+					const defenderDefeated = applyDefenderDamage();
 					applyAttackerDamage();
-					applyDefenderDamage();
+					return defenderDefeated;
 				},
 				() =>
 					void this.attackerSprite?.play(

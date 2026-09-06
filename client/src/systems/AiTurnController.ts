@@ -141,6 +141,17 @@ export class AiTurnController {
 			this.screenSize.width,
 			this.screenSize.height,
 		);
+
+		// Never conserve cards, same philosophy as movement cards — a
+		// green (stun/trap) card sitting unused in hand is the actual
+		// bug. Trap is dropped at the current tile before anything else
+		// happens this turn, then the unit proceeds normally.
+		const trapCard = unit.state.hand.find((c) => c.actionType === "stun");
+		if (trapCard) {
+			RH.spendCard(unit.state, trapCard.id);
+			this.mapController.placeTrap(unit);
+		}
+
 		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
 		// Not carrying → drop sticky extract so a later pickup starts fresh.
 		if (
@@ -281,7 +292,6 @@ export class AiTurnController {
 						this.cb.showFeedback(
 							`🪤 ${this.cb.getUnitLabel(unit)} resisted a hazard (${r.hazardRoll} vs ${r.victimRoll})`,
 						);
-						unit.state.matchScore.tacticalScore += 500;
 					}
 
 					unit.state.coord =
@@ -298,6 +308,10 @@ export class AiTurnController {
 						this.cb.getUnitLabel(unit),
 					);
 					if (hazardHit) {
+						unit.state.matchScore.tacticalScore = Math.max(
+							0,
+							unit.state.matchScore.tacticalScore - 500,
+						);
 						this.mapController.applyHazardEffect(
 							unit,
 							hazardHit.kind,
