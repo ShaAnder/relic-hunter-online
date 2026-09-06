@@ -18,7 +18,7 @@ const SCORE_ROWS: ScoreRow[] = [
 	{ label: "Cards Remaining", getValue: (e) => e.matchScore.cardsRemaining },
 	{ label: "Environmental", getValue: (e) => e.matchScore.environmentalScore },
 	{ label: "Tactical", getValue: (e) => e.matchScore.tacticalScore },
-	{ label: "Objective", getValue: (e) => e.matchScore.objectiveTurnsHeld },
+	{ label: "Attack", getValue: (e) => e.matchScore.objectiveTurnsHeld },
 ];
 
 const COLUMN_WIDTH = 170;

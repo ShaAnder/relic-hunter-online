@@ -154,9 +154,24 @@ export class BattleHost {
 
 				completed = true;
 
+				// Boss theme (started on the map when the boss spawned)
+				// takes precedence and simply keeps playing through its
+				// own fight — only switch back to the map theme when
+				// there's no boss currently out there to justify it.
+				this.game.audio.playMusic(
+					this.game.session.bossSpawned ? "boss" : "map",
+				);
+
 				request.onComplete?.(result);
 				resolve(result);
 			};
+
+			// Boss theme (already playing, triggered when the boss
+			// spawned on the map) takes precedence — only start the
+			// generic battle theme if something else was playing.
+			if (this.game.audio.getCurrentMusicId() !== "boss") {
+				this.game.audio.playMusic("battle");
+			}
 
 			// Someone stunned going into this fight can't meaningfully
 			// fight back for more than the one round — cap it here

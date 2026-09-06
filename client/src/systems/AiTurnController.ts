@@ -258,8 +258,7 @@ export class AiTurnController {
 				const cardType = moveCard?.color ?? "none";
 				if (unit.turnManager.beginMovement(cardType, cardBonus)) {
 					if (moveCard) {
-						const idx = unit.state.hand.findIndex((c) => c.id === moveCard.id);
-						if (idx !== -1) unit.state.hand.splice(idx, 1);
+						RH.spendCard(unit.state, moveCard.id);
 					}
 
 					if (moveCard?.actionType === "defense") {
@@ -282,6 +281,7 @@ export class AiTurnController {
 						this.cb.showFeedback(
 							`🪤 ${this.cb.getUnitLabel(unit)} resisted a hazard (${r.hazardRoll} vs ${r.victimRoll})`,
 						);
+						unit.state.matchScore.tacticalScore += 500;
 					}
 
 					unit.state.coord =

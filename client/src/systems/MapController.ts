@@ -144,6 +144,24 @@ export class MapController {
 
 				if (isLocal) this.cb.showItemPopup(outcome.item, outcome.isTarget);
 		}
+
+		this.recomputeItemsScore(state);
+	}
+
+	/**
+	 * Items score is "what you'd leave the match with," recomputed
+	 * fresh from the actual inventory rather than incremented on pickup
+	 * — that way it can never drift out of sync if items are ever lost
+	 * or transferred later. 1000 per item held; +5000 flat bonus if the
+	 * target relic itself is among them (a placeholder scale for now,
+	 * per design).
+	 */
+	private recomputeItemsScore(state: RH.MercenaryState): void {
+		const targetId = this.game.session.chestPlan?.targetItem?.id ?? null;
+		const held = state.items.filter((i): i is RH.ItemData => i !== null);
+		const holdsTarget =
+			targetId !== null && held.some((i) => i.id === targetId);
+		state.matchScore.itemsScore = held.length * 1000 + (holdsTarget ? 5000 : 0);
 	}
 
 	/**

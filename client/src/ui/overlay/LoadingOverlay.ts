@@ -23,11 +23,11 @@ const ROOM_DENSITY = 1 / 50;
 // so the bar fills smoothly over roughly this long rather than jumping
 // straight to 100% the instant actual setup (which is near-instant)
 // finishes. Easily tunable, single source of truth.
-const LOADING_DURATION_MS = 4000;
+const LOADING_DURATION_MS = 1500;
 
 // How long the summary screen (seed, target, turn order) stays up
 // before automatically fading into the game.
-const SUMMARY_LINGER_MS = 2500;
+const SUMMARY_LINGER_MS = 1000;
 const FADE_MS = 500;
 
 /**

@@ -87,4 +87,4 @@ export const SFX: Record<SfxId, SfxDef> = {
 };
 
 /** Default crossfade length for music switches (ms). */
-export const MUSIC_CROSSFADE_MS = 1200;
+export const MUSIC_CROSSFADE_MS = 450;

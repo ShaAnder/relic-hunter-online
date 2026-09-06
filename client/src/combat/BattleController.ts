@@ -2,6 +2,7 @@ import {
 	resolveCombatRound,
 	resolveDefeat,
 	resolveSurrender,
+	spendCard,
 } from "@relic-hunter/shared";
 import type {
 	CombatChoice,
@@ -74,16 +75,10 @@ export const BattleController = {
 		rng: RandomFn,
 	): RoundResolution {
 		if (attackerChoice.card) {
-			const idx = attackerState.hand.findIndex(
-				(c) => c.id === attackerChoice.card!.id,
-			);
-			if (idx !== -1) attackerState.hand.splice(idx, 1);
+			spendCard(attackerState, attackerChoice.card.id);
 		}
 		if (defenderChoice.card) {
-			const idx = defenderState.hand.findIndex(
-				(c) => c.id === defenderChoice.card!.id,
-			);
-			if (idx !== -1) defenderState.hand.splice(idx, 1);
+			spendCard(defenderState, defenderChoice.card.id);
 		}
 
 		const result = resolveCombatRound(attackerChoice, defenderChoice, rng);
