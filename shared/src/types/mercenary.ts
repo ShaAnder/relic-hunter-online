@@ -12,8 +12,9 @@ import {
 	HasStatusEffects,
 } from "./entity";
 
-/** Starting card use budget for efficeincy score */
-const STARTING_HAND_BUDGET = 30;
+/** Starting card-efficiency score, and how much each spent card costs. Reverse metric — starts high, decreases per card used. */
+const STARTING_CARD_SCORE = 10000;
+const CARD_SPEND_PENALTY = 100;
 
 export type CharacterClass =
 	| "tank"
@@ -67,7 +68,7 @@ export function createMercenary(
 		matchScore: {
 			damageDealt: 0,
 			itemsScore: 0,
-			cardsRemaining: STARTING_HAND_BUDGET,
+			cardsRemaining: STARTING_CARD_SCORE,
 			environmentalScore: 0,
 			tacticalScore: 0,
 			objectiveTurnsHeld: 0,
@@ -77,4 +78,22 @@ export function createMercenary(
 		special: null,
 		statusEffects: [],
 	};
+}
+
+/**
+ * Removes a card from a hunter's hand and applies its cost to their
+ * card-efficiency score in one step — the two always happen together,
+ * so this replaces every place that used to just splice the hand
+ * directly and risk forgetting the score side of it. Safe to call
+ * with a card id that isn't actually in hand (e.g. already removed);
+ * it's a no-op in that case rather than an error.
+ */
+export function spendCard(state: MercenaryState, cardId: string): void {
+	const idx = state.hand.findIndex((c) => c.id === cardId);
+	if (idx === -1) return;
+	state.hand.splice(idx, 1);
+	state.matchScore.cardsRemaining = Math.max(
+		0,
+		state.matchScore.cardsRemaining - CARD_SPEND_PENALTY,
+	);
 }

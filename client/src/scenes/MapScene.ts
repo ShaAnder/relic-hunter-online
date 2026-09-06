@@ -845,6 +845,7 @@ export class MapScene implements Scene, TutorialPort {
 			this.showFeedback(
 				`🪤 ${this.getUnitLabel(local)} resisted a hazard (${r.hazardRoll} vs ${r.victimRoll})`,
 			);
+			local.state.matchScore.tacticalScore += 500;
 		}
 
 		local.state.coord =
@@ -1793,14 +1794,12 @@ export class MapScene implements Scene, TutorialPort {
 
 		// Blue E: handleExitCard may put the card back if the exit isn't ready.
 		if (card.color === "blue" && card.value === "E") {
-			const handIndex = local.state.hand.findIndex((c) => c.id === card.id);
-			if (handIndex !== -1) local.state.hand.splice(handIndex, 1);
+			RH.spendCard(local.state, card.id);
 			void this.handleExitCard(card);
 			return;
 		}
 
-		const handIndex = local.state.hand.findIndex((c) => c.id === card.id);
-		if (handIndex !== -1) local.state.hand.splice(handIndex, 1);
+		RH.spendCard(local.state, card.id);
 
 		const cardType = card.id === "__skip__" ? "none" : card.color;
 		const numericValue = typeof card.value === "number" ? card.value : 0;

@@ -1131,6 +1131,14 @@ export class BattleOverlay implements Overlay {
 		const loserPanel = winnerIsAttacker
 			? this.defenderPanel
 			: this.attackerPanel;
+
+		// Loser's HP hit 0 to get here — show them incapacitated during
+		// handover rather than leaving whatever idle/defend pose was
+		// last set from the round that ended them.
+		const loserSprite = winnerIsAttacker
+			? this.defenderSprite
+			: this.attackerSprite;
+		void loserSprite?.play("stunned", { loop: true });
 		this.winnerLootPanel.view.x = winnerPanel.x;
 		this.winnerLootPanel.view.y = winnerPanel.y - 240;
 		this.loserLootPanel.view.x = loserPanel.x;
@@ -1344,11 +1352,17 @@ export class BattleOverlay implements Overlay {
 		const applyAttackerDamage = () => {
 			this.attackerState.currentHp -= result.a.damageTaken;
 			this.attackerState.matchScore.damageDealt += result.b.damageTaken;
+			// Objective slot repurposed as an attack-weighted score for
+			// now, per design — not actual turns-holding-the-relic yet.
+			this.attackerState.matchScore.objectiveTurnsHeld =
+				this.attackerState.matchScore.damageDealt * 100;
 			this.syncHpDisplay();
 		};
 		const applyDefenderDamage = () => {
 			this.defenderState.currentHp -= result.b.damageTaken;
 			this.defenderState.matchScore.damageDealt += result.a.damageTaken;
+			this.defenderState.matchScore.objectiveTurnsHeld =
+				this.defenderState.matchScore.damageDealt * 100;
 			this.syncHpDisplay();
 		};
 
