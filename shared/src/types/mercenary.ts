@@ -1,4 +1,6 @@
 import type { GridCoord } from "../world/grid";
+import type { HasFogOfWar } from "../world/FogOfWar";
+import { createFogOfWar } from "../world/FogOfWar";
 import {
 	type EntityCore,
 	type HasHand,
@@ -46,7 +48,8 @@ export type MercenaryState = EntityCore &
 	HasStatus &
 	HasSpecial &
 	HasStatusEffects &
-	HasTemporaryStatBonus;
+	HasTemporaryStatBonus &
+	HasFogOfWar;
 
 export function createMercenary(
 	id: string,
@@ -80,6 +83,7 @@ export function createMercenary(
 		temporaryStatBonus: { attack: 0, defense: 0, movement: 0 },
 		special: null,
 		statusEffects: [],
+		...createFogOfWar(),
 	};
 }
 

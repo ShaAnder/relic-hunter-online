@@ -21,6 +21,7 @@ export interface AiTurnCallbacks {
 	getUnits(): PilotedMercenary[];
 	getLocalUnit(): PilotedMercenary;
 	getGrid(): RH.Grid;
+	getTurnsTaken(): number;
 	adjacentTiles(coord: RH.GridCoord): RH.GridCoord[];
 	pickEnemySpawnTile(used: Set<string>): RH.GridCoord | null;
 	setPlayerControlsVisible(visible: boolean): void;
@@ -163,20 +164,32 @@ export class AiTurnController {
 
 		const self = this.toCombatant(unit.state);
 		const preMoveHp = self.currentHp;
-		const others = this.buildOtherCombatants(unit.state.id);
+		const allOthers = this.buildOtherCombatants(unit.state.id);
 
-		const chestInfos: RH.ChestInfo[] = this.mapController.chestSystem.all.map(
-			(c) => ({
+		const allChestInfos: RH.ChestInfo[] =
+			this.mapController.chestSystem.all.map((c) => ({
 				coord: c.coord,
 				isOpen: c.entity.isOpen,
-			}),
-		);
+			}));
 
 		const grid = this.cb.getGrid();
 		const exitCoord = RH.findExitTile(grid);
-		const monsterCoords = this.mapController.monsterSystem
+		const allMonsterCoords = this.mapController.monsterSystem
 			.livingMonsters()
 			.map((m) => m.state.coord);
+
+		// Fog-of-war: an AI can only target what it has actually seen —
+		// same rule a human plays under, per design. exitCoord is
+		// deliberately NOT filtered here — it still reveals globally
+		// once the relic is found, unchanged for now.
+		const currentTurn = this.cb.getTurnsTaken();
+		const isKnown = (coord: RH.GridCoord) =>
+			RH.getTileVisibility(unit.state, coord, unit.state.coord, currentTurn) !==
+			"unseen";
+		const others = allOthers.filter((o) => isKnown(o.coord));
+		const chestInfos = allChestInfos.filter((c) => isKnown(c.coord));
+		const monsterCoords = allMonsterCoords.filter((c) => isKnown(c));
+
 		const target = RH.decideMovementTarget(
 			unit.archetype,
 			self,
@@ -188,7 +201,7 @@ export class AiTurnController {
 			unit.memory ?? null,
 		);
 
-		const targetCombatant = others.find(
+		const targetCombatant = allOthers.find(
 			(o) => o.coord.x === target.x && o.coord.y === target.y,
 		);
 		const wouldDeclineOnArrival =
@@ -203,7 +216,7 @@ export class AiTurnController {
 				unit.state.characterClass === "hunter",
 			);
 			const blocked = new Set([
-				...others.map((o) => RH.coordKey(o.coord)),
+				...allOthers.map((o) => RH.coordKey(o.coord)),
 				...this.mapController.monsterSystem
 					.livingMonsterCoords()
 					.map(RH.coordKey),
@@ -298,6 +311,12 @@ export class AiTurnController {
 						truncatedPath.length > 0
 							? truncatedPath[truncatedPath.length - 1]
 							: unit.state.coord;
+					RH.updateFogOFWar(
+						unit.state,
+						unit.state.coord,
+						this.cb.getTurnsTaken(),
+						this.cb.getGrid(),
+					);
 					unit.turnManager.commitMove(truncatedPath.length);
 					this.cb.showFeedback(
 						`🏃 ${this.cb.getUnitLabel(unit)} moves toward its target`,

@@ -245,6 +245,7 @@ export class MapScene implements Scene, TutorialPort {
 				getUnits: () => this.units,
 				getLocalUnit: () => this.localUnit,
 				getGrid: () => this.grid,
+				getTurnsTaken: () => this.turnsTaken,
 				adjacentTiles: (coord) => this.adjacentTiles(coord),
 				pickEnemySpawnTile: (used) => this.pickEnemySpawnTile(used),
 				setPlayerControlsVisible: (visible) =>
@@ -387,6 +388,11 @@ export class MapScene implements Scene, TutorialPort {
 	onEnter(): void {
 		this.game.audio.playMusic("map");
 		this.mapRenderer.build(this.grid, 0);
+		this.mapRenderer.updateFogVisibility(
+			this.localUnit.state,
+			this.localUnit.state.coord,
+			this.turnsTaken,
+		);
 		this.centerCameraOnActiveHunter();
 		this.camera.attach(this.game.app.canvas);
 		this.hand.syncFromHand(this.localUnit.state.hand);
@@ -851,6 +857,17 @@ export class MapScene implements Scene, TutorialPort {
 			truncatedPath.length > 0
 				? truncatedPath[truncatedPath.length - 1]
 				: local.state.coord;
+		RH.updateFogOFWar(
+			local.state,
+			local.state.coord,
+			this.turnsTaken,
+			this.grid,
+		);
+		this.mapRenderer.updateFogVisibility(
+			local.state,
+			local.state.coord,
+			this.turnsTaken,
+		);
 		local.turnManager.commitMove(truncatedPath.length);
 		this.hud.setMoveActive(false);
 		this.moveController.exit();
@@ -958,12 +975,10 @@ export class MapScene implements Scene, TutorialPort {
 		0xe67e22, 0x9b59b6, 0x1abc9c,
 	] as const;
 
-	private static readonly ENEMY_ARCHETYPE_POOL: RH.AiArchetype[] = [
+	private static readonly ENEMY_ARCHETYPES: RH.AiArchetype[] = [
 		"aggressive",
 		"treasure",
 		"balanced",
-		"passive",
-		"clever",
 	];
 
 	private spawnLocalUnit(): void {
@@ -971,6 +986,7 @@ export class MapScene implements Scene, TutorialPort {
 		if (this.tutorialConfig?.playerMovement !== undefined) {
 			state.stats.movement = this.tutorialConfig.playerMovement;
 		}
+		RH.updateFogOFWar(state, state.coord, this.turnsTaken, this.grid);
 		const mercenary = new Mercenary(state.coord, state.characterClass);
 		this.mercenaryContainer.addChild(mercenary.view);
 
@@ -989,25 +1005,13 @@ export class MapScene implements Scene, TutorialPort {
 	private spawnEnemyHunters(): void {
 		this.units = this.units.filter((u) => u.pilot === "local");
 
-		// Fisher-Yates shuffle, seeded RNG for match-to-match determinism
-		// consistency with everything else that draws randomness — pick
-		// 3 distinct archetypes fresh each match rather than the same
-		// fixed 3 every time, so all 5 personalities actually get
-		// exercised over time without changing headcount.
-		const shuffled = [...MapScene.ENEMY_ARCHETYPE_POOL];
-		for (let i = shuffled.length - 1; i > 0; i--) {
-			const j = Math.floor(this.game.session.rng() * (i + 1));
-			[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-		}
-		const enemyArchetypes = shuffled.slice(0, 3);
-
 		const used = new Set<string>();
 		used.add(RH.coordKey(this.localUnit.state.coord));
 		const exitTile = RH.findExitTile(this.grid);
 		if (exitTile) used.add(RH.coordKey(exitTile));
 
-		for (let i = 0; i < enemyArchetypes.length; i++) {
-			const archetype = enemyArchetypes[i];
+		for (let i = 0; i < MapScene.ENEMY_ARCHETYPES.length; i++) {
+			const archetype = MapScene.ENEMY_ARCHETYPES[i];
 			const coord = this.pickEnemySpawnTile(used) ?? {
 				x: this.localUnit.state.coord.x + 2 + i,
 				y: this.localUnit.state.coord.y,
@@ -1031,6 +1035,7 @@ export class MapScene implements Scene, TutorialPort {
 				aiClass,
 				aiName,
 			);
+			RH.updateFogOFWar(state, state.coord, this.turnsTaken, this.grid);
 			const mercenary = new Mercenary(
 				coord,
 				state.characterClass,
@@ -1329,6 +1334,12 @@ export class MapScene implements Scene, TutorialPort {
 		this.hud.closeActionMenu();
 		this.localUnit.turnManager.endTurn();
 		this.turnsTaken++;
+		RH.pruneDecayedTiles(this.localUnit.state, this.turnsTaken);
+		this.mapRenderer.updateFogVisibility(
+			this.localUnit.state,
+			this.localUnit.state.coord,
+			this.turnsTaken,
+		);
 		this.tutorialConfig?.onTutorialEvent({ type: "turnEnded" });
 		this.trySpawnMonster();
 		void this.aiTurnController.processEnemyTurns();
