@@ -506,14 +506,15 @@ export class MapController {
 
 	// ---------- Traps ----------
 
-	placeTrapAtCurrentPosition(): void {
-		const local = this.cb.getLocalUnit().state;
+	placeTrapAtCurrentPosition(unit: PilotedMercenary): void {
 		this.trapSystem.place({
-			coord: local.coord,
-			ownerId: local.id,
+			coord: unit.state.coord,
+			ownerId: unit.state.id,
 			kind: "stun",
 		});
-		this.cb.showFeedback("🪤 Trap left behind");
+		if (unit.pilot === "local") {
+			this.cb.showFeedback("🪤 Trap left behind");
+		}
 		this.refreshTrapMarkers();
 	}
 
@@ -526,12 +527,12 @@ export class MapController {
 		);
 	}
 
-	placeTrap(): void {
-		switch (this.cb.getLocalUnit().state.characterClass) {
+	placeTrap(unit: PilotedMercenary): void {
+		switch (unit.state.characterClass) {
 			// case trapper goes here later
 
 			default:
-				this.placeTrapAtCurrentPosition();
+				this.placeTrapAtCurrentPosition(unit);
 		}
 	}
 

@@ -474,6 +474,8 @@ export class InventoryPanel {
 		this.dropConfirmPopup.addChild(this.dropConfirmCancelBtn);
 
 		this.dropConfirmPopup.visible = false;
+		this.dropConfirmPopup.x = (PANEL_W - 200) / 2;
+		this.dropConfirmPopup.y = PANEL_H + 12;
 		this.view.addChild(this.dropConfirmPopup);
 	}
 

@@ -845,7 +845,6 @@ export class MapScene implements Scene, TutorialPort {
 			this.showFeedback(
 				`🪤 ${this.getUnitLabel(local)} resisted a hazard (${r.hazardRoll} vs ${r.victimRoll})`,
 			);
-			local.state.matchScore.tacticalScore += 500;
 		}
 
 		local.state.coord =
@@ -867,6 +866,10 @@ export class MapScene implements Scene, TutorialPort {
 		}
 
 		if (hazardHit) {
+			local.state.matchScore.tacticalScore = Math.max(
+				0,
+				local.state.matchScore.tacticalScore - 500,
+			);
 			this.mapController.applyHazardEffect(
 				local,
 				hazardHit.kind,
@@ -1064,6 +1067,7 @@ export class MapScene implements Scene, TutorialPort {
 		return this.units.map((u) => ({
 			label: u.pilot === "local" ? "You" : u.state.name,
 			...this.buildHunterVisualInfo(u),
+			characterClass: u.state.characterClass,
 			matchScore: u.state.matchScore,
 		}));
 	}
@@ -1810,7 +1814,7 @@ export class MapScene implements Scene, TutorialPort {
 
 		// Stun / trap: drop at current feet FIRST, then same move flow as other cards.
 		if (card.actionType === "stun") {
-			this.mapController.placeTrap();
+			this.mapController.placeTrap(local);
 		}
 
 		if (!local.turnManager.beginMovement(cardType, numericValue)) {

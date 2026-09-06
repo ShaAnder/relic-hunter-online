@@ -289,7 +289,6 @@ export function decideMovementCard(
 	distanceNeeded: number,
 ): CardData | undefined {
 	const gap = distanceNeeded - baseMovement;
-	if (gap <= 0) return undefined;
 
 	const blueCards = hand.filter(
 		(c): c is CardData & { value: number } =>
@@ -297,9 +296,16 @@ export function decideMovementCard(
 	);
 	if (blueCards.length === 0) return undefined;
 
-	const sufficientCards = blueCards.filter((c) => c.value >= gap);
-	if (sufficientCards.length > 0) {
-		return sufficientCards.reduce((a, b) => (b.value < a.value ? b : a));
+	// No "only spend if strictly needed" gate — per the original game's
+	// documented AI behavior (Battle Hunter), hunters never conserve
+	// cards: if they have one relevant to what they're doing, they use
+	// it, always their strongest of that type. A card sitting unused
+	// in hand is the actual bug being fixed here, not a feature.
+	if (gap > 0) {
+		const sufficientCards = blueCards.filter((c) => c.value >= gap);
+		if (sufficientCards.length > 0) {
+			return sufficientCards.reduce((a, b) => (b.value < a.value ? b : a));
+		}
 	}
 
 	return blueCards.reduce((a, b) => (b.value > a.value ? b : a));

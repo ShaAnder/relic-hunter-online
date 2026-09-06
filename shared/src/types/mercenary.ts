@@ -70,7 +70,10 @@ export function createMercenary(
 			itemsScore: 0,
 			cardsRemaining: STARTING_CARD_SCORE,
 			environmentalScore: 0,
-			tacticalScore: 0,
+			// Reverse metric like cardsRemaining — starts high, loses
+			// points when a hazard actually lands (see MapScene /
+			// AiTurnController's hazardHit handling), not when avoided.
+			tacticalScore: 10000,
 			objectiveTurnsHeld: 0,
 		},
 		stunnedTurnsRemaining: 0,

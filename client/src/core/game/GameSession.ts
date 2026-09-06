@@ -22,6 +22,7 @@ export interface TurnOrderEntry {
 export interface HunterScoreEntry {
 	label: string;
 	accentColor: number;
+	characterClass: string;
 	matchScore: MatchScore;
 }
 
