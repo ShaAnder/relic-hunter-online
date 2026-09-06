@@ -36,6 +36,12 @@ interface Counter {
 	target: number;
 }
 
+/** A hunter's sprite plus its final total — needed to rank hunters once counting finishes. */
+interface RankedSprite {
+	sprite: CharacterSprite;
+	total: number;
+}
+
 /**
  * Full-match scoreboard — a row per scoring metric, a column per hunter.
  * Every hunter shown, not just the local one; whichever fields aren't
@@ -54,7 +60,9 @@ export class MatchResultScene implements Scene {
 	private grid = new Container();
 	private returnBtn!: Button;
 	private counters: Counter[] = [];
-	private sprites: CharacterSprite[] = [];
+	private rankedSprites: RankedSprite[] = [];
+	/** Set once rank-based animations have fired, so it only happens the one time counting finishes, not every frame after. */
+	private outcomeApplied = false;
 
 	private readonly DESIGN_WIDTH = 900;
 	private readonly DESIGN_HEIGHT = 600;
@@ -74,18 +82,48 @@ export class MatchResultScene implements Scene {
 		// convert to seconds so COUNT_SPEED_PER_SEC means what it says
 		// regardless of the actual frame rate.
 		const dtSeconds = deltaTime / 60;
+		let allSettled = true;
 		for (const counter of this.counters) {
 			const diff = counter.target - counter.current;
 			if (Math.abs(diff) < 1) {
 				counter.current = counter.target;
 			} else {
 				counter.current += diff * Math.min(1, COUNT_SPEED_PER_SEC * dtSeconds);
+				allSettled = false;
 			}
 			counter.text.text = `${Math.round(counter.current)}`;
 		}
-		for (const sprite of this.sprites) {
-			sprite.update(deltaTime);
+		for (const ranked of this.rankedSprites) {
+			ranked.sprite.update(deltaTime);
 		}
+
+		// Fires exactly once, the frame every counter first reaches its
+		// real value — "when score stops counting," not on scene entry.
+		if (allSettled && !this.outcomeApplied && this.rankedSprites.length > 0) {
+			this.outcomeApplied = true;
+			this.applyRankOutcomes();
+		}
+	}
+
+	/**
+	 * Last place gets the defeat/stagger pose (stunned — no dedicated
+	 * "defeated" sprite exists yet, same stand-in used elsewhere),
+	 * first place gets victory, everyone in between just settles to
+	 * idle instead of continuing to walk in place indefinitely.
+	 */
+	private applyRankOutcomes(): void {
+		const ranked = [...this.rankedSprites].sort((a, b) => b.total - a.total);
+		ranked.forEach((entry, i) => {
+			if (i === 0) {
+				void entry.sprite.playAsync("victory").then(() => {
+					void entry.sprite.play("idle");
+				});
+			} else if (i === ranked.length - 1) {
+				void entry.sprite.play("stunned", { loop: true });
+			} else {
+				void entry.sprite.play("idle");
+			}
+		});
 	}
 
 	onResize(width: number, height: number): void {
@@ -199,7 +237,8 @@ export class MatchResultScene implements Scene {
 			this.counters.push(totalCounter);
 
 			// Real character sprite, below the total row, walking in
-			// place — replaces the old flat colored-circle icon.
+			// place until rank outcomes apply once counting finishes —
+			// replaces the old flat colored-circle icon.
 			const spriteY =
 				HEADER_HEIGHT + SCORE_ROWS.length * ROW_HEIGHT + 40 + SPRITE_ROW_HEIGHT;
 			const sprite = new CharacterSprite(
@@ -208,7 +247,7 @@ export class MatchResultScene implements Scene {
 			sprite.view.x = columnX + COLUMN_WIDTH / 2;
 			sprite.view.y = spriteY;
 			this.grid.addChild(sprite.view);
-			this.sprites.push(sprite);
+			this.rankedSprites.push({ sprite, total: targetTotal });
 			void sprite.init().then((ok) => {
 				if (ok) void sprite.play("walk", { loop: true });
 			});

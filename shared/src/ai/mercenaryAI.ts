@@ -9,7 +9,12 @@ import type { EntityCore } from "../types/entity";
 import type { RandomFn } from "../math/random";
 
 /** Hostile hunter behavior profile */
-export type AiArchetype = "aggressive" | "treasure" | "balanced";
+export type AiArchetype =
+	| "aggressive"
+	| "treasure"
+	| "balanced"
+	| "passive"
+	| "clever";
 
 /** AI Inventory slots for gauging leave potential */
 const AI_INVENTORY_SLOTS = 6;
@@ -18,6 +23,8 @@ export const ARCHETYPE_COLORS: Record<AiArchetype, number> = {
 	aggressive: 0xe67e22,
 	treasure: 0x9b59b6,
 	balanced: 0x1abc9c,
+	passive: 0x3498db,
+	clever: 0xf1c40f,
 };
 
 /**
@@ -174,6 +181,26 @@ function decideCarrierTarget(
 			markExtract();
 			return goExit();
 		}
+		case "passive": {
+			// Never lingers once holding the target, never detours for
+			// more items, never picks a fight on the way out — this
+			// archetype's whole point is minimizing risk.
+			markExtract();
+			return goExit();
+		}
+		case "clever": {
+			// Extracts immediately, same instinct as passive — but will
+			// fight through an adjacent threat if the exit is genuinely
+			// far, rather than wander into a worse position empty-handed.
+			const exitDist = exitCoord
+				? manhattanDistance(self.coord, exitCoord)
+				: Infinity;
+			if (exitDist > 12 && hpRatio >= 0.4 && foe) {
+				return foe.coord;
+			}
+			markExtract();
+			return goExit();
+		}
 		case "aggressive": {
 			const cornered = hpRatio < 0.3 || (hpRatio < 0.5 && living.length >= 2);
 			if (cornered) {
@@ -250,6 +277,21 @@ export function decideMovementTarget(
 			if (chest && distToCarrier > 3) return chest;
 			return carrier.coord;
 		}
+		if (archetype === "passive") {
+			// Per the source game's "Passive" type — never pursues the
+			// carrier unless there's genuinely nothing else reachable.
+			const chest = nearestUnopenedChest(self.coord, chests);
+			if (chest) return chest;
+			if (exitCoord) return exitCoord;
+			return carrier.coord;
+		}
+		if (archetype === "clever") {
+			// The moment the target is found by anyone, single-minded
+			// pursuit — no detour through remaining chests at all. Per
+			// the source game, this is deliberately the single most
+			// dangerous archetype to leave uncontested.
+			return carrier.coord;
+		}
 		return carrier.coord;
 	}
 
@@ -258,9 +300,22 @@ export function decideMovementTarget(
 			const foe = nearestOther(self.coord, living);
 			return foe?.coord ?? self.coord;
 		}
-		case "treasure": {
+		case "treasure":
+		case "clever": {
+			// Same behavior pre-discovery — both are chest-focused until
+			// the target actually surfaces. clever's distinct trait (the
+			// instant, single-minded pursuit) only kicks in once a
+			// carrier exists, handled in the branch above.
 			const chest = nearestUnopenedChest(self.coord, chests);
 			return chest ?? self.coord;
+		}
+		case "passive": {
+			// Never seeks a fight, ever. Chests first, then just heads
+			// for the exit and stays out of the way rather than
+			// wandering — this archetype's whole point is not engaging.
+			const chest = nearestUnopenedChest(self.coord, chests);
+			if (chest) return chest;
+			return exitCoord ?? self.coord;
 		}
 		case "balanced":
 		default: {
@@ -328,11 +383,14 @@ export function decideFallbackAction(
 ): AiFallbackAction {
 	if (adjacentThreats.length === 0) {
 		const hpRatio = self.currentHp / Math.max(1, self.stats.maxHp);
-		// Lowered from 0.5 — resting at "just under half HP" was
-		// triggering too readily and often needed several consecutive
-		// rests to climb back over the line, reading as spam. 0.25 means
-		// a hunter only stops to rest when meaningfully hurt.
-		return canAffordRest && hpRatio < 0.25 ? "rest" : "hold";
+		// Same tiering as chooseCombatAction's flee threshold — an
+		// aggressive hunter tolerates being hurt longer before stopping
+		// to rest, a treasure-focused one rests earlier to stay safe
+		// while collecting. Was a single flat 0.25 for everyone.
+		let restThreshold = 0.25;
+		if (archetype === "aggressive") restThreshold = 0.12;
+		if (archetype === "treasure") restThreshold = 0.4;
+		return canAffordRest && hpRatio < restThreshold ? "rest" : "hold";
 	}
 
 	if (archetype === "aggressive") {
@@ -517,6 +575,16 @@ export interface CombatAiContext {
 	exitDistance?: number | null;
 	/** Distance to the current relic carrier if someone else holds it. */
 	carrierDistance?: number | null;
+	/**
+	 * Damage the opponent dealt in the previous round of this same
+	 * battle, if any (undefined on the opening round). Our combat is
+	 * simultaneous-choice per round — neither side sees the other's
+	 * current pick before committing — so "react to the card they just
+	 * played" (the source game's sequential-combat mechanic) isn't
+	 * literally possible here. This is the structurally-honest
+	 * adaptation: react to how hard they hit last round instead.
+	 */
+	lastOpponentDamageDealt?: number;
 	/** Filled inventory slots — surrender costs a real item when > 0. */
 	itemCount?: number;
 }
@@ -584,6 +652,8 @@ export function chooseCombatAction(
 	let fleeThreshold = 0.25;
 	if (archetype === "aggressive") fleeThreshold = 0.12;
 	if (archetype === "treasure") fleeThreshold = 0.4;
+	if (archetype === "passive") fleeThreshold = 0.5;
+	if (archetype === "clever") fleeThreshold = 0.3;
 
 	const criticallyLow = hpRatio < fleeThreshold;
 	const badlyOutmatched = powerRatio < 0.55;
@@ -602,6 +672,32 @@ export function chooseCombatAction(
 	} else if (archetype === "treasure") {
 		attackBase = 45;
 		defendBase = 55;
+	} else if (archetype === "passive") {
+		// Never wants to fight in the first place — heavily favors
+		// defending on the rare occasion it can't avoid an exchange.
+		attackBase = 30;
+		defendBase = 70;
+	} else if (archetype === "clever") {
+		// Competent, not reckless — leans slightly toward attack over
+		// the balanced default, reflecting confidence without the
+		// aggressive archetype's disregard for its own survival.
+		attackBase = 60;
+		defendBase = 45;
+	}
+
+	// Card confidence: if the opponent hit hard last round of this same
+	// battle, get more cautious this round — the structural stand-in
+	// for the source game's "they went big, I get defensive" reaction,
+	// adapted for simultaneous-choice combat (see CombatAiContext's
+	// lastOpponentDamageDealt doc comment for why this isn't a literal
+	// per-card reaction). Scaled by how much of this side's own max HP
+	// that hit represented, not a flat number, so it means the same
+	// thing regardless of the unit's actual HP pool.
+	if (ctx.lastOpponentDamageDealt) {
+		const hitSeverity = ctx.lastOpponentDamageDealt / Math.max(1, stats.maxHp);
+		const caution = Math.min(25, hitSeverity * 60);
+		attackBase -= caution;
+		defendBase += caution;
 	}
 
 	// Healthy hunters press the attack — stops mutual turtle defaults

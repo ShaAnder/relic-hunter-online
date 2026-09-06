@@ -245,6 +245,7 @@ export class MapScene implements Scene, TutorialPort {
 				getUnits: () => this.units,
 				getLocalUnit: () => this.localUnit,
 				getGrid: () => this.grid,
+				getTurnsTaken: () => this.turnsTaken,
 				adjacentTiles: (coord) => this.adjacentTiles(coord),
 				pickEnemySpawnTile: (used) => this.pickEnemySpawnTile(used),
 				setPlayerControlsVisible: (visible) =>
@@ -387,6 +388,11 @@ export class MapScene implements Scene, TutorialPort {
 	onEnter(): void {
 		this.game.audio.playMusic("map");
 		this.mapRenderer.build(this.grid, 0);
+		this.mapRenderer.updateFogVisibility(
+			this.localUnit.state,
+			this.localUnit.state.coord,
+			this.turnsTaken,
+		);
 		this.centerCameraOnActiveHunter();
 		this.camera.attach(this.game.app.canvas);
 		this.hand.syncFromHand(this.localUnit.state.hand);
@@ -851,6 +857,17 @@ export class MapScene implements Scene, TutorialPort {
 			truncatedPath.length > 0
 				? truncatedPath[truncatedPath.length - 1]
 				: local.state.coord;
+		RH.updateFogOFWar(
+			local.state,
+			local.state.coord,
+			this.turnsTaken,
+			this.grid,
+		);
+		this.mapRenderer.updateFogVisibility(
+			local.state,
+			local.state.coord,
+			this.turnsTaken,
+		);
 		local.turnManager.commitMove(truncatedPath.length);
 		this.hud.setMoveActive(false);
 		this.moveController.exit();
@@ -969,6 +986,7 @@ export class MapScene implements Scene, TutorialPort {
 		if (this.tutorialConfig?.playerMovement !== undefined) {
 			state.stats.movement = this.tutorialConfig.playerMovement;
 		}
+		RH.updateFogOFWar(state, state.coord, this.turnsTaken, this.grid);
 		const mercenary = new Mercenary(state.coord, state.characterClass);
 		this.mercenaryContainer.addChild(mercenary.view);
 
@@ -1017,6 +1035,7 @@ export class MapScene implements Scene, TutorialPort {
 				aiClass,
 				aiName,
 			);
+			RH.updateFogOFWar(state, state.coord, this.turnsTaken, this.grid);
 			const mercenary = new Mercenary(
 				coord,
 				state.characterClass,
@@ -1315,6 +1334,12 @@ export class MapScene implements Scene, TutorialPort {
 		this.hud.closeActionMenu();
 		this.localUnit.turnManager.endTurn();
 		this.turnsTaken++;
+		RH.pruneDecayedTiles(this.localUnit.state, this.turnsTaken);
+		this.mapRenderer.updateFogVisibility(
+			this.localUnit.state,
+			this.localUnit.state.coord,
+			this.turnsTaken,
+		);
 		this.tutorialConfig?.onTutorialEvent({ type: "turnEnded" });
 		this.trySpawnMonster();
 		void this.aiTurnController.processEnemyTurns();

@@ -1,5 +1,6 @@
 import { Container, Graphics } from "pixi.js";
 import type { Grid, TileType } from "@relic-hunter/shared";
+import * as RH from "@relic-hunter/shared";
 import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
 import type { CameraController } from "@/core/cameras/CameraController";
 import type { Game } from "@/core/game/Game";
@@ -17,6 +18,13 @@ const TILE_COLORS: Record<TileType, number> = {
 	exit: 0xd4af37,
 };
 
+/** Alpha applied per fog tier — visible tiles render at full strength, explored-but-out-of-range tiles are dimmed (still readable, clearly stale), unseen tiles are nearly invisible rather than fully removed (keeps the board's overall shape legible instead of a jarring void). */
+const FOG_ALPHA: Record<RH.TileVisibility, number> = {
+	visible: 1,
+	explored: 0.45,
+	unseen: 0.06,
+};
+
 /**
  * Handles all grid rendering for a battle map: building tile graphics,
  * drawing iso diamond shapes, and centering the camera on the board.
@@ -30,6 +38,9 @@ const TILE_COLORS: Record<TileType, number> = {
  * will eventually be driven by map config rather than hardcoded.
  */
 export class MapRenderer {
+	/** Each tile's own Graphics, keyed by coord — kept around so fog visibility can update alpha per-tile without rebuilding the whole grid every time a unit moves. */
+	private tileGraphics = new Map<string, Graphics>();
+
 	constructor(
 		private tilesContainer: Container,
 		private boardContainer: Container,
@@ -44,6 +55,7 @@ export class MapRenderer {
 	build(grid: Grid, generationMs: number): MapRenderStats {
 		const start = performance.now();
 		this.tilesContainer.removeChildren();
+		this.tileGraphics.clear();
 
 		let count = 0;
 		for (let x = 0; x < grid.width; x++) {
@@ -57,6 +69,7 @@ export class MapRenderer {
 				diamond.x = screenPos.x;
 				diamond.y = screenPos.y;
 				this.tilesContainer.addChild(diamond);
+				this.tileGraphics.set(RH.coordKey(tile.coord), diamond);
 			}
 		}
 
@@ -65,6 +78,30 @@ export class MapRenderer {
 			generationMs,
 			renderMs: performance.now() - start,
 		};
+	}
+
+	/**
+	 * Sets every tile's alpha per the three-tier fog model for one
+	 * unit's own fog memory — call whenever that unit's position or
+	 * turn count changes (after a move, at turn end), not every frame;
+	 * a full grid pass every frame is unnecessary work maps this size
+	 * don't need.
+	 */
+	updateFogVisibility(
+		fog: RH.HasFogOfWar,
+		center: RH.GridCoord,
+		currentTurn: number,
+	): void {
+		for (const [key, graphic] of this.tileGraphics) {
+			const [x, y] = key.split(",").map(Number);
+			const visibility = RH.getTileVisibility(
+				fog,
+				{ x, y },
+				center,
+				currentTurn,
+			);
+			graphic.alpha = FOG_ALPHA[visibility];
+		}
 	}
 
 	/** Snap the camera to the centre of the map after a build or regen. */
