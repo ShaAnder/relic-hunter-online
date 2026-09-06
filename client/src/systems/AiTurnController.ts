@@ -22,6 +22,7 @@ export interface AiTurnCallbacks {
 	getLocalUnit(): PilotedMercenary;
 	getGrid(): RH.Grid;
 	getTurnsTaken(): number;
+	getFogOfWarEnabled(): boolean;
 	adjacentTiles(coord: RH.GridCoord): RH.GridCoord[];
 	pickEnemySpawnTile(used: Set<string>): RH.GridCoord | null;
 	setPlayerControlsVisible(visible: boolean): void;
@@ -181,11 +182,16 @@ export class AiTurnController {
 		// Fog-of-war: an AI can only target what it has actually seen —
 		// same rule a human plays under, per design. exitCoord is
 		// deliberately NOT filtered here — it still reveals globally
-		// once the relic is found, unchanged for now.
+		// once the relic is found, unchanged for now. Respects the same
+		// dev toggle the player's own view does — fog off means AI
+		// targets globally too, not silently staying restricted while
+		// the player can see everything.
 		const currentTurn = this.cb.getTurnsTaken();
+		const fogEnabled = this.cb.getFogOfWarEnabled();
 		const isKnown = (coord: RH.GridCoord) =>
+			!fogEnabled ||
 			RH.getTileVisibility(unit.state, coord, unit.state.coord, currentTurn) !==
-			"unseen";
+				"unseen";
 		const others = allOthers.filter((o) => isKnown(o.coord));
 		const chestInfos = allChestInfos.filter((c) => isKnown(c.coord));
 		const monsterCoords = allMonsterCoords.filter((c) => isKnown(c));

@@ -9,7 +9,14 @@ import type {
 } from "@relic-hunter/shared";
 import { createSeededRandom } from "@relic-hunter/shared";
 
-export interface MissionParams {}
+export interface MissionParams {
+	/**
+	 * Dev toggle for now — surfaced in mission select purely for testing
+	 * with fog off. Once custom maps exist, this becomes a genuine
+	 * per-map option rather than a global dev switch.
+	 */
+	fogOfWarEnabled?: boolean;
+}
 
 export const TEST_MAP_DIMENSIONS = { width: 35, height: 35 };
 

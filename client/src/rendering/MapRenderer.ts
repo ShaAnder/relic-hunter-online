@@ -19,7 +19,7 @@ const TILE_COLORS: Record<TileType, number> = {
 };
 
 /** Alpha applied per fog tier — visible tiles render at full strength, explored-but-out-of-range tiles are dimmed (still readable, clearly stale), unseen tiles are nearly invisible rather than fully removed (keeps the board's overall shape legible instead of a jarring void). */
-const FOG_ALPHA: Record<RH.TileVisibility, number> = {
+export const FOG_ALPHA: Record<RH.TileVisibility, number> = {
 	visible: 1,
 	explored: 0.45,
 	unseen: 0.06,

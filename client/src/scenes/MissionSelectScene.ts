@@ -19,8 +19,12 @@ export class MissionSelectScene implements Scene {
 
 	private title!: Text;
 	private mapLabel!: Text;
+	private fogToggleBtn!: Button;
 	private startBtn!: Button;
 	private backBtn!: Button;
+
+	/** Defaults on — matches fog being the intended standard behavior, not an opt-in. */
+	private fogOfWarEnabled = true;
 
 	private readonly DESIGN_WIDTH = 700;
 	private readonly DESIGN_HEIGHT = 460;
@@ -55,6 +59,15 @@ export class MissionSelectScene implements Scene {
 		});
 		this.content.addChild(this.mapLabel);
 
+		this.fogToggleBtn = new Button({
+			text: "Fog of War: ON",
+			width: 220,
+			height: 44,
+			fontSize: 16,
+			onClick: () => this.toggleFogOfWar(),
+		});
+		this.content.addChild(this.fogToggleBtn.view);
+
 		this.startBtn = new Button({
 			text: "Start Mission",
 			width: 200,
@@ -78,8 +91,17 @@ export class MissionSelectScene implements Scene {
 		this.content.addChild(this.backBtn.view);
 	}
 
+	private toggleFogOfWar(): void {
+		this.fogOfWarEnabled = !this.fogOfWarEnabled;
+		this.fogToggleBtn.setText(
+			`Fog of War: ${this.fogOfWarEnabled ? "ON" : "OFF"}`,
+		);
+	}
+
 	private onStart(): void {
-		this.game.session.missionParams = {};
+		this.game.session.missionParams = {
+			fogOfWarEnabled: this.fogOfWarEnabled,
+		};
 		void this.game.overlays.show(new LoadingOverlay(this.game));
 	}
 
@@ -90,11 +112,14 @@ export class MissionSelectScene implements Scene {
 		this.mapLabel.x = this.DESIGN_WIDTH / 2 - this.mapLabel.width / 2;
 		this.mapLabel.y = this.DESIGN_HEIGHT * 0.4;
 
+		this.fogToggleBtn.view.x = this.DESIGN_WIDTH / 2 - 110;
+		this.fogToggleBtn.view.y = this.DESIGN_HEIGHT * 0.5;
+
 		this.startBtn.view.x = this.DESIGN_WIDTH / 2 - 100;
-		this.startBtn.view.y = this.DESIGN_HEIGHT * 0.55;
+		this.startBtn.view.y = this.DESIGN_HEIGHT * 0.63;
 
 		this.backBtn.view.x = this.DESIGN_WIDTH / 2 - 70;
-		this.backBtn.view.y = this.DESIGN_HEIGHT * 0.7;
+		this.backBtn.view.y = this.DESIGN_HEIGHT * 0.78;
 
 		const scale = computeFitScale(
 			width,
