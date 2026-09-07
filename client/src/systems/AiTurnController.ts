@@ -22,6 +22,7 @@ export interface AiTurnCallbacks {
 	getLocalUnit(): PilotedMercenary;
 	getGrid(): RH.Grid;
 	getTurnsTaken(): number;
+	getFogOfWarEnabled(): boolean;
 	adjacentTiles(coord: RH.GridCoord): RH.GridCoord[];
 	pickEnemySpawnTile(used: Set<string>): RH.GridCoord | null;
 	setPlayerControlsVisible(visible: boolean): void;
@@ -137,11 +138,28 @@ export class AiTurnController {
 		// AI units always have both — guard for the type
 		if (!unit.archetype || !unit.memory) return;
 		this.activeAi = unit;
-		this.camera.centerOn(
-			{ x: unit.mercenary.view.x, y: unit.mercenary.view.y },
-			this.screenSize.width,
-			this.screenSize.height,
-		);
+		// Same fog rule the per-frame camera lock in MapScene follows —
+		// don't center on (and thereby reveal) a unit the local player
+		// can't currently see. At turn-start the unit hasn't moved yet,
+		// so its own coord is already its live position, no separate
+		// screen-position lookup needed here.
+		const fogEnabled = this.cb.getFogOfWarEnabled();
+		const localUnit = this.cb.getLocalUnit();
+		const canSeeUnit =
+			!fogEnabled ||
+			RH.getTileVisibility(
+				localUnit.state,
+				unit.state.coord,
+				localUnit.state.coord,
+				this.cb.getTurnsTaken(),
+			) === "visible";
+		if (canSeeUnit) {
+			this.camera.centerOn(
+				{ x: unit.mercenary.view.x, y: unit.mercenary.view.y },
+				this.screenSize.width,
+				this.screenSize.height,
+			);
+		}
 
 		// Never conserve cards, same philosophy as movement cards — a
 		// green (stun/trap) card sitting unused in hand is the actual
@@ -181,15 +199,71 @@ export class AiTurnController {
 		// Fog-of-war: an AI can only target what it has actually seen —
 		// same rule a human plays under, per design. exitCoord is
 		// deliberately NOT filtered here — it still reveals globally
-		// once the relic is found, unchanged for now.
+		// once the relic is found, unchanged for now. Respects the same
+		// dev toggle the player's own view does — fog off means AI
+		// targets globally too, not silently staying restricted while
+		// the player can see everything.
 		const currentTurn = this.cb.getTurnsTaken();
 		const isKnown = (coord: RH.GridCoord) =>
+			!fogEnabled ||
 			RH.getTileVisibility(unit.state, coord, unit.state.coord, currentTurn) !==
-			"unseen";
-		const others = allOthers.filter((o) => isKnown(o.coord));
+				"unseen";
+		let others = allOthers.filter((o) => isKnown(o.coord));
 		const chestInfos = allChestInfos.filter((c) => isKnown(c.coord));
 		const monsterCoords = allMonsterCoords.filter((c) => isKnown(c));
 
+		// Record a fresh sighting for every rival actually, currently
+		// visible (not merely "explored") — this is the memory that
+		// lets a lost trail still be worth chasing later.
+		if (fogEnabled && unit.memory) {
+			for (const o of allOthers) {
+				if (
+					RH.getTileVisibility(
+						unit.state,
+						o.coord,
+						unit.state.coord,
+						currentTurn,
+					) === "visible"
+				) {
+					RH.recordRivalSighting(unit.memory, o.id, o.coord, currentTurn);
+				}
+			}
+			RH.pruneColdRivalMemory(unit.memory, currentTurn);
+		}
+
+		// No rival known at all right now (fog swallowed them) — the
+		// hunt/clever archetypes keep chasing the last place they were
+		// actually seen, for as long as that lead stays fresh, rather
+		// than immediately reverting to chest-seeking as if the rival
+		// had never existed.
+		if (
+			fogEnabled &&
+			others.length === 0 &&
+			unit.memory &&
+			(unit.archetype === "aggressive" || unit.archetype === "clever")
+		) {
+			const lead = RH.getFreshestLastKnownRival(unit.memory, currentTurn);
+			if (lead) {
+				others = [
+					{
+						id: "__lastKnownRival__",
+						coord: lead.coord,
+						stats: self.stats,
+						currentHp: 1,
+						items: [],
+					},
+				];
+			}
+		}
+
+		const explorationTarget = fogEnabled
+			? RH.findNearestUnexploredTile(
+					unit.state,
+					unit.state.coord,
+					grid,
+					currentTurn,
+				)
+			: null;
 		const target = RH.decideMovementTarget(
 			unit.archetype,
 			self,
@@ -199,6 +273,7 @@ export class AiTurnController {
 			exitCoord,
 			monsterCoords,
 			unit.memory ?? null,
+			explorationTarget,
 		);
 
 		const targetCombatant = allOthers.find(
@@ -208,8 +283,9 @@ export class AiTurnController {
 			targetCombatant !== undefined &&
 			!RH.decideEngagement(unit.archetype, self, targetCombatant);
 
-		if (!wouldDeclineOnArrival) {
+		if (wouldDeclineOnArrival) {
 			this.cb.showFeedback(`🤔 ${this.cb.getUnitLabel(unit)} avoids a fight`);
+		} else {
 			const visibleTraps = this.mapController.trapSystem.visibleTo(
 				unit.state.id,
 				unit.state.coord,
@@ -311,7 +387,7 @@ export class AiTurnController {
 						truncatedPath.length > 0
 							? truncatedPath[truncatedPath.length - 1]
 							: unit.state.coord;
-					RH.updateFogOFWar(
+					RH.updateFogOfWar(
 						unit.state,
 						unit.state.coord,
 						this.cb.getTurnsTaken(),

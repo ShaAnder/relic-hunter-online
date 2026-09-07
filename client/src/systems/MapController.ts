@@ -44,6 +44,7 @@ export interface MapControllerCallbacks {
 	getUnits(): PilotedMercenary[];
 	getGrid(): RH.Grid;
 	rebuildMapRender(): void;
+	revealExitArea(): void;
 	exitTargetingMode(): void;
 	pickEnemySpawnTile(used: Set<string>): RH.GridCoord | null;
 	delay(ms: number): Promise<void>;
@@ -125,6 +126,7 @@ export class MapController {
 					this.triggerFrenzy();
 					this.spawnExitFarFrom(coord);
 					this.cb.rebuildMapRender();
+					this.cb.revealExitArea();
 					this.cb.showFeedback(
 						isLocal
 							? `🎯 Found the target: ${outcome.item.name}! The Exit has revealed itself.`

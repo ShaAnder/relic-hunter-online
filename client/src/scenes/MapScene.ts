@@ -3,7 +3,12 @@ import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
 import { CameraController } from "@/core/cameras/CameraController";
 import { MapRenderer } from "@/rendering/MapRenderer";
-import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
+import {
+	gridToScreen,
+	screenToGrid,
+	TILE_WIDTH,
+	TILE_HEIGHT,
+} from "@/math/isoGridMath";
 import { computeUiScale, uiPx } from "@/math/uiScale";
 import { Mercenary } from "@/entities/Mercenary";
 
@@ -138,6 +143,52 @@ export class MapScene implements Scene, TutorialPort {
 	private fpsAccumulator = 0;
 
 	/** The one human-piloted unit. Assumes exactly one exists */
+	/** Dev toggle from mission select — defaults on if unset (e.g. tutorials, which don't go through mission select at all). */
+	private get fogOfWarEnabled(): boolean {
+		return this.game.session.missionParams?.fogOfWarEnabled ?? true;
+	}
+
+	/**
+	 * mapRenderer.build() resets every tile to full visibility — any
+	 * caller of the generic rebuild needs fog re-applied afterward or
+	 * it silently reveals the whole map for a frame (this was the
+	 * actual bug behind "finding the target reveals everything").
+	 */
+	private rebuildMapRenderWithFog(): void {
+		this.mapRenderer.build(this.grid, 0);
+		if (this.fogOfWarEnabled) {
+			this.mapRenderer.updateFogVisibility(
+				this.localUnit.state,
+				this.localUnit.state.coord,
+				this.turnsTaken,
+			);
+		}
+	}
+
+	/**
+	 * Called when the target relic is found — the exit reveals
+	 * globally (unchanged, per current design), but that should only
+	 * mean its own surroundings become explored, not the entire map.
+	 * Marks the exit's standard sight-range area as seen in the local
+	 * player's own fog memory, then re-renders.
+	 */
+	private revealExitArea(): void {
+		if (!this.fogOfWarEnabled) return;
+		const exitCoord = RH.findExitTile(this.grid);
+		if (!exitCoord) return;
+		RH.updateFogOfWar(
+			this.localUnit.state,
+			exitCoord,
+			this.turnsTaken,
+			this.grid,
+		);
+		this.mapRenderer.updateFogVisibility(
+			this.localUnit.state,
+			this.localUnit.state.coord,
+			this.turnsTaken,
+		);
+	}
+
 	private get localUnit(): PilotedMercenary {
 		const unit = this.units.find((u) => u.pilot === "local");
 		if (!unit) throw new Error("MapScene: no local unit found");
@@ -209,7 +260,8 @@ export class MapScene implements Scene, TutorialPort {
 			getLocalUnit: () => this.localUnit,
 			getUnits: () => this.units,
 			getGrid: () => this.grid,
-			rebuildMapRender: () => this.mapRenderer.build(this.grid, 0),
+			rebuildMapRender: () => this.rebuildMapRenderWithFog(),
+			revealExitArea: () => this.revealExitArea(),
 			exitTargetingMode: () => this.exitTargetingMode(),
 			pickEnemySpawnTile: (used) => this.pickEnemySpawnTile(used),
 			delay: (ms) => this.delay(ms),
@@ -246,6 +298,7 @@ export class MapScene implements Scene, TutorialPort {
 				getLocalUnit: () => this.localUnit,
 				getGrid: () => this.grid,
 				getTurnsTaken: () => this.turnsTaken,
+				getFogOfWarEnabled: () => this.fogOfWarEnabled,
 				adjacentTiles: (coord) => this.adjacentTiles(coord),
 				pickEnemySpawnTile: (used) => this.pickEnemySpawnTile(used),
 				setPlayerControlsVisible: (visible) =>
@@ -388,11 +441,13 @@ export class MapScene implements Scene, TutorialPort {
 	onEnter(): void {
 		this.game.audio.playMusic("map");
 		this.mapRenderer.build(this.grid, 0);
-		this.mapRenderer.updateFogVisibility(
-			this.localUnit.state,
-			this.localUnit.state.coord,
-			this.turnsTaken,
-		);
+		if (this.fogOfWarEnabled) {
+			this.mapRenderer.updateFogVisibility(
+				this.localUnit.state,
+				this.localUnit.state.coord,
+				this.turnsTaken,
+			);
+		}
 		this.centerCameraOnActiveHunter();
 		this.camera.attach(this.game.app.canvas);
 		this.hand.syncFromHand(this.localUnit.state.hand);
@@ -464,22 +519,129 @@ export class MapScene implements Scene, TutorialPort {
 		);
 		for (const unit of this.units) {
 			unit.mercenary.update(deltaTime);
-			unit.mercenary.view.alpha = unit.state.currentHp <= 0 ? 0.4 : 1;
+			const downedAlpha = unit.state.currentHp <= 0 ? 0.4 : 1;
+			// Local player always sees themself. AI hunters are dynamic —
+			// they move — so fog only shows them while their current
+			// tile is actively in sight range right now, never merely
+			// "explored," which would misleadingly suggest they're still
+			// standing wherever they were last seen.
+			const fogVisible =
+				!this.fogOfWarEnabled ||
+				unit.pilot === "local" ||
+				RH.getTileVisibility(
+					this.localUnit.state,
+					unit.state.coord,
+					this.localUnit.state.coord,
+					this.turnsTaken,
+				) === "visible";
+			unit.mercenary.view.alpha = fogVisible ? downedAlpha : 0;
 			unit.mercenary.setIncapacitated(
 				unit.state.currentHp <= 0 || unit.state.stunnedTurnsRemaining > 0,
 			);
 		}
 		for (const monster of this.mapController.monsterSystem.all) {
 			monster.token.update(deltaTime);
+			monster.token.view.alpha =
+				!this.fogOfWarEnabled ||
+				RH.getTileVisibility(
+					this.localUnit.state,
+					monster.state.coord,
+					this.localUnit.state.coord,
+					this.turnsTaken,
+				) === "visible"
+					? 1
+					: 0;
+		}
+		// Binary, same as hunters/monsters — a chest not currently in
+		// sight range is fully hidden, not dimmed. AI's own knowledge of
+		// chests is tracked entirely separately (each unit's own
+		// exploredTiles) and is unaffected by what's drawn here.
+		for (const chest of this.mapController.chestSystem.all) {
+			chest.entity.view.alpha =
+				!this.fogOfWarEnabled ||
+				RH.getTileVisibility(
+					this.localUnit.state,
+					chest.coord,
+					this.localUnit.state.coord,
+					this.turnsTaken,
+				) === "visible"
+					? 1
+					: 0;
+		}
+
+		// Fog reveals progressively as the player physically walks, not
+		// all at once when the whole move finishes. Reads the unit's
+		// live, continuously-interpolated screen position (mid-tween,
+		// not just its logical start/end tiles) and converts it back to
+		// a grid coord every frame during the walk animation — the same
+		// approach used elsewhere to avoid modifying Mercenary's own
+		// animation internals for a rendering-only concern.
+		if (this.fogOfWarEnabled && this.localUnit.mercenary.isAnimating) {
+			const liveCoord = screenToGrid(
+				this.localUnit.mercenary.view.x,
+				this.localUnit.mercenary.view.y,
+			);
+			RH.updateFogOfWar(
+				this.localUnit.state,
+				liveCoord,
+				this.turnsTaken,
+				this.grid,
+			);
+			this.mapRenderer.updateFogVisibility(
+				this.localUnit.state,
+				liveCoord,
+				this.turnsTaken,
+			);
 		}
 
 		this.hand.update(deltaTime);
 
 		// PASS 4 TODO: still assumes exactly one local unit ever needs the
 		// camera to follow it — real judgment call, deferred deliberately.
+		//
+		// Checked against each unit's LIVE screen position, not their
+		// logical state.coord — that jumps to the final destination the
+		// instant a move commits, well before the walk animation
+		// finishes, which was letting the camera snap onto (and thereby
+		// reveal) a unit still visually mid-walk through fogged tiles.
+		// Reading live position instead means tracking starts the exact
+		// frame a unit enters sight range and stops the exact frame it
+		// leaves, with no separate "entered/left" bookkeeping needed —
+		// the per-frame check already behaves that way naturally.
+		const activeAiLiveCoord = this.aiTurnController.activeAi
+			? screenToGrid(
+					this.aiTurnController.activeAi.mercenary.view.x,
+					this.aiTurnController.activeAi.mercenary.view.y,
+				)
+			: null;
+		const activeAiVisible =
+			!this.fogOfWarEnabled ||
+			(activeAiLiveCoord &&
+				RH.getTileVisibility(
+					this.localUnit.state,
+					activeAiLiveCoord,
+					this.localUnit.state.coord,
+					this.turnsTaken,
+				) === "visible");
+		const activeMonsterLiveCoord = this.aiTurnController.activeMonster
+			? screenToGrid(
+					this.aiTurnController.activeMonster.token.view.x,
+					this.aiTurnController.activeMonster.token.view.y,
+				)
+			: null;
+		const activeMonsterVisible =
+			!this.fogOfWarEnabled ||
+			(activeMonsterLiveCoord &&
+				RH.getTileVisibility(
+					this.localUnit.state,
+					activeMonsterLiveCoord,
+					this.localUnit.state.coord,
+					this.turnsTaken,
+				) === "visible");
 		if (
 			this.aiTurnController.processingEnemyTurns &&
-			this.aiTurnController.activeAi
+			this.aiTurnController.activeAi &&
+			activeAiVisible
 		) {
 			this.camera.lockTo({
 				x: this.aiTurnController.activeAi.mercenary.view.x,
@@ -487,7 +649,8 @@ export class MapScene implements Scene, TutorialPort {
 			});
 		} else if (
 			this.aiTurnController.processingEnemyTurns &&
-			this.aiTurnController.activeMonster
+			this.aiTurnController.activeMonster &&
+			activeMonsterVisible
 		) {
 			this.camera.lockTo({
 				x: this.aiTurnController.activeMonster.token.view.x,
@@ -498,7 +661,10 @@ export class MapScene implements Scene, TutorialPort {
 			// "active" right now, but the whole cycle is still running.
 			// Deliberately a no-op: holds whatever was last locked instead
 			// of falling through to unlock() below, which was the actual
-			// gap letting camera input sneak through mid-cycle.
+			// gap letting camera input sneak through mid-cycle. Also
+			// where a fogged active unit lands now — following it would
+			// reveal its position through camera movement alone, so this
+			// same "hold, don't reveal" no-op covers both cases.
 		} else if (
 			this.moveController.active ||
 			this.localUnit.mercenary.isAnimating ||
@@ -857,17 +1023,19 @@ export class MapScene implements Scene, TutorialPort {
 			truncatedPath.length > 0
 				? truncatedPath[truncatedPath.length - 1]
 				: local.state.coord;
-		RH.updateFogOFWar(
+		RH.updateFogOfWar(
 			local.state,
 			local.state.coord,
 			this.turnsTaken,
 			this.grid,
 		);
-		this.mapRenderer.updateFogVisibility(
-			local.state,
-			local.state.coord,
-			this.turnsTaken,
-		);
+		if (this.fogOfWarEnabled) {
+			this.mapRenderer.updateFogVisibility(
+				local.state,
+				local.state.coord,
+				this.turnsTaken,
+			);
+		}
 		local.turnManager.commitMove(truncatedPath.length);
 		this.hud.setMoveActive(false);
 		this.moveController.exit();
@@ -986,7 +1154,7 @@ export class MapScene implements Scene, TutorialPort {
 		if (this.tutorialConfig?.playerMovement !== undefined) {
 			state.stats.movement = this.tutorialConfig.playerMovement;
 		}
-		RH.updateFogOFWar(state, state.coord, this.turnsTaken, this.grid);
+		RH.updateFogOfWar(state, state.coord, this.turnsTaken, this.grid);
 		const mercenary = new Mercenary(state.coord, state.characterClass);
 		this.mercenaryContainer.addChild(mercenary.view);
 
@@ -1035,7 +1203,7 @@ export class MapScene implements Scene, TutorialPort {
 				aiClass,
 				aiName,
 			);
-			RH.updateFogOFWar(state, state.coord, this.turnsTaken, this.grid);
+			RH.updateFogOfWar(state, state.coord, this.turnsTaken, this.grid);
 			const mercenary = new Mercenary(
 				coord,
 				state.characterClass,
@@ -1335,11 +1503,13 @@ export class MapScene implements Scene, TutorialPort {
 		this.localUnit.turnManager.endTurn();
 		this.turnsTaken++;
 		RH.pruneDecayedTiles(this.localUnit.state, this.turnsTaken);
-		this.mapRenderer.updateFogVisibility(
-			this.localUnit.state,
-			this.localUnit.state.coord,
-			this.turnsTaken,
-		);
+		if (this.fogOfWarEnabled) {
+			this.mapRenderer.updateFogVisibility(
+				this.localUnit.state,
+				this.localUnit.state.coord,
+				this.turnsTaken,
+			);
+		}
 		this.tutorialConfig?.onTutorialEvent({ type: "turnEnded" });
 		this.trySpawnMonster();
 		void this.aiTurnController.processEnemyTurns();

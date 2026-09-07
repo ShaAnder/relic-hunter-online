@@ -245,7 +245,7 @@ function decideCarrierTarget(
  * @param targetItemId - match target item id, or null if none
  * @author ShaAnder
  */
-export function decideMovementTarget(
+function decideMovementTargetCore(
 	archetype: AiArchetype,
 	self: AiCombatant,
 	others: AiCombatant[],
@@ -329,6 +329,56 @@ export function decideMovementTarget(
 			return distChest < distFoe ? chest : foe.coord;
 		}
 	}
+}
+
+/**
+ * Movement goal for one AI hunter given the full living field.
+ * Carrier of the match target (any hunter) overrides default goals for
+ * Aggressive and Balanced; Treasure still prefers loot / soft shadow.
+ *
+ * Wraps decideMovementTargetCore's actual decision: every archetype's
+ * "nothing known to do" case resolves to the unit's own current
+ * position — pre-fog that case was rare (chests/rivals were always
+ * globally known), but fog makes it the common, even inevitable end
+ * state once a unit has exhausted what it can currently see. Rather
+ * than modify every individual fallback site throughout the core
+ * function, this single wrapper catches the "would stay exactly where
+ * it is" result and substitutes a real exploration target instead,
+ * whenever explorationTarget is available (computed by the caller,
+ * which has the grid/fog access this function doesn't).
+ *
+ * @param archetype - aggressive | treasure | balanced | passive | clever
+ * @param self - the hunter taking this turn
+ * @param others - all other living combatants (player + AI + later monsters)
+ * @param chests - open-state snapshot of map chests, already fog-filtered by the caller
+ * @param targetItemId - match target item id, or null if none
+ * @param explorationTarget - nearest unseen tile, or null if the whole map is already known to this unit
+ * @author ShaAnder
+ */
+export function decideMovementTarget(
+	archetype: AiArchetype,
+	self: AiCombatant,
+	others: AiCombatant[],
+	chests: ChestInfo[],
+	targetItemId: string | null,
+	exitCoord: GridCoord | null = null,
+	monsterCoords: GridCoord[] = [],
+	memory: AiMemory | null = null,
+	explorationTarget: GridCoord | null = null,
+): GridCoord {
+	const result = decideMovementTargetCore(
+		archetype,
+		self,
+		others,
+		chests,
+		targetItemId,
+		exitCoord,
+		monsterCoords,
+		memory,
+	);
+	const stayingPut = result.x === self.coord.x && result.y === self.coord.y;
+	if (stayingPut && explorationTarget) return explorationTarget;
+	return result;
 }
 
 /**
@@ -475,10 +525,31 @@ export function decideEngagement(
 		case "aggressive":
 			return hpRatio >= 0.25;
 		case "treasure":
-			return score >= 0.7;
+			// Cautious, not paralyzed — a workable edge is enough, not
+			// a near-perfect one. Was 0.7, which even a full-HP even
+			// matchup with a lootless opponent (~0.55) couldn't clear,
+			// meaning treasure could get stuck refusing every fight
+			// indefinitely, including ones it should easily win.
+			return score >= 0.5;
+		case "passive":
+			// Never wants to fight, per design — but "almost never"
+			// rather than "structurally impossible," so it isn't stuck
+			// frozen the one time avoiding really isn't an option.
+			return score >= 0.75;
+		case "clever":
+			// Competent, not reckless — slightly more willing than the
+			// balanced default, reflecting confidence without
+			// aggressive's disregard for its own survival.
+			return score >= 0.4;
 		case "balanced":
 		default:
-			return score >= 0.5;
+			// Was 0.5 — technically clearable at full HP, but any
+			// damage taken (hpRatio carries the heaviest weight) drops
+			// below it almost immediately, so a balanced hunter that
+			// had already taken one hit would decline every fight
+			// afterward. Lowered so a moderately-hurt hunter can still
+			// reasonably choose to fight rather than freeze.
+			return score >= 0.4;
 	}
 }
 
@@ -535,6 +606,14 @@ function engagementScore(
 		case "treasure":
 			// Rare fights: lean loot when the bar already passed
 			return loot * 3 + powerEdge;
+		case "passive":
+			// Almost never fights — when forced to, prefers the safest
+			// possible matchup above all else, loot a distant second.
+			return powerEdge * 2 + loot * 0.5;
+		case "clever":
+			// Competent and opportunistic, same shape as balanced but
+			// weights winnable matchups slightly higher than loot.
+			return loot * 1.5 + powerEdge * 1.5 + (1 - oppHpRatio);
 		case "balanced":
 		default:
 			// Opportunist: loot + soft matchup + hurt targets
