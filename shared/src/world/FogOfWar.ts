@@ -44,7 +44,7 @@ export function tilesInSightRange(
 /**
  * Marks every tile within sight
  */
-export function updateFogOFWar(
+export function updateFogOfWar(
 	fog: HasFogOfWar,
 	center: GridCoord,
 	currentTurn: number,
@@ -83,4 +83,38 @@ export function pruneDecayedTiles(fog: HasFogOfWar, currentTurn: number): void {
 			delete fog.exploredTiles[key];
 		}
 	}
+}
+
+/**
+ * Nearest walkable tile this unit hasn't seen at all yet (strictly
+ * "unseen", not merely decayed-but-once-explored). This is the actual
+ * fallback fog was missing: every targeting function's "nothing known"
+ * case used to mean "stay exactly where you are, forever" — there was
+ * no concept of "go look at what you haven't seen" anywhere. Returns
+ * null only when the entire map has already been seen by this unit.
+ */
+export function findNearestUnexploredTile(
+	fog: HasFogOfWar,
+	self: GridCoord,
+	grid: Grid,
+	currentTurn: number,
+): GridCoord | null {
+	let best: GridCoord | null = null;
+	let bestDist = Infinity;
+	for (let x = 0; x < grid.width; x++) {
+		for (let y = 0; y < grid.height; y++) {
+			const coord = { x, y };
+			const tile = grid.getTile(coord);
+			if (!tile || tile.type === "wall") continue;
+			if (getTileVisibility(fog, coord, self, currentTurn) !== "unseen") {
+				continue;
+			}
+			const dist = Math.abs(coord.x - self.x) + Math.abs(coord.y - self.y);
+			if (dist < bestDist) {
+				bestDist = dist;
+				best = coord;
+			}
+		}
+	}
+	return best;
 }

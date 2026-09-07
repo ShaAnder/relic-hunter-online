@@ -2,7 +2,7 @@ import { Container, Graphics, Text } from "pixi.js";
 import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
 import { CameraController } from "@/core/cameras/CameraController";
-import { MapRenderer, FOG_ALPHA } from "@/rendering/MapRenderer";
+import { MapRenderer } from "@/rendering/MapRenderer";
 import {
 	gridToScreen,
 	screenToGrid,
@@ -176,7 +176,7 @@ export class MapScene implements Scene, TutorialPort {
 		if (!this.fogOfWarEnabled) return;
 		const exitCoord = RH.findExitTile(this.grid);
 		if (!exitCoord) return;
-		RH.updateFogOFWar(
+		RH.updateFogOfWar(
 			this.localUnit.state,
 			exitCoord,
 			this.turnsTaken,
@@ -552,20 +552,21 @@ export class MapScene implements Scene, TutorialPort {
 					? 1
 					: 0;
 		}
-		// Chests are static — unlike hunters/monsters, showing one at a
-		// dimmed "previously explored" tile is honest, not misleading,
-		// since it can't have moved. Full three-tier fog, same as terrain.
+		// Binary, same as hunters/monsters — a chest not currently in
+		// sight range is fully hidden, not dimmed. AI's own knowledge of
+		// chests is tracked entirely separately (each unit's own
+		// exploredTiles) and is unaffected by what's drawn here.
 		for (const chest of this.mapController.chestSystem.all) {
-			chest.entity.view.alpha = this.fogOfWarEnabled
-				? FOG_ALPHA[
-						RH.getTileVisibility(
-							this.localUnit.state,
-							chest.coord,
-							this.localUnit.state.coord,
-							this.turnsTaken,
-						)
-					]
-				: 1;
+			chest.entity.view.alpha =
+				!this.fogOfWarEnabled ||
+				RH.getTileVisibility(
+					this.localUnit.state,
+					chest.coord,
+					this.localUnit.state.coord,
+					this.turnsTaken,
+				) === "visible"
+					? 1
+					: 0;
 		}
 
 		// Fog reveals progressively as the player physically walks, not
@@ -580,7 +581,7 @@ export class MapScene implements Scene, TutorialPort {
 				this.localUnit.mercenary.view.x,
 				this.localUnit.mercenary.view.y,
 			);
-			RH.updateFogOFWar(
+			RH.updateFogOfWar(
 				this.localUnit.state,
 				liveCoord,
 				this.turnsTaken,
@@ -597,21 +598,43 @@ export class MapScene implements Scene, TutorialPort {
 
 		// PASS 4 TODO: still assumes exactly one local unit ever needs the
 		// camera to follow it — real judgment call, deferred deliberately.
+		//
+		// Checked against each unit's LIVE screen position, not their
+		// logical state.coord — that jumps to the final destination the
+		// instant a move commits, well before the walk animation
+		// finishes, which was letting the camera snap onto (and thereby
+		// reveal) a unit still visually mid-walk through fogged tiles.
+		// Reading live position instead means tracking starts the exact
+		// frame a unit enters sight range and stops the exact frame it
+		// leaves, with no separate "entered/left" bookkeeping needed —
+		// the per-frame check already behaves that way naturally.
+		const activeAiLiveCoord = this.aiTurnController.activeAi
+			? screenToGrid(
+					this.aiTurnController.activeAi.mercenary.view.x,
+					this.aiTurnController.activeAi.mercenary.view.y,
+				)
+			: null;
 		const activeAiVisible =
 			!this.fogOfWarEnabled ||
-			(this.aiTurnController.activeAi &&
+			(activeAiLiveCoord &&
 				RH.getTileVisibility(
 					this.localUnit.state,
-					this.aiTurnController.activeAi.state.coord,
+					activeAiLiveCoord,
 					this.localUnit.state.coord,
 					this.turnsTaken,
 				) === "visible");
+		const activeMonsterLiveCoord = this.aiTurnController.activeMonster
+			? screenToGrid(
+					this.aiTurnController.activeMonster.token.view.x,
+					this.aiTurnController.activeMonster.token.view.y,
+				)
+			: null;
 		const activeMonsterVisible =
 			!this.fogOfWarEnabled ||
-			(this.aiTurnController.activeMonster &&
+			(activeMonsterLiveCoord &&
 				RH.getTileVisibility(
 					this.localUnit.state,
-					this.aiTurnController.activeMonster.state.coord,
+					activeMonsterLiveCoord,
 					this.localUnit.state.coord,
 					this.turnsTaken,
 				) === "visible");
@@ -1000,7 +1023,7 @@ export class MapScene implements Scene, TutorialPort {
 			truncatedPath.length > 0
 				? truncatedPath[truncatedPath.length - 1]
 				: local.state.coord;
-		RH.updateFogOFWar(
+		RH.updateFogOfWar(
 			local.state,
 			local.state.coord,
 			this.turnsTaken,
@@ -1131,7 +1154,7 @@ export class MapScene implements Scene, TutorialPort {
 		if (this.tutorialConfig?.playerMovement !== undefined) {
 			state.stats.movement = this.tutorialConfig.playerMovement;
 		}
-		RH.updateFogOFWar(state, state.coord, this.turnsTaken, this.grid);
+		RH.updateFogOfWar(state, state.coord, this.turnsTaken, this.grid);
 		const mercenary = new Mercenary(state.coord, state.characterClass);
 		this.mercenaryContainer.addChild(mercenary.view);
 
@@ -1180,7 +1203,7 @@ export class MapScene implements Scene, TutorialPort {
 				aiClass,
 				aiName,
 			);
-			RH.updateFogOFWar(state, state.coord, this.turnsTaken, this.grid);
+			RH.updateFogOfWar(state, state.coord, this.turnsTaken, this.grid);
 			const mercenary = new Mercenary(
 				coord,
 				state.characterClass,
