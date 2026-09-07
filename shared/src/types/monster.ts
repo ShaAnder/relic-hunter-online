@@ -95,5 +95,6 @@ export function monsterAsMercenaryState(monster: MonsterState): MercenaryState {
 		special: null,
 		statusEffects: [],
 		exploredTiles: {},
+		currentlyVisible: {},
 	};
 }

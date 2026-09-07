@@ -14,14 +14,22 @@ export const FOG_DECAY_TURNS = 5;
 export type TileVisibility = "unseen" | "explored" | "visible";
 
 /**
- * Per unit fog memory
+ * Per unit fog memory. exploredTiles is "last turn seen" for decay
+ * purposes. currentlyVisible is a separate, ephemeral record of
+ * exactly which tiles are in range right now — cleared and rebuilt
+ * every single time updateFogOfWar runs, not just once per turn. This
+ * split exists specifically so a tile a unit walks away from mid-move
+ * drops out of "visible" the instant it's actually out of range,
+ * rather than staying visible for the rest of that same turn just
+ * because the turn number hasn't changed yet.
  */
 export interface HasFogOfWar {
 	exploredTiles: Record<string, number>;
+	currentlyVisible: Record<string, true>;
 }
 
 export function createFogOfWar(): HasFogOfWar {
-	return { exploredTiles: {} };
+	return { exploredTiles: {}, currentlyVisible: {} };
 }
 
 /** Every tile within FOG_SIGHT_RANGE of center, we use manhattan distance */
@@ -42,7 +50,54 @@ export function tilesInSightRange(
 }
 
 /**
- * Marks every tile within sight
+ * Walks a straight line from `from` toward `to` (Bresenham), stopping
+ * the instant it crosses a vision-blocking tile before reaching the
+ * destination. The destination tile itself is never checked — you can
+ * see a wall, just not through it to whatever's on the far side. This
+ * is what actually stops "seeing through walls" along a corridor: raw
+ * distance alone has no concept of what's physically in the way.
+ */
+function hasClearLineOfSight(
+	grid: Grid,
+	from: GridCoord,
+	to: GridCoord,
+): boolean {
+	let x0 = from.x;
+	let y0 = from.y;
+	const x1 = to.x;
+	const y1 = to.y;
+	const dx = Math.abs(x1 - x0);
+	const dy = Math.abs(y1 - y0);
+	const sx = x0 < x1 ? 1 : -1;
+	const sy = y0 < y1 ? 1 : -1;
+	let err = dx - dy;
+
+	while (x0 !== x1 || y0 !== y1) {
+		const e2 = 2 * err;
+		if (e2 > -dy) {
+			err -= dy;
+			x0 += sx;
+		}
+		if (e2 < dx) {
+			err += dx;
+			y0 += sy;
+		}
+		const reachedDestination = x0 === x1 && y0 === y1;
+		if (!reachedDestination && grid.blocksVision({ x: x0, y: y0 })) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/**
+ * Marks every tile within sight range that ALSO has a clear line of
+ * sight from center as explored (for decay tracking) and rebuilds
+ * currentlyVisible from scratch to exactly that set. The rebuild is
+ * what makes the retroactive downgrade work: a tile visible on the
+ * previous call that isn't back in range this call simply isn't
+ * re-added, so it falls out of "visible" immediately, not at the next
+ * turn boundary.
  */
 export function updateFogOfWar(
 	fog: HasFogOfWar,
@@ -51,25 +106,34 @@ export function updateFogOfWar(
 	grid: Grid,
 	range: number = FOG_SIGHT_RANGE,
 ): void {
+	fog.currentlyVisible = {};
 	for (const coord of tilesInSightRange(center, range)) {
 		if (!grid.getTile(coord)) continue;
-		fog.exploredTiles[coordKey(coord)] = currentTurn;
+		if (!hasClearLineOfSight(grid, center, coord)) continue;
+		const key = coordKey(coord);
+		fog.exploredTiles[key] = currentTurn;
+		fog.currentlyVisible[key] = true;
 	}
 }
 
-/** Read for each type of tile */
+/**
+ * Read for each type of tile. `center`, `currentTurn`, and `range` are
+ * kept in the signature only for call-site compatibility and for the
+ * decay check below — "visible" itself is now purely membership in
+ * currentlyVisible, which updateFogOfWar rebuilds fresh every call.
+ */
 export function getTileVisibility(
 	fog: HasFogOfWar,
 	coord: GridCoord,
-	center: GridCoord,
+	_center: GridCoord,
 	currentTurn: number,
-	range: number = FOG_SIGHT_RANGE,
+	_range: number = FOG_SIGHT_RANGE,
 	decayTurns: number = FOG_DECAY_TURNS,
 ): TileVisibility {
-	const distance = Math.abs(coord.x - center.x) + Math.abs(coord.y - center.y);
-	if (distance <= range) return "visible";
+	const key = coordKey(coord);
+	if (fog.currentlyVisible[key]) return "visible";
 
-	const lastSeen = fog.exploredTiles[coordKey(coord)];
+	const lastSeen = fog.exploredTiles[key];
 	if (lastSeen === undefined) return "unseen";
 	if (currentTurn - lastSeen >= decayTurns) return "unseen";
 

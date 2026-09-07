@@ -1023,19 +1023,6 @@ export class MapScene implements Scene, TutorialPort {
 			truncatedPath.length > 0
 				? truncatedPath[truncatedPath.length - 1]
 				: local.state.coord;
-		RH.updateFogOfWar(
-			local.state,
-			local.state.coord,
-			this.turnsTaken,
-			this.grid,
-		);
-		if (this.fogOfWarEnabled) {
-			this.mapRenderer.updateFogVisibility(
-				local.state,
-				local.state.coord,
-				this.turnsTaken,
-			);
-		}
 		local.turnManager.commitMove(truncatedPath.length);
 		this.hud.setMoveActive(false);
 		this.moveController.exit();
@@ -1047,6 +1034,31 @@ export class MapScene implements Scene, TutorialPort {
 				{ state: local.state, token: local.mercenary },
 				truncatedPath,
 				this.getUnitLabel(local),
+			);
+		}
+
+		// Deferred until after the walk animation finishes — the
+		// per-frame live-movement logic in update() already revealed
+		// fog progressively along the way (using the live, interpolated
+		// screen position, not this logical coord). Calling this here,
+		// before the animation, was the actual bug: it revealed the
+		// entire destination area instantly, the moment a move was
+		// confirmed, well before the character had visually moved at
+		// all — which made the per-frame reveal redundant and
+		// invisible, since there was nothing left for it to add. This
+		// final call just makes sure fog ends up exactly matching the
+		// unit's true final position once movement is fully done.
+		RH.updateFogOfWar(
+			local.state,
+			local.state.coord,
+			this.turnsTaken,
+			this.grid,
+		);
+		if (this.fogOfWarEnabled) {
+			this.mapRenderer.updateFogVisibility(
+				local.state,
+				local.state.coord,
+				this.turnsTaken,
 			);
 		}
 
@@ -1502,6 +1514,16 @@ export class MapScene implements Scene, TutorialPort {
 		this.hud.closeActionMenu();
 		this.localUnit.turnManager.endTurn();
 		this.turnsTaken++;
+		// Re-stamp immediately, before pruning or rendering — otherwise
+		// this render call below runs against a turn number nothing has
+		// been recorded for yet, briefly reading the player's own
+		// surroundings as stale.
+		RH.updateFogOfWar(
+			this.localUnit.state,
+			this.localUnit.state.coord,
+			this.turnsTaken,
+			this.grid,
+		);
 		RH.pruneDecayedTiles(this.localUnit.state, this.turnsTaken);
 		if (this.fogOfWarEnabled) {
 			this.mapRenderer.updateFogVisibility(

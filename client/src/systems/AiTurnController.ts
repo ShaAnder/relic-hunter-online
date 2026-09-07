@@ -138,6 +138,21 @@ export class AiTurnController {
 		// AI units always have both — guard for the type
 		if (!unit.archetype || !unit.memory) return;
 		this.activeAi = unit;
+
+		// Re-stamp this unit's own fog for the current turn immediately —
+		// its sighting-recording logic below needs an accurate "visible"
+		// read for its own surroundings, which would otherwise lag if
+		// this unit didn't move last turn (fog visibility now strictly
+		// tracks the turn a tile was recorded, not raw distance).
+		if (this.cb.getFogOfWarEnabled()) {
+			RH.updateFogOfWar(
+				unit.state,
+				unit.state.coord,
+				this.cb.getTurnsTaken(),
+				this.cb.getGrid(),
+			);
+		}
+
 		// Same fog rule the per-frame camera lock in MapScene follows —
 		// don't center on (and thereby reveal) a unit the local player
 		// can't currently see. At turn-start the unit hasn't moved yet,
