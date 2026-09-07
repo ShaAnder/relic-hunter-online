@@ -129,6 +129,20 @@ export class Grid {
 	}
 
 	/**
+	 * Checks if a tile blocks vision — a deliberately separate concept
+	 * from isWalkable. Currently only Wall does both (opaque and
+	 * impassable), but this exists as its own check specifically so a
+	 * future object that blocks movement without blocking sight (a
+	 * fence, a low barrier) can diverge from walkability without this
+	 * method changing at all. An out-of-bounds coord blocks vision,
+	 * same as it blocks movement.
+	 */
+	blocksVision(coord: GridCoord): boolean {
+		const tile = this.getTile(coord);
+		return tile === undefined || tile.type === TileType.Wall;
+	}
+
+	/**
 	 * Returns the four orthogonal neighbors that are inside the grid bounds.
 	 */
 	getNeighbors(coord: GridCoord): GridCoord[] {
