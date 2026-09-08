@@ -21,6 +21,7 @@ export * from "./types/mercenary";
 export * from "./types/monster";
 export * from "./world/grid";
 export * from "./world/FogOfWar";
-export * from "./world/generation";
+export * from "./world/maps/dungeon";
+export * from "./world/maps/backstreetsGeneration";
 export * from "./world/movement";
 export * from "./world/placement";

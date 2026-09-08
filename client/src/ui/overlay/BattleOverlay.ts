@@ -481,17 +481,6 @@ export class BattleOverlay implements Overlay {
 			this.farTile = { x: 1, y: midRow };
 			this.attackerNear = attackerScreen.x >= defenderScreen.x;
 		}
-		// The local player's own sprite always renders in the near
-		// (foreground) slot, overriding the geometry-based read above —
-		// same reasoning as the panel fix: without this, the panel
-		// could say "you're on the left" while the actual strike
-		// animation lands on a sprite positioned on the right, making a
-		// hit and its HP change feel spatially disconnected. AI-vs-AI
-		// battles keep the plain geometry-driven result since there's
-		// no local player to anchor to.
-		if (this.localHumanRole !== "none") {
-			this.attackerNear = this.localHumanRole === "attacker";
-		}
 	}
 
 	onShow(): void {
@@ -1710,19 +1699,17 @@ export class BattleOverlay implements Overlay {
 		const panelH = uiPx(100, s);
 		const margin = uiPx(16, s);
 
-		// The local player's own panel always renders on the left,
-		// regardless of whether they're the attacker or defender role
-		// this particular battle (that's fixed per-battle based on who
-		// initiated, not on who the local human is — the two are
-		// independent). Without this, the same player could see their
-		// own HP bar on the left in one fight and the right in the
-		// next, purely because of who happened to click first, making
-		// "which one is me" impossible to rely on. AI-vs-AI battles
-		// (no local human at all) keep the plain attacker-left default.
-		const localOnLeft =
-			this.localHumanRole === "none" || this.localHumanRole === "attacker";
-		const leftPanel = localOnLeft ? this.attackerPanel : this.defenderPanel;
-		const rightPanel = localOnLeft ? this.defenderPanel : this.attackerPanel;
+		// Each panel follows wherever the arena actually placed that
+		// combatant's own sprite (both tokens share the arena as their
+		// parent, so comparing their local x directly reflects which
+		// one renders further left on screen, regardless of the
+		// arena's own scale/position). This keeps a panel and its
+		// sprite always visually aligned — whoever's on the left of
+		// the arena gets the left panel — rather than forcing the
+		// arena to match a fixed "local player always here" rule.
+		const attackerOnLeft = this.attackerTokenView.x <= this.defenderTokenView.x;
+		const leftPanel = attackerOnLeft ? this.attackerPanel : this.defenderPanel;
+		const rightPanel = attackerOnLeft ? this.defenderPanel : this.attackerPanel;
 
 		this.attackerPanel.scale.set(s);
 		this.defenderPanel.scale.set(s);
