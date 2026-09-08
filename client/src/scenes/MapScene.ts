@@ -176,7 +176,7 @@ export class MapScene implements Scene, TutorialPort {
 		if (!this.fogOfWarEnabled) return;
 		const exitCoord = RH.findExitTile(this.grid);
 		if (!exitCoord) return;
-		RH.updateFogOfWar(
+		RH.markAreaExplored(
 			this.localUnit.state,
 			exitCoord,
 			this.turnsTaken,
@@ -1807,6 +1807,10 @@ export class MapScene implements Scene, TutorialPort {
 		local.state.coord = coord;
 		local.mercenary.setPositionInstant(gridToScreen(coord));
 		local.turnManager.undoMovementForRetry();
+		if (this.fogOfWarEnabled) {
+			RH.updateFogOfWar(local.state, coord, this.turnsTaken, this.grid);
+			this.mapRenderer.updateFogVisibility(local.state, coord, this.turnsTaken);
+		}
 		this.syncUI();
 	}
 
@@ -2096,6 +2100,10 @@ export class MapScene implements Scene, TutorialPort {
 		local.state.coord = coord;
 		const screenPos = gridToScreen(coord);
 		local.mercenary.setPositionInstant(screenPos);
+		if (this.fogOfWarEnabled) {
+			RH.updateFogOfWar(local.state, coord, this.turnsTaken, this.grid);
+			this.mapRenderer.updateFogVisibility(local.state, coord, this.turnsTaken);
+		}
 		await this.camera.panTo(
 			screenPos,
 			500,
@@ -2152,6 +2160,17 @@ export class MapScene implements Scene, TutorialPort {
 		state.coord = destination;
 		const screenPos = gridToScreen(destination);
 		mercenary.setPositionInstant(screenPos);
+
+		if (this.fogOfWarEnabled) {
+			RH.updateFogOfWar(state, destination, this.turnsTaken, this.grid);
+			if (state === this.localUnit.state) {
+				this.mapRenderer.updateFogVisibility(
+					state,
+					destination,
+					this.turnsTaken,
+				);
+			}
+		}
 
 		await this.camera.panTo(
 			{ x: screenPos.x, y: screenPos.y },
