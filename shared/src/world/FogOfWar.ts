@@ -182,3 +182,27 @@ export function findNearestUnexploredTile(
 	}
 	return best;
 }
+
+/**
+ * Marks every tile in range of `center` as explored (for decay/memory
+ * purposes only) — deliberately does NOT touch currentlyVisible.
+ * updateFogOfWar always rebuilds currentlyVisible from scratch around
+ * whatever point it's given, which is correct for "I am now standing
+ * here" but wrong for "this other location becomes known" (e.g. the
+ * exit revealing itself once the relic is found) — using it for the
+ * latter case wipes out the unit's actual current visibility and
+ * replaces it with the marked area's surroundings instead.
+ */
+export function markAreaExplored(
+	fog: HasFogOfWar,
+	center: GridCoord,
+	currentTurn: number,
+	grid: Grid,
+	range: number = FOG_SIGHT_RANGE,
+): void {
+	for (const coord of tilesInSightRange(center, range)) {
+		if (!grid.getTile(coord)) continue;
+		if (!hasClearLineOfSight(grid, center, coord)) continue;
+		fog.exploredTiles[coordKey(coord)] = currentTurn;
+	}
+}
