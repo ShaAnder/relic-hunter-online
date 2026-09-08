@@ -2172,12 +2172,24 @@ export class MapScene implements Scene, TutorialPort {
 			}
 		}
 
-		await this.camera.panTo(
-			{ x: screenPos.x, y: screenPos.y },
-			500,
-			this.game.app.screen.width,
-			this.game.app.screen.height,
-		);
+		const isLocal = state === this.localUnit.state;
+		const canSeeDestination =
+			isLocal ||
+			!this.fogOfWarEnabled ||
+			RH.getTileVisibility(
+				this.localUnit.state,
+				destination,
+				this.localUnit.state.coord,
+				this.turnsTaken,
+			) === "visible";
+		if (canSeeDestination) {
+			await this.camera.panTo(
+				{ x: screenPos.x, y: screenPos.y },
+				500,
+				this.game.app.screen.width,
+				this.game.app.screen.height,
+			);
+		}
 	}
 
 	// ---------- Helpers ----------

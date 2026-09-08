@@ -502,12 +502,24 @@ export class AiTurnController {
 	 */
 	private async processRecoveryTurn(unit: PilotedMercenary): Promise<void> {
 		this.activeAi = unit;
-		await this.camera.panTo(
-			{ x: unit.mercenary.view.x, y: unit.mercenary.view.y },
-			500,
-			this.screenSize.width,
-			this.screenSize.height,
-		);
+		const fogEnabled = this.cb.getFogOfWarEnabled();
+		const localUnit = this.cb.getLocalUnit();
+		const canSeeUnit =
+			!fogEnabled ||
+			RH.getTileVisibility(
+				localUnit.state,
+				unit.state.coord,
+				localUnit.state.coord,
+				this.cb.getTurnsTaken(),
+			) === "visible";
+		if (canSeeUnit) {
+			await this.camera.panTo(
+				{ x: unit.mercenary.view.x, y: unit.mercenary.view.y },
+				500,
+				this.screenSize.width,
+				this.screenSize.height,
+			);
+		}
 
 		unit.state.currentHp = 1;
 		this.cb.showFeedback(
@@ -647,11 +659,23 @@ export class AiTurnController {
 			return;
 		}
 		this.activeMonster = monster;
-		this.camera.centerOn(
-			{ x: monster.token.view.x, y: monster.token.view.y },
-			this.screenSize.width,
-			this.screenSize.height,
-		);
+		const fogEnabled = this.cb.getFogOfWarEnabled();
+		const localUnit = this.cb.getLocalUnit();
+		const canSeeMonster =
+			!fogEnabled ||
+			RH.getTileVisibility(
+				localUnit.state,
+				monster.state.coord,
+				localUnit.state.coord,
+				this.cb.getTurnsTaken(),
+			) === "visible";
+		if (canSeeMonster) {
+			this.camera.centerOn(
+				{ x: monster.token.view.x, y: monster.token.view.y },
+				this.screenSize.width,
+				this.screenSize.height,
+			);
+		}
 
 		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
 		const hunters: RH.MonsterTargetCandidate[] = this.cb
