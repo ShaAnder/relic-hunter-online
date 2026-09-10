@@ -1,7 +1,11 @@
 import { Container, Graphics } from "pixi.js";
 import type { Grid, GridCoord, MovementRangeEntry } from "@relic-hunter/shared";
 import { computeMovementRange, coordKey } from "@relic-hunter/shared";
-import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
+import {
+	gridToScreenElevated,
+	TILE_WIDTH,
+	TILE_HEIGHT,
+} from "@/math/isoGridMath";
 import type { CameraController } from "@/core/cameras/CameraController";
 import type { Mercenary } from "@/entities/Mercenary";
 
@@ -17,6 +21,8 @@ interface MoveControllerOptions {
 		path: GridCoord[],
 		ignoresZoc: boolean,
 	) => void;
+	/** Per-tile elevation (session.mapElevation) — when present, the range highlight, path line, and destination glow all snap to each tile's own raised top rather than flat ground, matching how the tile itself renders. */
+	elevation?: Map<string, number>;
 }
 
 /**
@@ -355,7 +361,7 @@ export class MoveController {
 
 		for (const entry of this.movementRange.values()) {
 			if (entry.distance === 0) continue;
-			const pos = gridToScreen(entry.coord);
+			const pos = gridToScreenElevated(entry.coord, this.options.elevation);
 			const g = new Graphics();
 			g.poly([
 				0,
@@ -381,7 +387,9 @@ export class MoveController {
 		const from = this.options.getMercenaryCoord();
 		if (this.path.length === 0) return;
 
-		const points = [from, ...this.path].map(gridToScreen);
+		const points = [from, ...this.path].map((c) =>
+			gridToScreenElevated(c, this.options.elevation),
+		);
 		const locked = this.phase === "previewLocked";
 
 		const line = new Graphics();

@@ -21,7 +21,10 @@ export * from "./types/mercenary";
 export * from "./types/monster";
 export * from "./world/grid";
 export * from "./world/FogOfWar";
-export * from "./world/maps/dungeon";
-export * from "./world/maps/backstreetsGeneration";
+export * from "./world/maps/alleywaysMap";
+export * from "./world/maps/alleywaysMapBlueprint";
+export * from "./world/maps/alleywaysMapFloor2Blueprint";
+export * from "./world/maps/alleywaysFloors";
+
 export * from "./world/movement";
 export * from "./world/placement";

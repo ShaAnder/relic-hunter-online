@@ -6,6 +6,8 @@ import type {
 	CardData,
 	MatchScore,
 	RandomFn,
+	Grid,
+	CompiledAlleywaysFloors,
 } from "@relic-hunter/shared";
 import { createSeededRandom } from "@relic-hunter/shared";
 
@@ -16,9 +18,13 @@ export interface MissionParams {
 	 * per-map option rather than a global dev switch.
 	 */
 	fogOfWarEnabled?: boolean;
+	/** Which map loads. Only one exists right now — the hand-drawn ALLEYWAYS_MAP_BLUEPRINT — kept as a field rather than removed so adding a second hand-drawn map later doesn't need a structural change. Procedural generation (dungeon, backstreets) was removed in favor of pre-drawn maps as the more reliable approach. */
+	mapType?: "alleyways";
 }
 
 export const TEST_MAP_DIMENSIONS = { width: 35, height: 35 };
+/** Was temporarily increased to 65x65 to work around alley density — reverted. The actual fix was too-generous alley widths and branch lengths, not map size; see backstreetsGeneration.ts defaults. Kept as a separate constant in case backstreets ever wants independent tuning from the dungeon size, but currently matches it. */
+export const BACKSTREETS_MAP_DIMENSIONS = { width: 35, height: 35 };
 
 export interface TurnOrderEntry {
 	id: string;
@@ -107,6 +113,18 @@ export class GameSession {
 
 	/** Player spawn chosen once in LoadingOverlay (same reason as above). */
 	playerSpawn: GridCoord | null = null;
+	/** The map itself, generated once in LoadingOverlay — spawn, chests, and everything else are planned against this exact grid, so MapScene must read this rather than regenerate its own (even with the same seed, two independent generation calls are two different maps in practice). Null only before LoadingOverlay runs, or for tutorial maps which build their own fixed debug grid instead. */
+	generatedGrid: Grid | null = null;
+	/** Per-tile elevation for the current map, keyed by coordKey — see elevation-rules.md. Not yet consumed by movement cost or line-of-sight; that's a separate, later pass. */
+	mapElevation: Map<string, number> | null = null;
+	/** Per-tile transparency for the current map, keyed by coordKey. */
+	mapTransparent: Map<string, boolean> | null = null;
+	/** Coord keys of every stairs tile on the current map, for the renderer's distinct stepped-slope visual. */
+	mapStairsTiles: Set<string> | null = null;
+	/** All compiled floors of the current map plus the staircase links between them (see alleywaysFloors.ts) — null for maps with only one floor, or before LoadingOverlay runs. */
+	mapFloors: CompiledAlleywaysFloors | null = null;
+	/** Index into mapFloors.floors the local player is currently on. Always 0 for single-floor maps. */
+	localPlayerFloor = 0;
 	participants: MatchParticipant[] | null = null;
 	turnOrder: TurnOrderEntry[] | null = null;
 	matchResult: MatchResult | null = null;

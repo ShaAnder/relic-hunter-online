@@ -1,7 +1,7 @@
 import { Container, Graphics } from "pixi.js";
 import { GridCoord } from "@relic-hunter/shared";
 import type { MonsterTier } from "@relic-hunter/shared";
-import { gridToScreen } from "@/math/isoGridMath";
+import { gridToScreenElevated } from "@/math/isoGridMath";
 import { easeInOutCubic } from "@/math/easeInOutCubic";
 
 const TIER_COLORS: Record<MonsterTier, number> = {
@@ -40,8 +40,12 @@ export class MonsterToken {
 	private onPathComplete: (() => void) | null = null;
 	private _isAnimating = false;
 
-	constructor(initialCoord: GridCoord, tier: MonsterTier) {
-		this.currentScreenPos = gridToScreen(initialCoord);
+	constructor(
+		initialCoord: GridCoord,
+		tier: MonsterTier,
+		private elevation?: Map<string, number>,
+	) {
+		this.currentScreenPos = gridToScreenElevated(initialCoord, this.elevation);
 		this.view.addChild(this.drawDiamond(tier));
 		this.syncPosition();
 	}
@@ -59,7 +63,7 @@ export class MonsterToken {
 
 			this.animPoints = [
 				{ ...this.currentScreenPos },
-				...path.map(gridToScreen),
+				...path.map((c) => gridToScreenElevated(c, this.elevation)),
 			];
 			this.animElapsedMs = 0;
 			this.animDurationMs =

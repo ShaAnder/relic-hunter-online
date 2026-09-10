@@ -1,6 +1,6 @@
 import { Container, Graphics } from "pixi.js";
 import type { GridCoord } from "@relic-hunter/shared";
-import { gridToScreen } from "@/math/isoGridMath";
+import { gridToScreenElevated } from "@/math/isoGridMath";
 import { easeInOutCubic } from "@/math/easeInOutCubic";
 import { CharacterSprite } from "@/entities/CharacterSprite";
 import {
@@ -50,8 +50,9 @@ export class Mercenary {
 		initialCoord: GridCoord,
 		characterClass: string | SpriteCharacterClass = "brawler",
 		private bodyColor: number = 0xe74c3c,
+		private elevation?: Map<string, number>,
 	) {
-		this.currentScreenPos = gridToScreen(initialCoord);
+		this.currentScreenPos = gridToScreenElevated(initialCoord, this.elevation);
 
 		this.shadow = this.drawShadow();
 		this.view.addChild(this.shadow);
@@ -92,7 +93,7 @@ export class Mercenary {
 
 			this.animPoints = [
 				{ ...this.currentScreenPos },
-				...path.map(gridToScreen),
+				...path.map((c) => gridToScreenElevated(c, this.elevation)),
 			];
 			this.animElapsedMs = 0;
 			this.animDurationMs =
