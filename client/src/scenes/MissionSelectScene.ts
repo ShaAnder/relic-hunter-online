@@ -7,11 +7,15 @@ import { LobbyScene } from "./LobbyScene";
 import { LoadingOverlay } from "@/ui/overlay/LoadingOverlay";
 
 /**
- * Per-match config. Only one map exists right now — a single 35x35 test
- * map — so this is currently just a confirmation screen rather than a
- * real config picker. Start writes missionParams into the session and
- * enters LoadingScene, which generates the map/chests and does the
- * pre-match reveal before handing off to MapScene itself.
+ * Per-match config. Only one map exists right now — the hand-drawn
+ * alleyways map — so this is currently just a confirmation screen
+ * rather than a real config picker. Procedural generation (dungeon,
+ * backstreets) was removed in favor of pre-drawn maps as the more
+ * reliable approach; if a second hand-drawn map is added later, a
+ * map-choice control belongs back here. Start writes missionParams
+ * into the session and enters LoadingScene, which generates the
+ * chests and does the pre-match reveal before handing off to MapScene
+ * itself.
  */
 export class MissionSelectScene implements Scene {
 	readonly view = new Container();
@@ -54,7 +58,7 @@ export class MissionSelectScene implements Scene {
 		this.content.addChild(this.title);
 
 		this.mapLabel = new Text({
-			text: "Test Map",
+			text: "Alleyways",
 			style: { fill: 0x88ccff, fontSize: 20 },
 		});
 		this.content.addChild(this.mapLabel);
@@ -101,6 +105,7 @@ export class MissionSelectScene implements Scene {
 	private onStart(): void {
 		this.game.session.missionParams = {
 			fogOfWarEnabled: this.fogOfWarEnabled,
+			mapType: "alleyways",
 		};
 		void this.game.overlays.show(new LoadingOverlay(this.game));
 	}
@@ -113,13 +118,13 @@ export class MissionSelectScene implements Scene {
 		this.mapLabel.y = this.DESIGN_HEIGHT * 0.4;
 
 		this.fogToggleBtn.view.x = this.DESIGN_WIDTH / 2 - 110;
-		this.fogToggleBtn.view.y = this.DESIGN_HEIGHT * 0.5;
+		this.fogToggleBtn.view.y = this.DESIGN_HEIGHT * 0.55;
 
 		this.startBtn.view.x = this.DESIGN_WIDTH / 2 - 100;
-		this.startBtn.view.y = this.DESIGN_HEIGHT * 0.63;
+		this.startBtn.view.y = this.DESIGN_HEIGHT * 0.7;
 
 		this.backBtn.view.x = this.DESIGN_WIDTH / 2 - 70;
-		this.backBtn.view.y = this.DESIGN_HEIGHT * 0.78;
+		this.backBtn.view.y = this.DESIGN_HEIGHT * 0.84;
 
 		const scale = computeFitScale(
 			width,

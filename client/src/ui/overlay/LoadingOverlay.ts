@@ -2,22 +2,21 @@ import { Container, Graphics, Text, Ticker } from "pixi.js";
 import type { Overlay } from "@/core/overlays/Overlay";
 import type { Game } from "@/core/game/Game";
 import {
-	TEST_MAP_DIMENSIONS,
 	type TurnOrderEntry,
 	type PlacedChestRecord,
 } from "@/core/game/GameSession";
 import {
 	type Grid,
 	type GridCoord,
-	generateDungeon,
 	findFirstWalkableTile,
 	planChests,
 	coordKey,
 	pickSpreadWalkableTile,
+	compileAlleywaysFloors,
+	ALLEYWAYS_MAP_BLUEPRINT,
+	ALLEYWAYS_MAP_FLOOR_2_BLUEPRINT,
 } from "@relic-hunter/shared";
 import { MapScene } from "@/scenes/MapScene";
-
-const ROOM_DENSITY = 1 / 50;
 
 // Total loading-bar duration — split across the real setup steps below,
 // so the bar fills smoothly over roughly this long rather than jumping
@@ -139,15 +138,25 @@ export class LoadingOverlay implements Overlay {
 	// ---------- Setup ----------
 
 	private setupGrid(): void {
-		const { width, height } = TEST_MAP_DIMENSIONS;
 		const seed = Math.floor(Math.random() * 1_000_000);
 		this.game.session.mapSeed = seed;
 		this.game.session.matchSeed = Math.floor(Math.random() * 1_000_000);
 
-		this.grid = generateDungeon(width, height, {
-			seed,
-			roomCount: Math.floor(width * height * ROOM_DENSITY),
-		});
+		const floors = compileAlleywaysFloors([
+			ALLEYWAYS_MAP_BLUEPRINT,
+			ALLEYWAYS_MAP_FLOOR_2_BLUEPRINT,
+		]);
+		this.game.session.mapFloors = floors;
+		this.game.session.localPlayerFloor = 0;
+
+		const ground = floors.floors[0];
+		this.game.session.mapElevation = ground.elevation;
+		this.game.session.mapTransparent = ground.transparent;
+		this.game.session.mapStairsTiles = new Set(
+			ground.stairsTiles.map((c) => coordKey(c)),
+		);
+		this.grid = ground.grid;
+		this.game.session.generatedGrid = this.grid;
 	}
 
 	/**

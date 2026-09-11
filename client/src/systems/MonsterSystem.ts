@@ -21,7 +21,10 @@ export class MonsterSystem {
 		"heavy",
 	];
 
-	constructor(private mercenaryContainer: Container) {}
+	constructor(
+		private mercenaryContainer: Container,
+		private elevation?: Map<string, number>,
+	) {}
 
 	get all(): readonly MonsterEntity[] {
 		return this.monsters;
@@ -76,7 +79,7 @@ export class MonsterSystem {
 			tier,
 			coord,
 		);
-		const token = new MonsterToken(coord, tier);
+		const token = new MonsterToken(coord, tier, this.elevation);
 		this.mercenaryContainer.addChild(token.view);
 
 		const entity: MonsterEntity = { state, token };
@@ -87,7 +90,7 @@ export class MonsterSystem {
 	/** Spawns the boss at coord — always succeeds, no shouldSpawn gate (checkDeckExhaustion decides when this fires). */
 	spawnBoss(coord: RH.GridCoord): MonsterEntity {
 		const state = RH.createMonster(`boss_${Date.now()}`, "boss", coord);
-		const token = new MonsterToken(coord, "boss");
+		const token = new MonsterToken(coord, "boss", this.elevation);
 		this.mercenaryContainer.addChild(token.view);
 
 		const entity: MonsterEntity = { state, token };
@@ -103,7 +106,7 @@ export class MonsterSystem {
 		coord: RH.GridCoord,
 	): MonsterEntity {
 		const state = RH.createMonster(id, tier, coord);
-		const token = new MonsterToken(coord, tier);
+		const token = new MonsterToken(coord, tier, this.elevation);
 		this.mercenaryContainer.addChild(token.view);
 
 		const entity: MonsterEntity = { state, token };

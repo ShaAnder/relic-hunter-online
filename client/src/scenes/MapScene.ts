@@ -5,6 +5,7 @@ import { CameraController } from "@/core/cameras/CameraController";
 import { MapRenderer } from "@/rendering/MapRenderer";
 import {
 	gridToScreen,
+	gridToScreenElevated,
 	screenToGrid,
 	TILE_WIDTH,
 	TILE_HEIGHT,
@@ -122,11 +123,8 @@ export class MapScene implements Scene, TutorialPort {
 	// Map config — dimensions and seed come from GameSession (set by
 	// LoadingScene) rather than being hardcoded, so mission map size
 	// selection actually does something.
-	private readonly ROOM_DENSITY = 1 / 50;
 	private mapWidth: number;
 	private mapHeight: number;
-	private roomCount: number;
-	private mapSeed: number;
 
 	private tutorialConfig: TutorialConfig | null;
 	/** Lazily constructed — only tutorials ever need dialogue. */
@@ -155,7 +153,12 @@ export class MapScene implements Scene, TutorialPort {
 	 * actual bug behind "finding the target reveals everything").
 	 */
 	private rebuildMapRenderWithFog(): void {
-		this.mapRenderer.build(this.grid, 0);
+		this.mapRenderer.build(
+			this.grid,
+			0,
+			this.game.session.mapElevation ?? undefined,
+			this.game.session.mapStairsTiles ?? undefined,
+		);
 		if (this.fogOfWarEnabled) {
 			this.mapRenderer.updateFogVisibility(
 				this.localUnit.state,
@@ -225,18 +228,11 @@ export class MapScene implements Scene, TutorialPort {
 	) {
 		this.tutorialConfig = tutorialConfig;
 
-		// Dimensions + seed come from the mission/LoadingScene setup, unless
-		// a tutorial config supplies its own small, fixed debug map.
+		// Dimensions come from the mission/LoadingScene setup, unless a
+		// tutorial config supplies its own small, fixed debug map.
 		const dims = tutorialConfig?.script.debugMap ?? TEST_MAP_DIMENSIONS;
 		this.mapWidth = dims.width;
 		this.mapHeight = dims.height;
-		this.roomCount =
-			tutorialConfig?.script.debugMap.roomCount ??
-			Math.floor(this.mapWidth * this.mapHeight * this.ROOM_DENSITY);
-		this.mapSeed =
-			tutorialConfig?.script.debugMap.seed ??
-			this.game.session.mapSeed ??
-			Math.floor(Math.random() * 1_000_000);
 
 		// WE ADD THIS - So when a new match happens it's a fresh deck, without it
 		// would try to carry old deck over. Tutorials get a genuinely empty
@@ -245,6 +241,13 @@ export class MapScene implements Scene, TutorialPort {
 		this.game.session.sharedDeck = this.tutorialConfig ? [] : null;
 
 		this.grid = this.buildMap();
+		// buildMap may return a pre-generated grid (from LoadingOverlay)
+		// whose actual dimensions differ from the dims guessed above —
+		// backstreets maps are larger than the dungeon default. Re-sync
+		// so everything downstream that reads mapWidth/mapHeight reflects
+		// the real map, not the pre-generation assumption.
+		this.mapWidth = this.grid.width;
+		this.mapHeight = this.grid.height;
 
 		this.boardContainer.addChild(this.tilesContainer);
 		this.view.addChild(this.boardContainer);
@@ -440,7 +443,12 @@ export class MapScene implements Scene, TutorialPort {
 	/** Render the map, center the camera, and wire up input. */
 	onEnter(): void {
 		this.game.audio.playMusic("map");
-		this.mapRenderer.build(this.grid, 0);
+		this.mapRenderer.build(
+			this.grid,
+			0,
+			this.game.session.mapElevation ?? undefined,
+			this.game.session.mapStairsTiles ?? undefined,
+		);
 		if (this.fogOfWarEnabled) {
 			this.mapRenderer.updateFogVisibility(
 				this.localUnit.state,
@@ -595,6 +603,18 @@ export class MapScene implements Scene, TutorialPort {
 		}
 
 		this.hand.update(deltaTime);
+
+		// Fades tall walls near the local player's actual screen
+		// position — every frame, not gated behind isAnimating like
+		// the fog update above, since the effect needs to stay
+		// correct even while standing still next to a wall, not just
+		// mid-walk. AI-controlled units are deliberately out of scope
+		// here per current design — see MapRenderer.updateWallOcclusion
+		// for the full rationale.
+		this.mapRenderer.updateWallOcclusion({
+			x: this.localUnit.mercenary.view.x,
+			y: this.localUnit.mercenary.view.y,
+		});
 
 		// PASS 4 TODO: still assumes exactly one local unit ever needs the
 		// camera to follow it — real judgment call, deferred deliberately.
@@ -1037,6 +1057,26 @@ export class MapScene implements Scene, TutorialPort {
 			);
 		}
 
+		// A staircase destination switches floors entirely — the coord
+		// the player just arrived at means something completely
+		// different now (a different grid, different fog, different
+		// everything), so none of the normal post-move logic below
+		// (fog for the old floor, chest-open, hazard, win-check) makes
+		// sense to run against it. Handle the switch and stop here.
+		const link = this.game.session.mapFloors
+			? RH.getFloorLink(
+					this.game.session.mapFloors,
+					this.game.session.localPlayerFloor,
+					local.state.coord,
+				)
+			: null;
+		if (link) {
+			this.switchFloor(link.floor, link.coord);
+			this.hud.setMoveActive(false);
+			this.syncUI();
+			return;
+		}
+
 		// Deferred until after the walk animation finishes — the
 		// per-frame live-movement logic in update() already revealed
 		// fog progressively along the way (using the live, interpolated
@@ -1167,7 +1207,12 @@ export class MapScene implements Scene, TutorialPort {
 			state.stats.movement = this.tutorialConfig.playerMovement;
 		}
 		RH.updateFogOfWar(state, state.coord, this.turnsTaken, this.grid);
-		const mercenary = new Mercenary(state.coord, state.characterClass);
+		const mercenary = new Mercenary(
+			state.coord,
+			state.characterClass,
+			undefined,
+			this.game.session.mapElevation ?? undefined,
+		);
 		this.mercenaryContainer.addChild(mercenary.view);
 
 		const turnManager = new TurnManager(
@@ -1220,6 +1265,7 @@ export class MapScene implements Scene, TutorialPort {
 				coord,
 				state.characterClass,
 				MapScene.ENEMY_COLORS[i] ?? 0xe67e22,
+				this.game.session.mapElevation ?? undefined,
 			);
 			this.mercenaryContainer.addChild(mercenary.view);
 
@@ -1805,13 +1851,85 @@ export class MapScene implements Scene, TutorialPort {
 	resetLocalUnitToCoord(coord: RH.GridCoord): void {
 		const local = this.localUnit;
 		local.state.coord = coord;
-		local.mercenary.setPositionInstant(gridToScreen(coord));
+		local.mercenary.setPositionInstant(
+			gridToScreenElevated(coord, this.game.session.mapElevation ?? undefined),
+		);
 		local.turnManager.undoMovementForRetry();
 		if (this.fogOfWarEnabled) {
 			RH.updateFogOfWar(local.state, coord, this.turnsTaken, this.grid);
 			this.mapRenderer.updateFogVisibility(local.state, coord, this.turnsTaken);
 		}
 		this.syncUI();
+	}
+
+	/**
+	 * Switches the local player to a different floor of the current
+	 * map via a staircase — swaps the active grid and its
+	 * elevation/transparency/stairs data (every existing consumer of
+	 * session.mapElevation etc. — MapRenderer, MoveController, entity
+	 * positioning — keeps working unchanged, since they just read
+	 * "whichever floor is currently active"), teleports the player and
+	 * camera to the linked coordinate, and rebuilds the tile render for
+	 * the new floor.
+	 *
+	 * Fog is reset rather than preserved: a different floor is a
+	 * genuinely different space, not a new area of the same one, so the
+	 * old floor's explored memory has no bearing on it. This does mean
+	 * going back downstairs currently re-reveals the ground floor from
+	 * scratch rather than restoring what was already explored — a
+	 * known simplification, not an oversight, and the natural next
+	 * step if per-floor fog memory turns out to matter in practice.
+	 *
+	 * Scoped to the local player only, matching every other
+	 * floor-aware system so far (elevation rendering aside, which
+	 * applies map-wide) — AI units do not follow the player between
+	 * floors and have no floor-awareness of their own yet.
+	 */
+	private switchFloor(targetFloor: number, targetCoord: RH.GridCoord): void {
+		const floors = this.game.session.mapFloors;
+		const floorData = floors?.floors[targetFloor];
+		if (!floors || !floorData) return;
+
+		this.game.session.localPlayerFloor = targetFloor;
+		this.grid = floorData.grid;
+		this.game.session.generatedGrid = this.grid;
+		this.game.session.mapElevation = floorData.elevation;
+		this.game.session.mapTransparent = floorData.transparent;
+		this.game.session.mapStairsTiles = new Set(
+			floorData.stairsTiles.map((c) => RH.coordKey(c)),
+		);
+
+		const local = this.localUnit;
+		local.state.coord = targetCoord;
+		// Fresh fog for the new floor — see switchFloor's doc comment.
+		local.state.exploredTiles = {};
+		local.state.currentlyVisible = {};
+		RH.updateFogOfWar(local.state, targetCoord, this.turnsTaken, this.grid);
+
+		const screenPos = gridToScreenElevated(
+			targetCoord,
+			this.game.session.mapElevation ?? undefined,
+		);
+		local.mercenary.setPositionInstant(screenPos);
+
+		this.mapRenderer.build(
+			this.grid,
+			0,
+			this.game.session.mapElevation ?? undefined,
+			this.game.session.mapStairsTiles ?? undefined,
+		);
+		if (this.fogOfWarEnabled) {
+			this.mapRenderer.updateFogVisibility(
+				local.state,
+				targetCoord,
+				this.turnsTaken,
+			);
+		}
+		this.camera.centerOn(
+			screenPos,
+			this.game.app.screen.width,
+			this.game.app.screen.height,
+		);
 	}
 
 	/**
@@ -2098,7 +2216,10 @@ export class MapScene implements Scene, TutorialPort {
 	private async flyMercenaryTo(coord: RH.GridCoord): Promise<void> {
 		const local = this.localUnit;
 		local.state.coord = coord;
-		const screenPos = gridToScreen(coord);
+		const screenPos = gridToScreenElevated(
+			coord,
+			this.game.session.mapElevation ?? undefined,
+		);
 		local.mercenary.setPositionInstant(screenPos);
 		if (this.fogOfWarEnabled) {
 			RH.updateFogOfWar(local.state, coord, this.turnsTaken, this.grid);
@@ -2158,7 +2279,10 @@ export class MapScene implements Scene, TutorialPort {
 		const destination = this.randomWalkableTile(state.coord, occupied);
 		if (!destination) return;
 		state.coord = destination;
-		const screenPos = gridToScreen(destination);
+		const screenPos = gridToScreenElevated(
+			destination,
+			this.game.session.mapElevation ?? undefined,
+		);
 		mercenary.setPositionInstant(screenPos);
 
 		if (this.fogOfWarEnabled) {
@@ -2214,10 +2338,11 @@ export class MapScene implements Scene, TutorialPort {
 				path: RH.GridCoord[],
 				ignoresZoc: boolean,
 			) => this.onMoveCommitted(target, path, ignoresZoc),
+			elevation: this.game.session.mapElevation ?? undefined,
 		});
 	}
 
-	/** [R] dev shortcut: fresh seed/map/chests locally, no LoadingScene round-trip. */
+	/** [R] dev shortcut: resets chests/units/hands locally without a LoadingScene round-trip. The map itself is a fixed, hand-drawn blueprint now (no seed to vary), so this re-fetches the same layout — what actually changes is everything placed on top of it. */
 	private regenerateMap(): void {
 		if (this.localUnit.mercenary.isAnimating || this.exitCardInProgress) return;
 
@@ -2229,7 +2354,7 @@ export class MapScene implements Scene, TutorialPort {
 		this.hud.closeActionMenu();
 		this.exitTargetingMode();
 
-		this.mapSeed = Math.floor(Math.random() * 1_000_000);
+		this.game.session.generatedGrid = null;
 		this.grid = this.buildMap();
 
 		this.applyCameraBounds();
@@ -2264,7 +2389,12 @@ export class MapScene implements Scene, TutorialPort {
 		// on-top position, the same invariant the constructor sets up.
 		this.boardContainer.addChild(this.mercenaryContainer);
 
-		this.mapRenderer.build(this.grid, 0);
+		this.mapRenderer.build(
+			this.grid,
+			0,
+			this.game.session.mapElevation ?? undefined,
+			this.game.session.mapStairsTiles ?? undefined,
+		);
 		this.mapRenderer.centerCamera();
 		this.syncUI();
 	}
@@ -2302,10 +2432,31 @@ export class MapScene implements Scene, TutorialPort {
 			return grid;
 		}
 
-		return RH.generateDungeon(this.mapWidth, this.mapHeight, {
-			seed: this.mapSeed,
-			roomCount: this.roomCount,
-		});
+		// The grid was already generated once in LoadingOverlay, and
+		// chest placement / player spawn were planned against that
+		// exact result — regenerating here independently (even with
+		// the same seed) would mean this scene renders a different map
+		// than the one spawn and chests were actually planned for.
+		// Read what's already there instead.
+		if (this.game.session.generatedGrid) {
+			return this.game.session.generatedGrid;
+		}
+
+		// Defensive fallback only — normal flow always goes through
+		// LoadingOverlay first, so this path shouldn't be reached.
+		const floors = RH.compileAlleywaysFloors([
+			RH.ALLEYWAYS_MAP_BLUEPRINT,
+			RH.ALLEYWAYS_MAP_FLOOR_2_BLUEPRINT,
+		]);
+		this.game.session.mapFloors = floors;
+		this.game.session.localPlayerFloor = 0;
+		const ground = floors.floors[0];
+		this.game.session.mapElevation = ground.elevation;
+		this.game.session.mapTransparent = ground.transparent;
+		this.game.session.mapStairsTiles = new Set(
+			ground.stairsTiles.map((c: RH.GridCoord) => RH.coordKey(c)),
+		);
+		return ground.grid;
 	}
 
 	/** Build the local player's RH.MercenaryState. */
