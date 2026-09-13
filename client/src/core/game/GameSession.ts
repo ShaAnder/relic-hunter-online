@@ -8,6 +8,7 @@ import type {
 	RandomFn,
 	Grid,
 	CompiledAlleywaysFloors,
+	StaircaseCluster,
 } from "@relic-hunter/shared";
 import { createSeededRandom } from "@relic-hunter/shared";
 
@@ -125,6 +126,8 @@ export class GameSession {
 	mapFloors: CompiledAlleywaysFloors | null = null;
 	/** Index into mapFloors.floors the local player is currently on. Always 0 for single-floor maps. */
 	localPlayerFloor = 0;
+	/** Staircase clusters (grouped tiles + climb direction/progress) for the currently-active floor only — recomputed on floor switch. */
+	mapStaircaseClusters: StaircaseCluster[] = [];
 	participants: MatchParticipant[] | null = null;
 	turnOrder: TurnOrderEntry[] | null = null;
 	matchResult: MatchResult | null = null;

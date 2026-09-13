@@ -5,7 +5,7 @@ import { CameraController } from "@/core/cameras/CameraController";
 import { MapRenderer } from "@/rendering/MapRenderer";
 import {
 	gridToScreen,
-	gridToScreenElevated,
+	gridToScreenElevatedWithClimb,
 	screenToGrid,
 	TILE_WIDTH,
 	TILE_HEIGHT,
@@ -1057,19 +1057,27 @@ export class MapScene implements Scene, TutorialPort {
 			);
 		}
 
-		// A staircase destination switches floors entirely — the coord
-		// the player just arrived at means something completely
-		// different now (a different grid, different fog, different
-		// everything), so none of the normal post-move logic below
-		// (fog for the old floor, chest-open, hazard, win-check) makes
-		// sense to run against it. Handle the switch and stop here.
-		const link = this.game.session.mapFloors
-			? RH.getFloorLink(
-					this.game.session.mapFloors,
-					this.game.session.localPlayerFloor,
-					local.state.coord,
-				)
-			: null;
+		// A staircase destination switches floors entirely — but only
+		// once the player actually reaches the top of that staircase's
+		// climb, not any tile along it. Direction is inferred from each
+		// cluster's own shape for now (wider-than-tall reads
+		// left-to-right, taller-than-wide reads south-to-north) until
+		// per-tile directions are authored explicitly later.
+		const cluster = RH.findStaircaseClusterAt(
+			this.game.session.mapStaircaseClusters,
+			local.state.coord,
+		);
+		const atTopOfStaircase = cluster
+			? RH.isTopOfStaircase(cluster, local.state.coord)
+			: false;
+		const link =
+			atTopOfStaircase && this.game.session.mapFloors
+				? RH.getFloorLink(
+						this.game.session.mapFloors,
+						this.game.session.localPlayerFloor,
+						local.state.coord,
+					)
+				: null;
 		if (link) {
 			this.switchFloor(link.floor, link.coord);
 			this.hud.setMoveActive(false);
@@ -1212,6 +1220,7 @@ export class MapScene implements Scene, TutorialPort {
 			state.characterClass,
 			undefined,
 			this.game.session.mapElevation ?? undefined,
+			this.game.session.mapStaircaseClusters,
 		);
 		this.mercenaryContainer.addChild(mercenary.view);
 
@@ -1266,6 +1275,7 @@ export class MapScene implements Scene, TutorialPort {
 				state.characterClass,
 				MapScene.ENEMY_COLORS[i] ?? 0xe67e22,
 				this.game.session.mapElevation ?? undefined,
+				this.game.session.mapStaircaseClusters,
 			);
 			this.mercenaryContainer.addChild(mercenary.view);
 
@@ -1852,7 +1862,11 @@ export class MapScene implements Scene, TutorialPort {
 		const local = this.localUnit;
 		local.state.coord = coord;
 		local.mercenary.setPositionInstant(
-			gridToScreenElevated(coord, this.game.session.mapElevation ?? undefined),
+			gridToScreenElevatedWithClimb(
+				coord,
+				this.game.session.mapElevation ?? undefined,
+				this.game.session.mapStaircaseClusters,
+			),
 		);
 		local.turnManager.undoMovementForRetry();
 		if (this.fogOfWarEnabled) {
@@ -1898,6 +1912,9 @@ export class MapScene implements Scene, TutorialPort {
 		this.game.session.mapStairsTiles = new Set(
 			floorData.stairsTiles.map((c) => RH.coordKey(c)),
 		);
+		this.game.session.mapStaircaseClusters = RH.detectStaircaseClusters(
+			floorData.stairsTiles,
+		);
 
 		const local = this.localUnit;
 		local.state.coord = targetCoord;
@@ -1906,9 +1923,10 @@ export class MapScene implements Scene, TutorialPort {
 		local.state.currentlyVisible = {};
 		RH.updateFogOfWar(local.state, targetCoord, this.turnsTaken, this.grid);
 
-		const screenPos = gridToScreenElevated(
+		const screenPos = gridToScreenElevatedWithClimb(
 			targetCoord,
 			this.game.session.mapElevation ?? undefined,
+			this.game.session.mapStaircaseClusters,
 		);
 		local.mercenary.setPositionInstant(screenPos);
 
@@ -2216,9 +2234,10 @@ export class MapScene implements Scene, TutorialPort {
 	private async flyMercenaryTo(coord: RH.GridCoord): Promise<void> {
 		const local = this.localUnit;
 		local.state.coord = coord;
-		const screenPos = gridToScreenElevated(
+		const screenPos = gridToScreenElevatedWithClimb(
 			coord,
 			this.game.session.mapElevation ?? undefined,
+			this.game.session.mapStaircaseClusters,
 		);
 		local.mercenary.setPositionInstant(screenPos);
 		if (this.fogOfWarEnabled) {
@@ -2279,9 +2298,10 @@ export class MapScene implements Scene, TutorialPort {
 		const destination = this.randomWalkableTile(state.coord, occupied);
 		if (!destination) return;
 		state.coord = destination;
-		const screenPos = gridToScreenElevated(
+		const screenPos = gridToScreenElevatedWithClimb(
 			destination,
 			this.game.session.mapElevation ?? undefined,
+			this.game.session.mapStaircaseClusters,
 		);
 		mercenary.setPositionInstant(screenPos);
 
@@ -2455,6 +2475,9 @@ export class MapScene implements Scene, TutorialPort {
 		this.game.session.mapTransparent = ground.transparent;
 		this.game.session.mapStairsTiles = new Set(
 			ground.stairsTiles.map((c: RH.GridCoord) => RH.coordKey(c)),
+		);
+		this.game.session.mapStaircaseClusters = RH.detectStaircaseClusters(
+			ground.stairsTiles,
 		);
 		return ground.grid;
 	}

@@ -13,6 +13,7 @@ import {
 	coordKey,
 	pickSpreadWalkableTile,
 	compileAlleywaysFloors,
+	detectStaircaseClusters,
 	ALLEYWAYS_MAP_BLUEPRINT,
 	ALLEYWAYS_MAP_FLOOR_2_BLUEPRINT,
 } from "@relic-hunter/shared";
@@ -154,6 +155,9 @@ export class LoadingOverlay implements Overlay {
 		this.game.session.mapTransparent = ground.transparent;
 		this.game.session.mapStairsTiles = new Set(
 			ground.stairsTiles.map((c) => coordKey(c)),
+		);
+		this.game.session.mapStaircaseClusters = detectStaircaseClusters(
+			ground.stairsTiles,
 		);
 		this.grid = ground.grid;
 		this.game.session.generatedGrid = this.grid;

@@ -1,5 +1,9 @@
-import type { GridCoord } from "@relic-hunter/shared";
-import { coordKey } from "@relic-hunter/shared";
+import type { GridCoord, StaircaseCluster } from "@relic-hunter/shared";
+import {
+	coordKey,
+	findStaircaseClusterAt,
+	staircaseClimbProgress,
+} from "@relic-hunter/shared";
 
 /**
  * ISO Projection math - converts between our grid coords / tile pixel space
@@ -39,6 +43,30 @@ export function gridToScreenElevated(
 	const value = elevation?.get(coordKey(coord));
 	if (value === undefined || !Number.isFinite(value)) return base;
 	return { x: base.x, y: base.y - value * ELEVATION_PX_PER_UNIT };
+}
+
+/** How far an entity visually rises over the full length of a staircase, in the same px-per-elevation-unit terms as ELEVATION_PX_PER_UNIT. Deliberately larger than a single elevation unit: for a horizontal (left-to-right) staircase, each step right also moves the tile ~TILE_HEIGHT/2 px *down* on screen from the isometric projection itself, which very nearly cancels a same-sized climb rise and made the effect invisible in practice at ELEVATION_PX_PER_UNIT. Doubled so the net rise stays clearly visible on any orientation. */
+export const STAIRCASE_CLIMB_PX = ELEVATION_PX_PER_UNIT * 2;
+
+/**
+ * Same as gridToScreenElevated, but also layers a staircase's own
+ * progressive climb on top when coord sits on one — an entity partway
+ * up a staircase rises smoothly toward STAIRCASE_CLIMB_PX by the top
+ * tile, on top of whatever elevation that specific tile already has.
+ * Omitting clusters, or a coord that isn't part of any cluster, both
+ * fall back to plain gridToScreenElevated.
+ */
+export function gridToScreenElevatedWithClimb(
+	coord: GridCoord,
+	elevation: Map<string, number> | undefined,
+	clusters: StaircaseCluster[] | undefined,
+): { x: number; y: number } {
+	const base = gridToScreenElevated(coord, elevation);
+	if (!clusters || clusters.length === 0) return base;
+	const cluster = findStaircaseClusterAt(clusters, coord);
+	if (!cluster) return base;
+	const progress = staircaseClimbProgress(cluster, coord);
+	return { x: base.x, y: base.y - progress * STAIRCASE_CLIMB_PX };
 }
 
 // Inverse of gridToScreen. Takes board-LOCAL coordinates — the caller is responsible
