@@ -1,4 +1,8 @@
-import { Container, FederatedPointerEvent, Graphics } from "pixi.js";
+import {
+	Container,
+	FederatedPointerEvent,
+	Graphics,
+} from "pixi.js";
 import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
 import { EdgeMapRenderer } from "@/rendering/EdgeMapRenderer";
@@ -16,34 +20,27 @@ const RANGE_HIGHLIGHT_COLOR = 0x4a9eff;
 const RANGE_HIGHLIGHT_ALPHA = 0.35;
 
 /**
- * Dev-only scene: the edge-based test room (EDGE_TEST_BLUEPRINT),
- * rendered with EdgeMapRenderer, plus a single movable character —
- * built specifically to test whether smooth click-to-move animation
- * still works correctly against edge-aware pathfinding
- * (computeMovementRangeWithEdges), not just whether the map renders.
- * Everything else (fog, combat, turns, elevation on this map, doors
- * as anything other than a passable edge) is deliberately out of
- * scope here.
+ * Edge-map development scene running the REAL Alleyways ground floor.
  *
- * Not part of the real game flow. To view it temporarily, swap the
- * line in main.ts:
- *   await game.start(new LandingScene(game));
- * for:
- *   await game.start(new EdgeMapTestScene(game));
- * and revert afterward — this scene is not meant to ship.
+ * This replaces EDGE_TEST_BLUEPRINT as the source map. The existing
+ * Alleyways blueprint is converted to Grid + EdgeGrid at runtime by
+ * compileAlleywaysEdgeMap().
  */
 export class EdgeMapTestScene implements Scene {
 	readonly view = new Container();
+
 	private mapContainer = new Container();
 	private highlightContainer = new Container();
 	private tokenContainer = new Container();
+
 	private renderer: EdgeMapRenderer;
 
-	private compiled!: RH.CompiledEdgeMap;
-	private rooms!: RH.Room[];
+	private compiled: RH.AlleywaysEdgeMap = RH.ALLEYWAYS_EDGE_MAP;
+	private rooms: RH.Room[] = [];
 	private currentRoom: RH.Room | null = null;
+
 	private character!: Mercenary;
-	private characterCoord: RH.GridCoord = { x: 2, y: 2 };
+	private characterCoord!: RH.GridCoord;
 	private isMoving = false;
 
 	constructor(private game: Game) {
@@ -55,17 +52,38 @@ export class EdgeMapTestScene implements Scene {
 		this.view.addChild(this.highlightContainer);
 		this.view.addChild(this.tokenContainer);
 
-		this.compiled = RH.compileEdgeMap(RH.EDGE_TEST_BLUEPRINT);
 		this.rooms = RH.detectRooms(
 			this.compiled.grid.width,
 			this.compiled.grid.height,
 			this.compiled.edges,
 		);
-		this.currentRoom = RH.findRoomAt(this.rooms, this.characterCoord);
-		this.renderer.build(this.compiled, this.currentRoom);
 
-		this.character = new Mercenary(this.characterCoord, "brawler");
+		this.characterCoord =
+			RH.findFirstWalkableTile(this.compiled.grid) ?? {
+				x: 1,
+				y: 1,
+			};
+
+		this.currentRoom = RH.findRoomAt(
+			this.rooms,
+			this.characterCoord,
+		);
+
+		this.renderer.build(
+			this.compiled,
+			this.currentRoom,
+		);
+
+		this.character = new Mercenary(
+			this.characterCoord,
+			"brawler",
+		);
+
 		this.tokenContainer.addChild(this.character.view);
+
+		const startPosition = gridToScreen(this.characterCoord);
+		this.character.view.x = startPosition.x;
+		this.character.view.y = startPosition.y;
 
 		this.view.eventMode = "static";
 		this.view.on("pointertap", this.onPointerTap);
@@ -87,11 +105,17 @@ export class EdgeMapTestScene implements Scene {
 		this.center(width, height);
 	}
 
-	private onPointerTap = (event: FederatedPointerEvent): void => {
+	private onPointerTap = (
+		event: FederatedPointerEvent,
+	): void => {
 		if (this.isMoving) return;
 
 		const local = this.mapContainer.toLocal(event.global);
-		const target = screenToGrid(local.x, local.y);
+
+		const target = screenToGrid(
+			local.x,
+			local.y,
+		);
 
 		const range = RH.computeMovementRangeWithEdges(
 			this.compiled.grid,
@@ -99,23 +123,41 @@ export class EdgeMapTestScene implements Scene {
 			this.characterCoord,
 			MOVE_BUDGET,
 		);
+
 		const key = RH.coordKey(target);
-		if (!range.has(key) || key === RH.coordKey(this.characterCoord)) return;
+
+		if (
+			!range.has(key) ||
+			key === RH.coordKey(this.characterCoord)
+		) {
+			return;
+		}
 
 		const path = RH.getPathTo(range, target);
 		if (!path || path.length === 0) return;
 
 		this.isMoving = true;
+
 		this.character
 			.moveAlongPath(path)
 			.then(() => {
 				this.characterCoord = target;
 				this.isMoving = false;
 
-				const newRoom = RH.findRoomAt(this.rooms, this.characterCoord);
-				if (newRoom?.id !== this.currentRoom?.id) {
+				const newRoom = RH.findRoomAt(
+					this.rooms,
+					this.characterCoord,
+				);
+
+				if (
+					newRoom?.id !== this.currentRoom?.id
+				) {
 					this.currentRoom = newRoom;
-					this.renderer.build(this.compiled, this.currentRoom);
+
+					this.renderer.build(
+						this.compiled,
+						this.currentRoom,
+					);
 				}
 
 				this.drawRangeHighlight();
@@ -125,20 +167,24 @@ export class EdgeMapTestScene implements Scene {
 			});
 	};
 
-	/** A simple blue-tinted diamond over every tile currently reachable — just enough feedback to see the edge-aware range actually respects the walls and door, not a full production move-preview. */
 	private drawRangeHighlight(): void {
 		this.highlightContainer.removeChildren();
+
 		const range = RH.computeMovementRangeWithEdges(
 			this.compiled.grid,
 			this.compiled.edges,
 			this.characterCoord,
 			MOVE_BUDGET,
 		);
+
 		for (const entry of range.values()) {
 			if (entry.distance === 0) continue;
-			const pos = gridToScreen(entry.coord);
-			const g = new Graphics();
-			g.poly([
+
+			const position = gridToScreen(entry.coord);
+
+			const graphic = new Graphics();
+
+			graphic.poly([
 				0,
 				-TILE_HEIGHT / 2,
 				TILE_WIDTH / 2,
@@ -148,10 +194,16 @@ export class EdgeMapTestScene implements Scene {
 				-TILE_WIDTH / 2,
 				0,
 			]);
-			g.fill({ color: RANGE_HIGHLIGHT_COLOR, alpha: RANGE_HIGHLIGHT_ALPHA });
-			g.x = pos.x;
-			g.y = pos.y;
-			this.highlightContainer.addChild(g);
+
+			graphic.fill({
+				color: RANGE_HIGHLIGHT_COLOR,
+				alpha: RANGE_HIGHLIGHT_ALPHA,
+			});
+
+			graphic.x = position.x;
+			graphic.y = position.y;
+
+			this.highlightContainer.addChild(graphic);
 		}
 	}
 
@@ -160,15 +212,20 @@ export class EdgeMapTestScene implements Scene {
 		height = this.game.app.screen.height,
 	): void {
 		const bounds = this.mapContainer.getLocalBounds();
-		const cx = width / 2 - (bounds.x + bounds.width / 2);
-		const cy = height / 2 - (bounds.y + bounds.height / 2);
-		for (const c of [
+
+		const centerX =
+			width / 2 - (bounds.x + bounds.width / 2);
+
+		const centerY =
+			height / 2 - (bounds.y + bounds.height / 2);
+
+		for (const container of [
 			this.mapContainer,
 			this.highlightContainer,
 			this.tokenContainer,
 		]) {
-			c.x = cx;
-			c.y = cy;
+			container.x = centerX;
+			container.y = centerY;
 		}
 	}
 }

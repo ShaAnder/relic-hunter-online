@@ -31,5 +31,8 @@ export * from "./world/maps/edgeMapCompiler";
 export * from "./world/maps/edgeTestBlueprint";
 export * from "./world/maps/rooms";
 
+export * from "./world/maps/alleywaysEdgeMigration";
+export * from "./world/maps/alleywaysEdgeMap";
+
 export * from "./world/movement";
 export * from "./world/placement";
