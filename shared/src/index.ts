@@ -26,6 +26,10 @@ export * from "./world/maps/alleywaysMapBlueprint";
 export * from "./world/maps/alleywaysMapFloor2Blueprint";
 export * from "./world/maps/alleywaysFloors";
 export * from "./world/maps/staircaseClusters";
+export * from "./world/edgeGrid";
+export * from "./world/maps/edgeMapCompiler";
+export * from "./world/maps/edgeTestBlueprint";
+export * from "./world/maps/rooms";
 
 export * from "./world/movement";
 export * from "./world/placement";

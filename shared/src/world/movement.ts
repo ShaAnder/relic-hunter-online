@@ -1,4 +1,5 @@
 import { Grid, coordKey, type GridCoord } from "./grid";
+import { type EdgeGrid, getEdgeBetween, edgeIsPassable } from "./edgeGrid";
 
 /**
  * Movement range computed - cost to reach and previous tile
@@ -38,6 +39,52 @@ export function computeMovementRange(
 				const key = coordKey(neighbour);
 				if (range.has(key)) continue;
 				if (!grid.isWalkable(neighbour)) continue;
+				if (blockedTiles?.has(key)) continue;
+
+				range.set(key, { coord: neighbour, distance: step, cameFrom: coord });
+				nextFrontier.push(neighbour);
+			}
+		}
+		frontier = nextFrontier;
+		if (frontier.length === 0) break;
+	}
+
+	return range;
+}
+
+/**
+ * Same BFS as computeMovementRange, but for edge-based maps: a step
+ * between two cells is blocked by checking the barrier on the edge
+ * between them (edgeIsPassable), not by checking whether the
+ * destination cell itself is a wall — every cell in an edge-based map
+ * is walkable by definition, so cell-level walkability is
+ * meaningless here. Deliberately still uniform-cost, same scoping
+ * gap as the existing tile-based elevation model: a low wall edge
+ * blocks nothing (it's passable) but doesn't yet cost the extra
+ * movement point it's meant to — that's edgeExtraMovementCost's job,
+ * not yet wired in, consistent with elevation's low-wall cost not
+ * being wired into computeMovementRange either.
+ */
+export function computeMovementRangeWithEdges(
+	grid: Grid,
+	edges: EdgeGrid,
+	start: GridCoord,
+	movementBudget: number,
+	blockedTiles?: Set<string>,
+): Map<string, MovementRangeEntry> {
+	const range = new Map<string, MovementRangeEntry>();
+	range.set(coordKey(start), { coord: start, distance: 0, cameFrom: null });
+
+	let frontier: GridCoord[] = [start];
+
+	for (let step = 1; step <= movementBudget; step++) {
+		const nextFrontier: GridCoord[] = [];
+
+		for (const coord of frontier) {
+			for (const neighbour of grid.getNeighbors(coord)) {
+				const key = coordKey(neighbour);
+				if (range.has(key)) continue;
+				if (!edgeIsPassable(getEdgeBetween(edges, coord, neighbour))) continue;
 				if (blockedTiles?.has(key)) continue;
 
 				range.set(key, { coord: neighbour, distance: step, cameFrom: coord });
