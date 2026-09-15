@@ -30,6 +30,7 @@ export * from "./world/edgeGrid";
 export * from "./world/maps/edgeMapCompiler";
 export * from "./world/maps/edgeTestBlueprint";
 export * from "./world/maps/rooms";
+export * from "./world/maps/custom";
 
 export * from "./world/movement";
 export * from "./world/placement";

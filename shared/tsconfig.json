@@ -10,6 +10,6 @@
 		"noEmit": false,
 		"skipLibCheck": true
 	},
-	"include": ["src/**/*", "../client/src/scenes/MapCreatorScene.ts"],
+	"include": ["src/**/*"],
 	"exclude": ["dist", "node_modules"]
 }

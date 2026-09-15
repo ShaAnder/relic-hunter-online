@@ -11,7 +11,7 @@ import { Button } from "@/ui/generics/Button";
 import { MainMenuScene } from "./MainMenuScene";
 import { EdgeBarrier } from "@relic-hunter/shared";
 import {
-	LocalCustomMapRepo,
+	DevFileCustomMapRepo,
 	type CustomMapRepo,
 } from "@/core/maps/CustomMapRepo";
 
@@ -123,7 +123,7 @@ export class MapCreatorScene implements Scene {
 	private statusText!: Text;
 	private zoomText!: Text;
 	private mapListContainer = new Container();
-	private repo: CustomMapRepo = new LocalCustomMapRepo();
+	private repo: CustomMapRepo = new DevFileCustomMapRepo();
 	private currentMapName: string | null = null;
 	private viewportMask = new Graphics();
 
@@ -335,12 +335,10 @@ export class MapCreatorScene implements Scene {
 			const redrawBorder = () => {
 				border.clear();
 				const selected = globalIndex === this.selectedIndex;
-				border
-					.rect(0, 0, swatchSize, swatchSize)
-					.stroke({
-						width: selected ? 3 : 1,
-						color: selected ? 0x4a9eff : 0x000000,
-					});
+				border.rect(0, 0, swatchSize, swatchSize).stroke({
+					width: selected ? 3 : 1,
+					color: selected ? 0x4a9eff : 0x000000,
+				});
 			};
 			redrawBorder();
 
@@ -723,7 +721,15 @@ export class MapCreatorScene implements Scene {
 		);
 		if (!name) return; // cancelled or empty
 
-		this.repo.save(name, this.grid);
+		try {
+			await this.repo.save(name, this.grid);
+		} catch (err) {
+			await this.confirmDialog(
+				`Couldn't save "${name}": ${err instanceof Error ? err.message : String(err)}`,
+			);
+			return;
+		}
+
 		this.currentMapName = name;
 		this.rebuildMapList();
 		this.updateStatus();
@@ -793,13 +799,22 @@ export class MapCreatorScene implements Scene {
 				fontSize: 11,
 				bgColor: 0x6e2a2a,
 				onClick: () => {
-					void this.confirmDialog(`Delete saved map "${name}"?`).then((ok) => {
-						if (!ok) return;
-						this.repo.delete(name);
-						if (this.currentMapName === name) this.currentMapName = null;
-						this.rebuildMapList();
-						this.updateStatus();
-					});
+					void this.confirmDialog(`Delete saved map "${name}"?`).then(
+						async (ok) => {
+							if (!ok) return;
+							try {
+								await this.repo.delete(name);
+							} catch (err) {
+								await this.confirmDialog(
+									`Couldn't delete "${name}": ${err instanceof Error ? err.message : String(err)}`,
+								);
+								return;
+							}
+							if (this.currentMapName === name) this.currentMapName = null;
+							this.rebuildMapList();
+							this.updateStatus();
+						},
+					);
 				},
 			});
 			deleteBtn.view.x = 270;
