@@ -1,6 +1,17 @@
 import { Container, Graphics } from "pixi.js";
-import type { Grid, GridCoord, MovementRangeEntry } from "@relic-hunter/shared";
-import { computeMovementRange, coordKey } from "@relic-hunter/shared";
+import type {
+	Grid,
+	GridCoord,
+	MovementRangeEntry,
+	EdgeGrid,
+} from "@relic-hunter/shared";
+import {
+	computeMovementRange,
+	computeMovementRangeWithEdges,
+	coordKey,
+	getEdgeBetween,
+	edgeIsPassable,
+} from "@relic-hunter/shared";
 import {
 	gridToScreenElevated,
 	TILE_WIDTH,
@@ -23,6 +34,8 @@ interface MoveControllerOptions {
 	) => void;
 	/** Per-tile elevation (session.mapElevation) — when present, the range highlight, path line, and destination glow all snap to each tile's own raised top rather than flat ground, matching how the tile itself renders. */
 	elevation?: Map<string, number>;
+	/** When set, movement uses edge barriers instead of cell walls. */
+	edges?: EdgeGrid | null;
 }
 
 /**
@@ -207,7 +220,7 @@ export class MoveController {
 		}
 
 		if (!this.isCardinalAdjacent(last, tile)) return;
-		if (!this.options.grid.isWalkable(tile)) return;
+		if (!this.canStep(last, tile)) return;
 		if (this.blocked.has(coordKey(tile))) return;
 		if (this.path.length >= this.budget) return;
 		// Allow step if reachable from tip with remaining budget
@@ -277,6 +290,35 @@ export class MoveController {
 
 	// ---------- internals ----------
 
+	private computeRange(
+		from: GridCoord,
+		budget: number,
+	): Map<string, MovementRangeEntry> {
+		const edges = this.options.edges;
+		if (edges) {
+			return computeMovementRangeWithEdges(
+				this.options.grid,
+				edges,
+				from,
+				budget,
+				this.blocked,
+			);
+		}
+		return computeMovementRange(this.options.grid, from, budget, this.blocked);
+	}
+
+	/** Walkable cell + passable edge (when edge map). */
+	private canStep(from: GridCoord, to: GridCoord): boolean {
+		if (this.options.edges) {
+			if (!edgeIsPassable(getEdgeBetween(this.options.edges, from, to))) {
+				return false;
+			}
+			// Edge maps: cells are ground; void/river already non-walkable via elevation/grid
+			return this.options.grid.isWalkable(to);
+		}
+		return this.options.grid.isWalkable(to);
+	}
+
 	private commitPending(): boolean {
 		if (this.phase !== "previewLocked" || this.path.length === 0) return false;
 		if (this.options.mercenary.isAnimating) return false;
@@ -289,12 +331,9 @@ export class MoveController {
 	}
 
 	private seedPathTo(tile: GridCoord): void {
-		// Prefer path through current tip range; fall back to unit-origin range
-		const fromUnit = computeMovementRange(
-			this.options.grid,
+		const fromUnit = this.computeRange(
 			this.options.getMercenaryCoord(),
 			this.budget,
-			this.blocked,
 		);
 		const seeded = this.pathFromRangeMap(fromUnit, tile);
 		this.path = seeded ?? [];
@@ -304,21 +343,14 @@ export class MoveController {
 	private isInFullRange(tile: GridCoord): boolean {
 		const start = this.options.getMercenaryCoord();
 		if (tile.x === start.x && tile.y === start.y) return true;
-		const full = computeMovementRange(
-			this.options.grid,
-			start,
-			this.budget,
-			this.blocked,
-		);
+		const full = this.computeRange(start, this.budget);
 		return full.has(coordKey(tile));
 	}
 
 	private rebuildRangeFromUnit(): void {
-		this.movementRange = computeMovementRange(
-			this.options.grid,
+		this.movementRange = this.computeRange(
 			this.options.getMercenaryCoord(),
 			this.budget,
-			this.blocked,
 		);
 		this.renderRange();
 	}
@@ -327,12 +359,7 @@ export class MoveController {
 		const start = this.options.getMercenaryCoord();
 		const tip = this.path.length > 0 ? this.path[this.path.length - 1] : start;
 		const remaining = Math.max(0, this.budget - this.path.length);
-		this.movementRange = computeMovementRange(
-			this.options.grid,
-			tip,
-			remaining,
-			this.blocked,
-		);
+		this.movementRange = this.computeRange(tip, remaining);
 		this.renderRange();
 	}
 

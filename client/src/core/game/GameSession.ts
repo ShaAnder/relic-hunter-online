@@ -12,20 +12,16 @@ import type {
 } from "@relic-hunter/shared";
 import { createSeededRandom } from "@relic-hunter/shared";
 
+export type SelectedMapId =
+	| { type: "builtin"; id: "alleyways" }
+	| { type: "custom"; id: string };
+
 export interface MissionParams {
-	/**
-	 * Dev toggle for now — surfaced in mission select purely for testing
-	 * with fog off. Once custom maps exist, this becomes a genuine
-	 * per-map option rather than a global dev switch.
-	 */
+	// Dev toggle for now
 	fogOfWarEnabled?: boolean;
-	/** Which map loads. Only one exists right now — the hand-drawn ALLEYWAYS_MAP_BLUEPRINT — kept as a field rather than removed so adding a second hand-drawn map later doesn't need a structural change. Procedural generation (dungeon, backstreets) was removed in favor of pre-drawn maps as the more reliable approach. */
+	selectedMap?: SelectedMapId;
 	mapType?: "alleyways";
 }
-
-export const TEST_MAP_DIMENSIONS = { width: 35, height: 35 };
-/** Was temporarily increased to 65x65 to work around alley density — reverted. The actual fix was too-generous alley widths and branch lengths, not map size; see backstreetsGeneration.ts defaults. Kept as a separate constant in case backstreets ever wants independent tuning from the dungeon size, but currently matches it. */
-export const BACKSTREETS_MAP_DIMENSIONS = { width: 35, height: 35 };
 
 export interface TurnOrderEntry {
 	id: string;
@@ -72,23 +68,16 @@ export class GameSession {
 	mapSeed: number | null = null;
 	relicFound = false;
 	bossSpawned = false;
+	mapEdges: import("@relic-hunter/shared").EdgeGrid | null = null;
 
 	/**
-	 * Seed for all match-affecting randomness — combat rolls, AI
-	 * decisions, loot/chest placement, card shuffling, monster
-	 * spawning. Deliberately separate from mapSeed (terrain layout
-	 * only) so the two don't become accidentally coupled — the same
-	 * mapSeed producing the same layout should not also force the
-	 * same combat outcomes.
+	 * Seed for all match-affecting randomness
 	 */
 	matchSeed: number | null = null;
 	private _rng: RandomFn | null = null;
 
 	/**
-	 * The one seeded RNG for this match's gameplay randomness. Created
-	 * lazily from matchSeed on first access and cached — every caller
-	 * gets the same ongoing sequence, not a fresh one each time.
-	 * matchSeed must be set before this is first read.
+	 * The one seeded RNG for this match's gameplay randomness.
 	 */
 	get rng(): RandomFn {
 		if (!this._rng) {
@@ -112,21 +101,21 @@ export class GameSession {
 	 */
 	chestPlacements: PlacedChestRecord[] | null = null;
 
-	/** Player spawn chosen once in LoadingOverlay (same reason as above). */
+	// Player spawn chosen once in LoadingOverlay
 	playerSpawn: GridCoord | null = null;
-	/** The map itself, generated once in LoadingOverlay — spawn, chests, and everything else are planned against this exact grid, so MapScene must read this rather than regenerate its own (even with the same seed, two independent generation calls are two different maps in practice). Null only before LoadingOverlay runs, or for tutorial maps which build their own fixed debug grid instead. */
+	// The map itself, generated once in LoadingOverlay
 	generatedGrid: Grid | null = null;
-	/** Per-tile elevation for the current map, keyed by coordKey — see elevation-rules.md. Not yet consumed by movement cost or line-of-sight; that's a separate, later pass. */
+	// Per-tile elevation for the current map
 	mapElevation: Map<string, number> | null = null;
-	/** Per-tile transparency for the current map, keyed by coordKey. */
+	// Per-tile transparency for the current map, keyed by coordKey.
 	mapTransparent: Map<string, boolean> | null = null;
-	/** Coord keys of every stairs tile on the current map, for the renderer's distinct stepped-slope visual. */
+	// Coord keys of every stairs tile on the current map
 	mapStairsTiles: Set<string> | null = null;
-	/** All compiled floors of the current map plus the staircase links between them (see alleywaysFloors.ts) — null for maps with only one floor, or before LoadingOverlay runs. */
+	// All compiled floors of the current map plus the staircase links between them
 	mapFloors: CompiledAlleywaysFloors | null = null;
-	/** Index into mapFloors.floors the local player is currently on. Always 0 for single-floor maps. */
+	// Index into mapFloors.floors
 	localPlayerFloor = 0;
-	/** Staircase clusters (grouped tiles + climb direction/progress) for the currently-active floor only — recomputed on floor switch. */
+	// Staircase clusters
 	mapStaircaseClusters: StaircaseCluster[] = [];
 	participants: MatchParticipant[] | null = null;
 	turnOrder: TurnOrderEntry[] | null = null;

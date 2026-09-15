@@ -3,6 +3,7 @@ import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
 import { CameraController } from "@/core/cameras/CameraController";
 import { MapRenderer } from "@/rendering/MapRenderer";
+import { EdgeMapRenderer } from "@/rendering/EdgeMapRenderer";
 import {
 	gridToScreen,
 	gridToScreenElevatedWithClimb,
@@ -24,7 +25,7 @@ import {
 import { MoveController } from "@/systems/MoveController";
 import { TurnManager } from "@/systems/TurnManager";
 import { Hand } from "@/ui/Hand";
-import { HunterScoreEntry, TEST_MAP_DIMENSIONS } from "@/core/game/GameSession";
+import { HunterScoreEntry } from "@/core/game/GameSession";
 import type {
 	TutorialConfig,
 	TutorialUiPointerTarget,
@@ -125,6 +126,7 @@ export class MapScene implements Scene, TutorialPort {
 	// selection actually does something.
 	private mapWidth: number;
 	private mapHeight: number;
+	private edgeMapRenderer: EdgeMapRenderer | null = null;
 
 	private tutorialConfig: TutorialConfig | null;
 	/** Lazily constructed — only tutorials ever need dialogue. */
@@ -153,19 +155,29 @@ export class MapScene implements Scene, TutorialPort {
 	 * actual bug behind "finding the target reveals everything").
 	 */
 	private rebuildMapRenderWithFog(): void {
+		if (this.game.session.mapEdges && this.edgeMapRenderer) {
+			const compiled: RH.CompiledEdgeMap = {
+				grid: this.grid,
+				edges: this.game.session.mapEdges,
+				elevation: this.game.session.mapElevation ?? new Map(),
+			};
+			const rooms = RH.detectRooms(
+				this.grid.width,
+				this.grid.height,
+				this.game.session.mapEdges,
+			);
+			const focus = RH.findRoomAt(rooms, this.localUnit.state.coord);
+			this.edgeMapRenderer.build(compiled, focus);
+			return;
+		}
+
 		this.mapRenderer.build(
 			this.grid,
 			0,
 			this.game.session.mapElevation ?? undefined,
 			this.game.session.mapStairsTiles ?? undefined,
 		);
-		if (this.fogOfWarEnabled) {
-			this.mapRenderer.updateFogVisibility(
-				this.localUnit.state,
-				this.localUnit.state.coord,
-				this.turnsTaken,
-			);
-		}
+		this.updateLegacyFog(this.localUnit.state, this.localUnit.state.coord);
 	}
 
 	/**
@@ -185,11 +197,7 @@ export class MapScene implements Scene, TutorialPort {
 			this.turnsTaken,
 			this.grid,
 		);
-		this.mapRenderer.updateFogVisibility(
-			this.localUnit.state,
-			this.localUnit.state.coord,
-			this.turnsTaken,
-		);
+		this.updateLegacyFog(this.localUnit.state, this.localUnit.state.coord);
 	}
 
 	private get localUnit(): PilotedMercenary {
@@ -230,7 +238,7 @@ export class MapScene implements Scene, TutorialPort {
 
 		// Dimensions come from the mission/LoadingScene setup, unless a
 		// tutorial config supplies its own small, fixed debug map.
-		const dims = tutorialConfig?.script.debugMap ?? TEST_MAP_DIMENSIONS;
+		const dims = tutorialConfig?.script.debugMap ?? { width: 1, height: 1 };
 		this.mapWidth = dims.width;
 		this.mapHeight = dims.height;
 
@@ -324,6 +332,9 @@ export class MapScene implements Scene, TutorialPort {
 			this.camera,
 			this.game,
 		);
+		if (this.game.session.mapEdges) {
+			this.edgeMapRenderer = new EdgeMapRenderer(this.tilesContainer);
+		}
 
 		this.applyCameraBounds();
 
@@ -443,19 +454,7 @@ export class MapScene implements Scene, TutorialPort {
 	/** Render the map, center the camera, and wire up input. */
 	onEnter(): void {
 		this.game.audio.playMusic("map");
-		this.mapRenderer.build(
-			this.grid,
-			0,
-			this.game.session.mapElevation ?? undefined,
-			this.game.session.mapStairsTiles ?? undefined,
-		);
-		if (this.fogOfWarEnabled) {
-			this.mapRenderer.updateFogVisibility(
-				this.localUnit.state,
-				this.localUnit.state.coord,
-				this.turnsTaken,
-			);
-		}
+		this.rebuildMapRenderWithFog();
 		this.centerCameraOnActiveHunter();
 		this.camera.attach(this.game.app.canvas);
 		this.hand.syncFromHand(this.localUnit.state.hand);
@@ -595,11 +594,7 @@ export class MapScene implements Scene, TutorialPort {
 				this.turnsTaken,
 				this.grid,
 			);
-			this.mapRenderer.updateFogVisibility(
-				this.localUnit.state,
-				liveCoord,
-				this.turnsTaken,
-			);
+			this.updateLegacyFog(this.localUnit.state, liveCoord);
 		}
 
 		this.hand.update(deltaTime);
@@ -611,10 +606,12 @@ export class MapScene implements Scene, TutorialPort {
 		// mid-walk. AI-controlled units are deliberately out of scope
 		// here per current design — see MapRenderer.updateWallOcclusion
 		// for the full rationale.
-		this.mapRenderer.updateWallOcclusion({
-			x: this.localUnit.mercenary.view.x,
-			y: this.localUnit.mercenary.view.y,
-		});
+		if (!this.game.session.mapEdges) {
+			this.mapRenderer.updateWallOcclusion({
+				x: this.localUnit.mercenary.view.x,
+				y: this.localUnit.mercenary.view.y,
+			});
+		}
 
 		// PASS 4 TODO: still assumes exactly one local unit ever needs the
 		// camera to follow it — real judgment call, deferred deliberately.
@@ -1581,13 +1578,7 @@ export class MapScene implements Scene, TutorialPort {
 			this.grid,
 		);
 		RH.pruneDecayedTiles(this.localUnit.state, this.turnsTaken);
-		if (this.fogOfWarEnabled) {
-			this.mapRenderer.updateFogVisibility(
-				this.localUnit.state,
-				this.localUnit.state.coord,
-				this.turnsTaken,
-			);
-		}
+		this.updateLegacyFog(this.localUnit.state, this.localUnit.state.coord);
 		this.tutorialConfig?.onTutorialEvent({ type: "turnEnded" });
 		this.trySpawnMonster();
 		void this.aiTurnController.processEnemyTurns();
@@ -1871,7 +1862,7 @@ export class MapScene implements Scene, TutorialPort {
 		local.turnManager.undoMovementForRetry();
 		if (this.fogOfWarEnabled) {
 			RH.updateFogOfWar(local.state, coord, this.turnsTaken, this.grid);
-			this.mapRenderer.updateFogVisibility(local.state, coord, this.turnsTaken);
+			this.updateLegacyFog(local.state, coord);
 		}
 		this.syncUI();
 	}
@@ -1930,19 +1921,7 @@ export class MapScene implements Scene, TutorialPort {
 		);
 		local.mercenary.setPositionInstant(screenPos);
 
-		this.mapRenderer.build(
-			this.grid,
-			0,
-			this.game.session.mapElevation ?? undefined,
-			this.game.session.mapStairsTiles ?? undefined,
-		);
-		if (this.fogOfWarEnabled) {
-			this.mapRenderer.updateFogVisibility(
-				local.state,
-				targetCoord,
-				this.turnsTaken,
-			);
-		}
+		this.rebuildMapRenderWithFog();
 		this.camera.centerOn(
 			screenPos,
 			this.game.app.screen.width,
@@ -2242,7 +2221,7 @@ export class MapScene implements Scene, TutorialPort {
 		local.mercenary.setPositionInstant(screenPos);
 		if (this.fogOfWarEnabled) {
 			RH.updateFogOfWar(local.state, coord, this.turnsTaken, this.grid);
-			this.mapRenderer.updateFogVisibility(local.state, coord, this.turnsTaken);
+			this.updateLegacyFog(local.state, coord);
 		}
 		await this.camera.panTo(
 			screenPos,
@@ -2308,14 +2287,9 @@ export class MapScene implements Scene, TutorialPort {
 		if (this.fogOfWarEnabled) {
 			RH.updateFogOfWar(state, destination, this.turnsTaken, this.grid);
 			if (state === this.localUnit.state) {
-				this.mapRenderer.updateFogVisibility(
-					state,
-					destination,
-					this.turnsTaken,
-				);
+				this.updateLegacyFog(state, destination);
 			}
 		}
-
 		const isLocal = state === this.localUnit.state;
 		const canSeeDestination =
 			isLocal ||
@@ -2359,7 +2333,14 @@ export class MapScene implements Scene, TutorialPort {
 				ignoresZoc: boolean,
 			) => this.onMoveCommitted(target, path, ignoresZoc),
 			elevation: this.game.session.mapElevation ?? undefined,
+			edges: this.game.session.mapEdges ?? null,
 		});
+	}
+
+	private updateLegacyFog(state: RH.MercenaryState, coord: RH.GridCoord): void {
+		if (!this.fogOfWarEnabled) return;
+		if (this.game.session.mapEdges) return;
+		this.mapRenderer.updateFogVisibility(state, coord, this.turnsTaken);
 	}
 
 	/** [R] dev shortcut: resets chests/units/hands locally without a LoadingScene round-trip. The map itself is a fixed, hand-drawn blueprint now (no seed to vary), so this re-fetches the same layout — what actually changes is everything placed on top of it. */
@@ -2409,12 +2390,7 @@ export class MapScene implements Scene, TutorialPort {
 		// on-top position, the same invariant the constructor sets up.
 		this.boardContainer.addChild(this.mercenaryContainer);
 
-		this.mapRenderer.build(
-			this.grid,
-			0,
-			this.game.session.mapElevation ?? undefined,
-			this.game.session.mapStairsTiles ?? undefined,
-		);
+		this.rebuildMapRenderWithFog();
 		this.mapRenderer.centerCamera();
 		this.syncUI();
 	}
@@ -2479,6 +2455,7 @@ export class MapScene implements Scene, TutorialPort {
 		this.game.session.mapStaircaseClusters = RH.detectStaircaseClusters(
 			ground.stairsTiles,
 		);
+		this.game.session.mapEdges = null;
 		return ground.grid;
 	}
 

@@ -5,6 +5,8 @@ import { Button } from "@/ui/generics/Button";
 import { computeFitScale } from "@/math/fitScale";
 import { LobbyScene } from "./LobbyScene";
 import { LoadingOverlay } from "@/ui/overlay/LoadingOverlay";
+import { CUSTOM_MAPS } from "@relic-hunter/shared";
+import { SelectedMapId } from "@/core/game/GameSession";
 
 /**
  * Per-match config. Only one map exists right now — the hand-drawn
@@ -20,6 +22,9 @@ import { LoadingOverlay } from "@/ui/overlay/LoadingOverlay";
 export class MissionSelectScene implements Scene {
 	readonly view = new Container();
 	private content = new Container();
+
+	private selectedMap: SelectedMapId = { type: "custom", id: "" };
+	private mapButtons: Button[] = [];
 
 	private title!: Text;
 	private mapLabel!: Text;
@@ -48,6 +53,40 @@ export class MissionSelectScene implements Scene {
 		this.layout(width, height);
 	}
 
+	private buildMapList(): void {
+		const maps: { id: SelectedMapId; label: string }[] = [
+			...CUSTOM_MAPS.map((m) => ({
+				id: { type: "custom" as const, id: m.name },
+				label: m.name,
+			})),
+		];
+
+		if (maps.length === 0) {
+			this.mapLabel.text = "No maps saved yet";
+			return;
+		}
+
+		// default to first
+		this.selectedMap = maps[0].id;
+		this.mapLabel.text = maps[0].label;
+
+		maps.forEach((m, i) => {
+			const btn = new Button({
+				text: m.label,
+				width: 260,
+				height: 36,
+				fontSize: 14,
+				onClick: () => {
+					this.selectedMap = m.id;
+					this.mapLabel.text = m.label;
+				},
+			});
+			btn.view.y = 80 + i * 42;
+			this.content.addChild(btn.view);
+			this.mapButtons.push(btn);
+		});
+	}
+
 	private buildUI(): void {
 		this.view.addChild(this.content);
 
@@ -58,10 +97,12 @@ export class MissionSelectScene implements Scene {
 		this.content.addChild(this.title);
 
 		this.mapLabel = new Text({
-			text: "Alleyways",
+			text: "",
 			style: { fill: 0x88ccff, fontSize: 20 },
 		});
 		this.content.addChild(this.mapLabel);
+
+		this.buildMapList();
 
 		this.fogToggleBtn = new Button({
 			text: "Fog of War: ON",
@@ -105,7 +146,7 @@ export class MissionSelectScene implements Scene {
 	private onStart(): void {
 		this.game.session.missionParams = {
 			fogOfWarEnabled: this.fogOfWarEnabled,
-			mapType: "alleyways",
+			selectedMap: this.selectedMap,
 		};
 		void this.game.overlays.show(new LoadingOverlay(this.game));
 	}

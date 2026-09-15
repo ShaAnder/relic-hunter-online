@@ -8,14 +8,16 @@ import {
 import {
 	type Grid,
 	type GridCoord,
+	compileEdgeMap,
+	compileAlleywaysFloors,
+	CUSTOM_MAPS,
+	ALLEYWAYS_MAP_BLUEPRINT,
+	ALLEYWAYS_MAP_FLOOR_2_BLUEPRINT,
+	detectStaircaseClusters,
 	findFirstWalkableTile,
 	planChests,
 	coordKey,
 	pickSpreadWalkableTile,
-	compileAlleywaysFloors,
-	detectStaircaseClusters,
-	ALLEYWAYS_MAP_BLUEPRINT,
-	ALLEYWAYS_MAP_FLOOR_2_BLUEPRINT,
 } from "@relic-hunter/shared";
 import { MapScene } from "@/scenes/MapScene";
 
@@ -143,24 +145,49 @@ export class LoadingOverlay implements Overlay {
 		this.game.session.mapSeed = seed;
 		this.game.session.matchSeed = Math.floor(Math.random() * 1_000_000);
 
-		const floors = compileAlleywaysFloors([
-			ALLEYWAYS_MAP_BLUEPRINT,
-			ALLEYWAYS_MAP_FLOOR_2_BLUEPRINT,
-		]);
-		this.game.session.mapFloors = floors;
-		this.game.session.localPlayerFloor = 0;
+		const choice = this.game.session.missionParams?.selectedMap;
 
-		const ground = floors.floors[0];
-		this.game.session.mapElevation = ground.elevation;
-		this.game.session.mapTransparent = ground.transparent;
-		this.game.session.mapStairsTiles = new Set(
-			ground.stairsTiles.map((c) => coordKey(c)),
-		);
-		this.game.session.mapStaircaseClusters = detectStaircaseClusters(
-			ground.stairsTiles,
-		);
-		this.grid = ground.grid;
-		this.game.session.generatedGrid = this.grid;
+		if (choice?.type === "custom") {
+			const entry = CUSTOM_MAPS.find((m) => m.name === choice.id);
+			if (!entry) {
+				throw new Error(`Custom map "${choice.id}" not found in CUSTOM_MAPS`);
+			}
+
+			const compiled = compileEdgeMap(entry.blueprint);
+
+			this.grid = compiled.grid;
+			this.game.session.generatedGrid = compiled.grid;
+			this.game.session.mapEdges = compiled.edges;
+			this.game.session.mapElevation = compiled.elevation;
+
+			// Edge maps currently have no multi-floor / stairs data
+			this.game.session.mapTransparent = null;
+			this.game.session.mapStairsTiles = null;
+			this.game.session.mapFloors = null;
+			this.game.session.mapStaircaseClusters = [];
+			this.game.session.localPlayerFloor = 0;
+		} else {
+			// Legacy Alleyways (cell-based barriers) — keep until fully retired
+			const floors = compileAlleywaysFloors([
+				ALLEYWAYS_MAP_BLUEPRINT,
+				ALLEYWAYS_MAP_FLOOR_2_BLUEPRINT,
+			]);
+			this.game.session.mapFloors = floors;
+			this.game.session.localPlayerFloor = 0;
+
+			const ground = floors.floors[0];
+			this.game.session.mapElevation = ground.elevation;
+			this.game.session.mapTransparent = ground.transparent;
+			this.game.session.mapStairsTiles = new Set(
+				ground.stairsTiles.map((c) => coordKey(c)),
+			);
+			this.game.session.mapStaircaseClusters = detectStaircaseClusters(
+				ground.stairsTiles,
+			);
+			this.grid = ground.grid;
+			this.game.session.generatedGrid = this.grid;
+			this.game.session.mapEdges = null;
+		}
 	}
 
 	/**
