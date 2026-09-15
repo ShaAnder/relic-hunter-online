@@ -63,6 +63,51 @@ export class LocalCustomMapRepo implements CustomMapRepo {
 	}
 }
 
+export class DualWriteCustomMapRepo implements CustomMapRepo {
+	constructor(
+		private primary: CustomMapRepo, // DevFileCustomMapRepo in dev
+		private cache: CustomMapRepo, // LocalCustomMapRepo
+	) {}
+
+	async save(name: string, blueprint: number[][]): Promise<void> {
+		// Always write the offline browser copy first so offline play
+		// never depends on the file write succeeding.
+		await this.cache.save(name, blueprint);
+
+		// Then the real file (dev) / future cloud write.
+		// If this fails we still have the localStorage copy.
+		try {
+			await this.primary.save(name, blueprint);
+		} catch (err) {
+			// Re-throw so the UI can still show "file save failed"
+			// but the offline copy is already safe.
+			throw err;
+		}
+	}
+
+	list(): string[] {
+		// Prefer the union of both so a just-saved map appears even
+		// before HMR / registry refresh.
+		const a = this.primary.list();
+		const b = this.cache.list();
+		return [...new Set([...a, ...b])].sort();
+	}
+
+	load(name: string): number[][] | null {
+		// Prefer the primary (file/registry), fall back to localStorage.
+		return this.primary.load(name) ?? this.cache.load(name);
+	}
+
+	async delete(name: string): Promise<void> {
+		await this.cache.delete(name);
+		try {
+			await this.primary.delete(name);
+		} catch (err) {
+			throw err;
+		}
+	}
+}
+
 /**
  * Local-dev-server-backed implementation: save/delete POST/DELETE to
  * the Vite dev server's own save-custom-map middleware, which writes

@@ -12,6 +12,8 @@ import { MainMenuScene } from "./MainMenuScene";
 import { EdgeBarrier } from "@relic-hunter/shared";
 import {
 	DevFileCustomMapRepo,
+	DualWriteCustomMapRepo,
+	LocalCustomMapRepo,
 	type CustomMapRepo,
 } from "@/core/maps/CustomMapRepo";
 
@@ -123,7 +125,10 @@ export class MapCreatorScene implements Scene {
 	private statusText!: Text;
 	private zoomText!: Text;
 	private mapListContainer = new Container();
-	private repo: CustomMapRepo = new DevFileCustomMapRepo();
+	private repo: CustomMapRepo = new DualWriteCustomMapRepo(
+		new DevFileCustomMapRepo(),
+		new LocalCustomMapRepo(),
+	);
 	private currentMapName: string | null = null;
 	private viewportMask = new Graphics();
 
