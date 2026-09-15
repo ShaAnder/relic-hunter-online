@@ -7,6 +7,7 @@ import { CharacterCreationScene } from "./CharacterCreationScene";
 import { LoadGameScene } from "./LoadGameScene";
 import { TutorialsMenuScene } from "./TutorialScene";
 import { SettingsScene } from "./SettingsScene";
+import { MapCreatorScene } from "./MapCreatorScene";
 
 /**
  * Top-level menu after the eventual Landing "Press Start".
@@ -75,6 +76,14 @@ export class MainMenuScene implements Scene {
 				label: "Settings",
 				action: () => {
 					void this.game.sceneManager.changeScene(new SettingsScene(this.game));
+				},
+			},
+			{
+				label: "Map Creator",
+				action: () => {
+					void this.game.sceneManager.changeScene(
+						new MapCreatorScene(this.game),
+					);
 				},
 			},
 		];

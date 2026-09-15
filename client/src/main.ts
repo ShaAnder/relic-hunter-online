@@ -1,6 +1,5 @@
 import { Game } from "./core/game/Game";
 import { LandingScene } from "@/scenes/LandingScene";
-import { EdgeMapTestScene } from "./scenes/EdgeMapTestScene";
 import "@/style.css";
 
 /** Best-effort only — no effect on iOS Safari, and only works in fullscreen on the browsers that do support it. The CSS rotate-prompt is what actually guarantees landscape everywhere. */
@@ -40,7 +39,7 @@ async function bootStrap() {
 	setupHomeScreenHint();
 
 	const game = await Game.create(container);
-	await game.start(new EdgeMapTestScene(game));
+	await game.start(new LandingScene(game));
 }
 
 bootStrap().catch(console.error);
