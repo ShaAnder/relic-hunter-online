@@ -448,8 +448,27 @@ export class EdgeMapRenderer {
 			? baseHeight * FOCUSED_WALL_HEIGHT_FRACTION
 			: baseHeight;
 
-		const elevationPx =
-			(compiled.elevation.get(`${coord.x},${coord.y}`) ?? 0) * TILE_HEIGHT;
+		// Elevation is used purely to position the wall visually at the
+		// correct height on screen - it should reflect real, walkable
+		// ground, not whichever cell happened to be "coord" for this
+		// loop iteration. Void's elevation is Infinity (see
+		// edgeMapCompiler's TILE_ELEVATION), and "coord" is always the
+		// west/north cell of the pair - for any wall sitting on the
+		// map's outermost boundary, that's exactly the void side. An
+		// Infinite elevationPx collapsed every corner of the wall to
+		// y=-Infinity, silently drawing it off-screen with no error -
+		// not hidden by any visibility check, just geometrically
+		// broken. Falls back to "other"'s elevation, and to 0 (floor
+		// height) only if genuinely neither side has finite elevation.
+		const coordElevation = compiled.elevation.get(`${coord.x},${coord.y}`);
+		const otherElevation = compiled.elevation.get(`${other.x},${other.y}`);
+		const usableElevation =
+			coordElevation !== undefined && Number.isFinite(coordElevation)
+				? coordElevation
+				: Number.isFinite(otherElevation)
+					? otherElevation
+					: 0;
+		const elevationPx = (usableElevation ?? 0) * TILE_HEIGHT;
 		const corners = this.trueTileCorners(coord, elevationPx);
 		const [b1, b2] =
 			dir === "E"
