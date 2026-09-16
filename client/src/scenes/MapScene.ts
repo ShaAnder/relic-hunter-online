@@ -154,20 +154,21 @@ export class MapScene implements Scene, TutorialPort {
 	 * it silently reveals the whole map for a frame (this was the
 	 * actual bug behind "finding the target reveals everything").
 	 */
-	private rebuildMapRenderWithFog(): void {
+	private rebuildMapRenderWithFog(liveCoordOverride?: RH.GridCoord): void {
 		if (this.game.session.mapEdges && this.edgeMapRenderer) {
 			const compiled: RH.CompiledEdgeMap = {
 				grid: this.grid,
 				edges: this.game.session.mapEdges,
 				elevation: this.game.session.mapElevation ?? new Map(),
 			};
+			const playerCoord = liveCoordOverride ?? this.localUnit.state.coord;
 			const rooms = RH.detectRooms(this.grid, this.game.session.mapEdges);
-			const currentRoom = RH.findRoomAt(rooms, this.localUnit.state.coord);
+			const currentRoom = RH.findRoomAt(rooms, playerCoord);
 			const focus = this.focusRoomFor(currentRoom, rooms);
 			const fog = this.fogOfWarEnabled
 				? {
 						state: this.localUnit.state,
-						center: this.localUnit.state.coord,
+						center: playerCoord,
 						turn: this.turnsTaken,
 					}
 				: null;
@@ -2416,7 +2417,7 @@ export class MapScene implements Scene, TutorialPort {
 	private updateLegacyFog(state: RH.MercenaryState, coord: RH.GridCoord): void {
 		if (!this.fogOfWarEnabled) return;
 		if (this.game.session.mapEdges) {
-			if (state === this.localUnit.state) this.rebuildMapRenderWithFog();
+			if (state === this.localUnit.state) this.rebuildMapRenderWithFog(coord);
 			return;
 		}
 		this.mapRenderer.updateFogVisibility(state, coord, this.turnsTaken);
