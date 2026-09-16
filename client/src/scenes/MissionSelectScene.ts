@@ -5,7 +5,7 @@ import { Button } from "@/ui/generics/Button";
 import { computeFitScale } from "@/math/fitScale";
 import { LobbyScene } from "./LobbyScene";
 import { LoadingOverlay } from "@/ui/overlay/LoadingOverlay";
-import { CUSTOM_MAPS } from "@relic-hunter/shared";
+import { missionCustomMapRepo } from "@/core/maps/missionCustomMapRepo";
 import { SelectedMapId } from "@/core/game/GameSession";
 
 /**
@@ -54,12 +54,12 @@ export class MissionSelectScene implements Scene {
 	}
 
 	private buildMapList(): void {
-		const maps: { id: SelectedMapId; label: string }[] = [
-			...CUSTOM_MAPS.map((m) => ({
-				id: { type: "custom" as const, id: m.name },
-				label: m.name,
-			})),
-		];
+		const maps: { id: SelectedMapId; label: string }[] = missionCustomMapRepo
+			.list()
+			.map((name) => ({
+				id: { type: "custom" as const, id: name },
+				label: name,
+			}));
 
 		if (maps.length === 0) {
 			this.mapLabel.text = "No maps saved yet";

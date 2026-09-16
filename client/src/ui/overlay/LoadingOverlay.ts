@@ -10,7 +10,6 @@ import {
 	type GridCoord,
 	compileEdgeMap,
 	compileAlleywaysFloors,
-	CUSTOM_MAPS,
 	ALLEYWAYS_MAP_BLUEPRINT,
 	ALLEYWAYS_MAP_FLOOR_2_BLUEPRINT,
 	detectStaircaseClusters,
@@ -20,6 +19,7 @@ import {
 	pickSpreadWalkableTile,
 } from "@relic-hunter/shared";
 import { MapScene } from "@/scenes/MapScene";
+import { missionCustomMapRepo } from "@/core/maps/missionCustomMapRepo";
 
 // Total loading-bar duration — split across the real setup steps below,
 // so the bar fills smoothly over roughly this long rather than jumping
@@ -148,12 +148,12 @@ export class LoadingOverlay implements Overlay {
 		const choice = this.game.session.missionParams?.selectedMap;
 
 		if (choice?.type === "custom") {
-			const entry = CUSTOM_MAPS.find((m) => m.name === choice.id);
-			if (!entry) {
-				throw new Error(`Custom map "${choice.id}" not found in CUSTOM_MAPS`);
+			const blueprint = missionCustomMapRepo.load(choice.id);
+			if (!blueprint) {
+				throw new Error(`Custom map "${choice.id}" not found`);
 			}
 
-			const compiled = compileEdgeMap(entry.blueprint);
+			const compiled = compileEdgeMap(blueprint);
 
 			this.grid = compiled.grid;
 			this.game.session.generatedGrid = compiled.grid;
