@@ -1,16 +1,10 @@
 /**
- * Map drawn with the in-game Map Creator.
- * Double-resolution format: tiles on even,even positions (see
- * TileCode in MapCreatorScene.ts / EdgeMapTileCode in
- * edgeMapCompiler.ts), edges on odd,even and even,odd positions (see
- * EdgeBarrier in edgeGrid.ts). Odd,odd positions are always 0 — no
- * diagonal walls.
- *
- * Compiles directly with compileEdgeMap() from this package, no
- * separate conversion step needed.
+ * Custom map saved from the in-game Map Creator.
+ * Double-resolution format — compiles directly with compileEdgeMap()
+ * from this package. See MapCreatorScene.ts for the code scheme.
  */
-export const alleyways_Name = "Alleyways";
-export const ALLEYWAYS_BLUEPRINT: number[][] = [
+export const Alleyways_NAME = "Alleyways";
+export const Alleyways_BLUEPRINT: number[][] = [
 	[
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,

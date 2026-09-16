@@ -1,6 +1,8 @@
 import type { GridCoord } from "./grid";
 import type { Grid } from "./grid";
 import { coordKey } from "./grid";
+import type { EdgeGrid } from "./edgeGrid";
+import { getEdgeBetween, edgeBlocksVision } from "./edgeGrid";
 
 /** How far unit can see around itself in tiles */
 export const FOG_SIGHT_RANGE = 6;
@@ -51,16 +53,20 @@ export function tilesInSightRange(
 
 /**
  * Walks a straight line from `from` toward `to` (Bresenham), stopping
- * the instant it crosses a vision-blocking tile before reaching the
- * destination. The destination tile itself is never checked — you can
- * see a wall, just not through it to whatever's on the far side. This
- * is what actually stops "seeing through walls" along a corridor: raw
- * distance alone has no concept of what's physically in the way.
+ * the instant it crosses a vision-blocking barrier before reaching the
+ * destination. The destination tile itself is never checked as a cell
+ * wall — you can see a wall, just not through it.
+ *
+ * When `edges` is provided (EdgeGrid maps), vision is blocked by
+ * edgeBlocksVision on the edge between consecutive cells along the ray.
+ * When `edges` is omitted, behavior is unchanged: grid.blocksVision on
+ * intermediate cells.
  */
 function hasClearLineOfSight(
 	grid: Grid,
 	from: GridCoord,
 	to: GridCoord,
+	edges?: EdgeGrid | null,
 ): boolean {
 	let x0 = from.x;
 	let y0 = from.y;
@@ -73,6 +79,7 @@ function hasClearLineOfSight(
 	let err = dx - dy;
 
 	while (x0 !== x1 || y0 !== y1) {
+		const prev = { x: x0, y: y0 };
 		const e2 = 2 * err;
 		if (e2 > -dy) {
 			err -= dy;
@@ -83,7 +90,11 @@ function hasClearLineOfSight(
 			y0 += sy;
 		}
 		const reachedDestination = x0 === x1 && y0 === y1;
-		if (!reachedDestination && grid.blocksVision({ x: x0, y: y0 })) {
+		if (edges) {
+			if (edgeBlocksVision(getEdgeBetween(edges, prev, { x: x0, y: y0 }))) {
+				return false;
+			}
+		} else if (!reachedDestination && grid.blocksVision({ x: x0, y: y0 })) {
 			return false;
 		}
 	}
@@ -93,11 +104,10 @@ function hasClearLineOfSight(
 /**
  * Marks every tile within sight range that ALSO has a clear line of
  * sight from center as explored (for decay tracking) and rebuilds
- * currentlyVisible from scratch to exactly that set. The rebuild is
- * what makes the retroactive downgrade work: a tile visible on the
- * previous call that isn't back in range this call simply isn't
- * re-added, so it falls out of "visible" immediately, not at the next
- * turn boundary.
+ * currentlyVisible from scratch to exactly that set.
+ *
+ * Pass `edges` for edge-based maps so full walls on edges block vision.
+ * Omit `edges` for legacy cell-wall maps (unchanged behavior).
  */
 export function updateFogOfWar(
 	fog: HasFogOfWar,
@@ -105,11 +115,12 @@ export function updateFogOfWar(
 	currentTurn: number,
 	grid: Grid,
 	range: number = FOG_SIGHT_RANGE,
+	edges?: EdgeGrid | null,
 ): void {
 	fog.currentlyVisible = {};
 	for (const coord of tilesInSightRange(center, range)) {
 		if (!grid.getTile(coord)) continue;
-		if (!hasClearLineOfSight(grid, center, coord)) continue;
+		if (!hasClearLineOfSight(grid, center, coord, edges)) continue;
 		const key = coordKey(coord);
 		fog.exploredTiles[key] = currentTurn;
 		fog.currentlyVisible[key] = true;
@@ -151,11 +162,8 @@ export function pruneDecayedTiles(fog: HasFogOfWar, currentTurn: number): void {
 
 /**
  * Nearest walkable tile this unit hasn't seen at all yet (strictly
- * "unseen", not merely decayed-but-once-explored). This is the actual
- * fallback fog was missing: every targeting function's "nothing known"
- * case used to mean "stay exactly where you are, forever" — there was
- * no concept of "go look at what you haven't seen" anywhere. Returns
- * null only when the entire map has already been seen by this unit.
+ * "unseen", not merely decayed-but-once-explored). Returns null only
+ * when the entire map has already been seen by this unit.
  */
 export function findNearestUnexploredTile(
 	fog: HasFogOfWar,
@@ -186,12 +194,7 @@ export function findNearestUnexploredTile(
 /**
  * Marks every tile in range of `center` as explored (for decay/memory
  * purposes only) — deliberately does NOT touch currentlyVisible.
- * updateFogOfWar always rebuilds currentlyVisible from scratch around
- * whatever point it's given, which is correct for "I am now standing
- * here" but wrong for "this other location becomes known" (e.g. the
- * exit revealing itself once the relic is found) — using it for the
- * latter case wipes out the unit's actual current visibility and
- * replaces it with the marked area's surroundings instead.
+ * Pass `edges` on edge maps so LOS matches updateFogOfWar.
  */
 export function markAreaExplored(
 	fog: HasFogOfWar,
@@ -199,10 +202,11 @@ export function markAreaExplored(
 	currentTurn: number,
 	grid: Grid,
 	range: number = FOG_SIGHT_RANGE,
+	edges?: EdgeGrid | null,
 ): void {
 	for (const coord of tilesInSightRange(center, range)) {
 		if (!grid.getTile(coord)) continue;
-		if (!hasClearLineOfSight(grid, center, coord)) continue;
+		if (!hasClearLineOfSight(grid, center, coord, edges)) continue;
 		fog.exploredTiles[coordKey(coord)] = currentTurn;
 	}
 }

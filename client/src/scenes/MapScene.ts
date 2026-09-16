@@ -161,12 +161,9 @@ export class MapScene implements Scene, TutorialPort {
 				edges: this.game.session.mapEdges,
 				elevation: this.game.session.mapElevation ?? new Map(),
 			};
-			const rooms = RH.detectRooms(
-				this.grid.width,
-				this.grid.height,
-				this.game.session.mapEdges,
-			);
-			const focus = RH.findRoomAt(rooms, this.localUnit.state.coord);
+			const rooms = RH.detectRooms(this.grid, this.game.session.mapEdges);
+			const currentRoom = RH.findRoomAt(rooms, this.localUnit.state.coord);
+			const focus = this.focusRoomFor(currentRoom, rooms);
 			this.edgeMapRenderer.build(compiled, focus);
 			return;
 		}
@@ -178,6 +175,24 @@ export class MapScene implements Scene, TutorialPort {
 			this.game.session.mapStairsTiles ?? undefined,
 		);
 		this.updateLegacyFog(this.localUnit.state, this.localUnit.state.coord);
+	}
+
+	/**
+	 * The room to actually treat as "focused" for the edge renderer's
+	 * shrink/dim effect — null while the player is outside any
+	 * building, including simply standing in the street room itself.
+	 * The street is a room too by detectRooms' own definition, and its
+	 * boundary walls are the exact same walls every building's
+	 * interior sees from the other side — without this filter, every
+	 * building looks permanently shrunk/lowered even from outside,
+	 * since "focused room" was previously just "whatever room the
+	 * player happens to be standing in," street included.
+	 */
+	private focusRoomFor(room: RH.Room | null, rooms: RH.Room[]): RH.Room | null {
+		if (!room) return null;
+		const outside = RH.findOutsideRoom(rooms);
+		if (outside && room.id === outside.id) return null;
+		return room;
 	}
 
 	/**
@@ -196,6 +211,8 @@ export class MapScene implements Scene, TutorialPort {
 			exitCoord,
 			this.turnsTaken,
 			this.grid,
+			undefined,
+			this.game.session.mapEdges,
 		);
 		this.updateLegacyFog(this.localUnit.state, this.localUnit.state.coord);
 	}
@@ -593,6 +610,8 @@ export class MapScene implements Scene, TutorialPort {
 				liveCoord,
 				this.turnsTaken,
 				this.grid,
+				undefined,
+				this.game.session.mapEdges,
 			);
 			this.updateLegacyFog(this.localUnit.state, liveCoord);
 		}
@@ -1098,6 +1117,8 @@ export class MapScene implements Scene, TutorialPort {
 			local.state.coord,
 			this.turnsTaken,
 			this.grid,
+			undefined,
+			this.game.session.mapEdges,
 		);
 		if (this.fogOfWarEnabled) {
 			this.mapRenderer.updateFogVisibility(
@@ -1576,6 +1597,8 @@ export class MapScene implements Scene, TutorialPort {
 			this.localUnit.state.coord,
 			this.turnsTaken,
 			this.grid,
+			undefined,
+			this.game.session.mapEdges,
 		);
 		RH.pruneDecayedTiles(this.localUnit.state, this.turnsTaken);
 		this.updateLegacyFog(this.localUnit.state, this.localUnit.state.coord);
@@ -1861,7 +1884,14 @@ export class MapScene implements Scene, TutorialPort {
 		);
 		local.turnManager.undoMovementForRetry();
 		if (this.fogOfWarEnabled) {
-			RH.updateFogOfWar(local.state, coord, this.turnsTaken, this.grid);
+			RH.updateFogOfWar(
+				local.state,
+				coord,
+				this.turnsTaken,
+				this.grid,
+				undefined,
+				this.game.session.mapEdges,
+			);
 			this.updateLegacyFog(local.state, coord);
 		}
 		this.syncUI();
@@ -1912,7 +1942,14 @@ export class MapScene implements Scene, TutorialPort {
 		// Fresh fog for the new floor — see switchFloor's doc comment.
 		local.state.exploredTiles = {};
 		local.state.currentlyVisible = {};
-		RH.updateFogOfWar(local.state, targetCoord, this.turnsTaken, this.grid);
+		RH.updateFogOfWar(
+			local.state,
+			targetCoord,
+			this.turnsTaken,
+			this.grid,
+			undefined,
+			this.game.session.mapEdges,
+		);
 
 		const screenPos = gridToScreenElevatedWithClimb(
 			targetCoord,
@@ -2220,7 +2257,14 @@ export class MapScene implements Scene, TutorialPort {
 		);
 		local.mercenary.setPositionInstant(screenPos);
 		if (this.fogOfWarEnabled) {
-			RH.updateFogOfWar(local.state, coord, this.turnsTaken, this.grid);
+			RH.updateFogOfWar(
+				local.state,
+				coord,
+				this.turnsTaken,
+				this.grid,
+				undefined,
+				this.game.session.mapEdges,
+			);
 			this.updateLegacyFog(local.state, coord);
 		}
 		await this.camera.panTo(
@@ -2285,7 +2329,14 @@ export class MapScene implements Scene, TutorialPort {
 		mercenary.setPositionInstant(screenPos);
 
 		if (this.fogOfWarEnabled) {
-			RH.updateFogOfWar(state, destination, this.turnsTaken, this.grid);
+			RH.updateFogOfWar(
+				state,
+				destination,
+				this.turnsTaken,
+				this.grid,
+				undefined,
+				this.game.session.mapEdges,
+			);
 			if (state === this.localUnit.state) {
 				this.updateLegacyFog(state, destination);
 			}

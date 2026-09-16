@@ -56,11 +56,7 @@ export class EdgeMapTestScene implements Scene {
 		this.view.addChild(this.tokenContainer);
 
 		this.compiled = RH.compileEdgeMap(RH.EDGE_TEST_BLUEPRINT);
-		this.rooms = RH.detectRooms(
-			this.compiled.grid.width,
-			this.compiled.grid.height,
-			this.compiled.edges,
-		);
+		this.rooms = RH.detectRooms(this.compiled.grid, this.compiled.edges);
 		this.currentRoom = RH.findRoomAt(this.rooms, this.characterCoord);
 		this.renderer.build(this.compiled, this.currentRoom);
 

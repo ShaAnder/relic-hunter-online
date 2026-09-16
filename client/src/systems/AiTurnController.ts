@@ -51,6 +51,26 @@ export class AiTurnController {
 		private cb: AiTurnCallbacks,
 	) {}
 
+	/** Edge-aware when session.mapEdges is set; otherwise classic cell movement. */
+	private computeAiRange(
+		grid: RH.Grid,
+		start: RH.GridCoord,
+		budget: number,
+		blocked: Set<string>,
+	): Map<string, RH.MovementRangeEntry> {
+		const edges = this.game.session.mapEdges;
+		if (edges) {
+			return RH.computeMovementRangeWithEdges(
+				grid,
+				edges,
+				start,
+				budget,
+				blocked,
+			);
+		}
+		return RH.computeMovementRange(grid, start, budget, blocked);
+	}
+
 	private toCombatant(state: RH.MercenaryState): RH.AiCombatant {
 		return {
 			id: state.id,
@@ -150,6 +170,8 @@ export class AiTurnController {
 				unit.state.coord,
 				this.cb.getTurnsTaken(),
 				this.cb.getGrid(),
+				undefined,
+				this.game.session.mapEdges,
 			);
 		}
 
@@ -317,7 +339,7 @@ export class AiTurnController {
 			// Uncapped range purely to read the real, wall-aware path distance to
 			// the target — not a straight-line guess, which could send AI toward
 			// a card it doesn't actually need if the direct route is blocked.
-			const uncappedRange = RH.computeMovementRange(
+			const uncappedRange = this.computeAiRange(
 				grid,
 				unit.state.coord,
 				grid.width * grid.height,
@@ -340,17 +362,20 @@ export class AiTurnController {
 			const threatOwners = this.mapController.buildThreatZoneOwners(
 				unit.state.id,
 			);
-			const range = RH.computeMovementRangeWeighted(
-				grid,
-				unit.state.coord,
-				moveBudget,
-				blocked,
-				threatOwners,
-				unit.state.stats,
-				unit.archetype,
-			);
+			const edges = this.game.session.mapEdges;
+			const range = edges
+				? this.computeAiRange(grid, unit.state.coord, moveBudget, blocked)
+				: RH.computeMovementRangeWeighted(
+						grid,
+						unit.state.coord,
+						moveBudget,
+						blocked,
+						threatOwners,
+						unit.state.stats,
+						unit.archetype,
+					);
 			const reachable =
-				RH.findNearestReachableTile(grid, range, target, blocked) ??
+				RH.findNearestReachableTile(grid, range, target, blocked, edges) ??
 				unit.state.coord;
 			const path = RH.getPathTo(range, reachable) ?? [];
 
@@ -407,6 +432,8 @@ export class AiTurnController {
 						unit.state.coord,
 						this.cb.getTurnsTaken(),
 						this.cb.getGrid(),
+						undefined,
+						this.game.session.mapEdges,
 					);
 					unit.turnManager.commitMove(truncatedPath.length);
 					this.cb.showFeedback(
@@ -559,7 +586,7 @@ export class AiTurnController {
 				othersAfter.map((o) => RH.coordKey(o.coord)),
 			);
 			const grid = this.cb.getGrid();
-			const retreatRange = RH.computeMovementRange(
+			const retreatRange = this.computeAiRange(
 				grid,
 				unit.state.coord,
 				unit.state.stats.movement,
@@ -724,7 +751,7 @@ export class AiTurnController {
 					)
 					.map(RH.coordKey),
 			]);
-			const range = RH.computeMovementRange(
+			const range = this.computeAiRange(
 				grid,
 				monster.state.coord,
 				monster.state.stats.movement,
@@ -736,6 +763,7 @@ export class AiTurnController {
 					range,
 					targetUnit.state.coord,
 					blocked,
+					this.game.session.mapEdges,
 				) ?? monster.state.coord;
 			const path = RH.getPathTo(range, reachable) ?? [];
 

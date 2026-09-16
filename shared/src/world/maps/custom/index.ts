@@ -5,7 +5,8 @@
  * client/vite-plugins/saveCustomMap.ts) every time a map is saved or
  * deleted. Never edit this file by hand; it will be overwritten.
  */
-import { alleyways_Name, ALLEYWAYS_BLUEPRINT } from "./Alleyways";
+import { Alleyways_NAME, Alleyways_BLUEPRINT } from "./Alleyways";
+import { Test_NAME, Test_BLUEPRINT } from "./Test";
 
 export interface CustomMapEntry {
 	name: string;
@@ -13,5 +14,6 @@ export interface CustomMapEntry {
 }
 
 export const CUSTOM_MAPS: CustomMapEntry[] = [
-	{ name: alleyways_Name, blueprint: ALLEYWAYS_BLUEPRINT },
+	{ name: Alleyways_NAME, blueprint: Alleyways_BLUEPRINT },
+	{ name: Test_NAME, blueprint: Test_BLUEPRINT },
 ];

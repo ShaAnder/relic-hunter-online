@@ -57,7 +57,36 @@ interface Drawable {
  * larger map.
  */
 export class EdgeMapRenderer {
+	/** Tile Graphics keyed by "x,y" so fog can update alpha without full rebuild. */
+	private tileGraphics = new Map<string, Graphics>();
+	private baseFogAlpha = new Map<string, number>();
+
 	constructor(private container: Container) {}
+
+	/**
+	 * Apply three-tier fog alphas to floor tiles (same model as MapRenderer).
+	 * Walls stay at full alpha so layout remains readable; concealment of
+	 * interior content is handled by tile dimming + entity alpha in MapScene.
+	 */
+	updateFogVisibility(
+		fog: RH.HasFogOfWar,
+		center: RH.GridCoord,
+		currentTurn: number,
+	): void {
+		for (const [key, graphic] of this.tileGraphics) {
+			const [x, y] = key.split(",").map(Number);
+			const visibility = RH.getTileVisibility(
+				fog,
+				{ x, y },
+				center,
+				currentTurn,
+			);
+			const alpha =
+				visibility === "visible" ? 1 : visibility === "explored" ? 0.45 : 0.12;
+			this.baseFogAlpha.set(key, alpha);
+			graphic.alpha = alpha;
+		}
+	}
 
 	/**
 	 * @param focusRoom When set, this room's own boundary walls draw
@@ -69,6 +98,8 @@ export class EdgeMapRenderer {
 	 */
 	build(compiled: RH.CompiledEdgeMap, focusRoom: RH.Room | null = null): void {
 		this.container.removeChildren();
+		this.tileGraphics.clear();
+		this.baseFogAlpha.clear();
 		const drawables: Drawable[] = [];
 
 		const focusCellKeys = focusRoom
@@ -180,6 +211,7 @@ export class EdgeMapRenderer {
 		const color = elevation > 0 ? PAVEMENT_COLOR : FLOOR_COLOR;
 		const depth = trueCorners.bottom.y - 100_000; // tiles always sort behind anything standing on their own edge
 
+		const tileKey = `${coord.x},${coord.y}`;
 		return {
 			depth,
 			draw: () => {
@@ -187,6 +219,8 @@ export class EdgeMapRenderer {
 				g.poly([c.x, c.y - hh, c.x + hw, c.y, c.x, c.y + hh, c.x - hw, c.y]);
 				g.fill(color);
 				if (dimmed) g.alpha = UNFOCUSED_ALPHA;
+				this.tileGraphics.set(tileKey, g);
+				this.baseFogAlpha.set(tileKey, g.alpha);
 				return g;
 			},
 		};

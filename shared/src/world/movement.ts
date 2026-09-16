@@ -98,6 +98,28 @@ export function computeMovementRangeWithEdges(
 	return range;
 }
 
+/**
+ * Single entry for map movement range: uses edges when present.
+ */
+export function computeMapMovementRange(
+	grid: Grid,
+	start: GridCoord,
+	movementBudget: number,
+	blockedTiles?: Set<string>,
+	edges?: EdgeGrid | null,
+): Map<string, MovementRangeEntry> {
+	if (edges) {
+		return computeMovementRangeWithEdges(
+			grid,
+			edges,
+			start,
+			movementBudget,
+			blockedTiles,
+		);
+	}
+	return computeMovementRange(grid, start, movementBudget, blockedTiles);
+}
+
 export function getPathTo(
 	range: Map<string, MovementRangeEntry>,
 	destination: GridCoord,
@@ -131,17 +153,19 @@ export function findNearestReachableTile(
 	range: Map<string, MovementRangeEntry>,
 	target: GridCoord,
 	blockedTiles?: Set<string>,
+	edges?: EdgeGrid | null,
 ): GridCoord | null {
 	if (range.size === 0) return null;
 
 	const directKey = coordKey(target);
 	if (range.has(directKey)) return target;
 
-	const targetRange = computeMovementRange(
+	const targetRange = computeMapMovementRange(
 		grid,
 		target,
 		grid.width * grid.height,
 		blockedTiles,
+		edges,
 	);
 
 	let best: GridCoord | null = null;
