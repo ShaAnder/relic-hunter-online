@@ -1,340 +1,625 @@
 import { Container, Graphics } from "pixi.js";
-import type { Grid, TileType } from "@relic-hunter/shared";
+import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
 import * as RH from "@relic-hunter/shared";
-import {
-	gridToScreen,
-	TILE_WIDTH,
-	TILE_HEIGHT,
-	ELEVATION_PX_PER_UNIT,
-} from "@/math/isoGridMath";
-import type { CameraController } from "@/core/cameras/CameraController";
-import type { Game } from "@/core/game/Game";
 
-/** Timing stats returned after a build so the scene can display them. */
-export interface MapRenderStats {
-	tileCount: number;
-	generationMs: number;
-	renderMs: number;
-}
-
-const TILE_COLORS: Record<TileType, number> = {
-	floor: 0x3a3a3a,
-	wall: 0x1a1a1a,
-	exit: 0xd4af37,
-};
-
-/** Alpha applied per fog tier — visible tiles render at full strength, explored-but-out-of-range tiles are dimmed (still readable, clearly stale), unseen tiles are nearly invisible rather than fully removed (keeps the board's overall shape legible instead of a jarring void). */
-export const FOG_ALPHA: Record<RH.TileVisibility, number> = {
-	visible: 1,
-	explored: 0.45,
-	unseen: 0.06,
-};
-
-/** Elevation at or above which a tile is tall enough to actually occlude a character standing near it — low walls (0.5-0.9) still visually read as "behind cover," not "hidden," so only the full-height tier fades. */
-const OCCLUSION_ELEVATION_THRESHOLD = 1;
-
-/** Screen-pixel radius of the fade effect around the character, roughly a tile and a half — close enough that only walls genuinely near the character fade, not the whole visible board. */
-const OCCLUSION_FADE_RADIUS = 140;
-
-/** The lowest alpha a fading wall drops to, right at the character's own position — never fully invisible, so the wall's presence stays legible even while faded. */
-const OCCLUSION_MIN_ALPHA = 0.25;
+/** Pixels of visual gap a wall piece sits within — this is the "tile, wall, gap, tile" spacing described in prototyping: a small logical gap between what would otherwise be two directly-touching tiles, which the wall piece fills exactly when present, and which the oversized tiles below fill seamlessly when it isn't. */
+const GAP_PX = 7;
+/** How much larger than its true footprint each tile is drawn — just enough that two neighboring tiles' edges overlap slightly into the gap, so an edge with no wall on it reads as one continuous floor rather than a visible seam. */
+const TILE_OVERSIZE = 1.09;
+/** Wall piece half-thickness, sized to exactly fill the gap it sits in — no more, so it never eats into either tile's own walkable-looking footprint beyond what the gap already accounts for. */
+const WALL_THICKNESS_PX = GAP_PX;
+/** Corner piece half-size — matched exactly to wall thickness so a corner connects to any wall meeting it with zero visible gap. */
+const CORNER_HALF_PX = WALL_THICKNESS_PX;
+const WALL_HEIGHT_PX = TILE_HEIGHT;
+/** Doors are drawn shorter than a full wall so they read as an opening rather than a barrier, even before any door-swing animation exists. */
+const DOOR_HEIGHT_FRACTION = 0.3;
+/** Low walls are a distinct barrier type by design — costs extra movement, does NOT block sight — so they're drawn low enough to read as "steppable obstacle," not a real wall. */
+const LOW_WALL_HEIGHT_FRACTION = 0.45;
+/** How short a room's own boundary walls become once the player is standing inside that room — tall enough to still read as "there's a wall here" (the outline), short enough not to block the view of the interior or the character standing in it. Visual only: the wall's actual logical height/blocking never changes, only how tall this specific drawing of it is. */
+const FOCUSED_WALL_HEIGHT_FRACTION = 0.2;
+/** Glass panels render partly see-through, matching their "full height, but transparent" design. */
+const GLASS_ALPHA = 0.55;
 
 /**
- * Handles all grid rendering for a battle map: building tile graphics,
- * drawing iso diamond shapes, and centering the camera on the board.
+ * The "not what you're currently looking at" wash — used for BOTH
+ * room-focus (dimming every room except the one you're standing in)
+ * and fog-of-war's "explored but not currently visible" tier. Same
+ * technique, same strength, deliberately: they're the same idea
+ * (something real, just not your current focus) and giving them
+ * different intensities would need every piece of the map to track
+ * WHY it's washed, not just THAT it is — real complexity for a
+ * difference nobody asked for. Layered as a second, dark-tinted copy
+ * of the same shape drawn on top of the normal (always full-opacity,
+ * full-color) one — not as alpha on the object's own color. Blending
+ * a shape's own color toward transparency shifts its apparent hue
+ * depending on whatever renders behind it, and adjacent oversized
+ * tiles overlapping slightly at their shared seam compounds that
+ * differently than the rest of the tile — together these produce a
+ * visible "colors flipping" artifact at washed tile seams when this
+ * is done as a plain g.alpha assignment instead.
+ */
+const WASH_COLOR = 0x14141e;
+const WASH_ALPHA = 0.72;
+
+const FLOOR_COLOR = 0xc8c8c8;
+const PAVEMENT_COLOR = 0xaaaac8;
+
+const WALL_TOP_COLOR = 0x463c6e;
+const WALL_LEFT_FACE_COLOR = 0x2d2648;
+const WALL_RIGHT_FACE_COLOR = 0x372f58;
+
+const DOOR_TOP_COLOR = 0xc8b43c;
+const DOOR_LEFT_FACE_COLOR = 0x8c7d28;
+const DOOR_RIGHT_FACE_COLOR = 0xaa9632;
+
+/**
+ * Fence, glass, and low-wall each get their own muted, in-game-palette
+ * color — distinct from a full wall and from each other, and
+ * deliberately NOT the bright, saturated colors the Map Creator's own
+ * editing palette uses for the same barrier types (those exist purely
+ * to be tellable-apart on a small painting grid, not meant to carry
+ * into the finished map).
+ */
+const FENCE_TOP_COLOR = 0x4a5c3c;
+const FENCE_LEFT_FACE_COLOR = 0x323f28;
+const FENCE_RIGHT_FACE_COLOR = 0x3d4c32;
+
+const GLASS_TOP_COLOR = 0x7d94a0;
+const GLASS_LEFT_FACE_COLOR = 0x56666f;
+const GLASS_RIGHT_FACE_COLOR = 0x687d87;
+
+const LOW_WALL_TOP_COLOR = 0x5c5648;
+const LOW_WALL_LEFT_FACE_COLOR = 0x3e3a30;
+const LOW_WALL_RIGHT_FACE_COLOR = 0x4a4539;
+
+type ScreenPoint = { x: number; y: number };
+
+/** One item waiting to be drawn, with the depth key that determines render order — see the class doc comment for why this is the whole mechanism for correct overlap, with no explicit zIndex anywhere. */
+interface Drawable {
+	depth: number;
+	draw: () => Graphics;
+}
+
+/** Per-barrier-type visual info, looked up once per wall/corner piece instead of a growing chain of isDoor/isFence/isGlass/isLowWall ternaries at every color reference. */
+interface BarrierStyle {
+	heightFraction: number;
+	topColor: number;
+	leftColor: number;
+	rightColor: number;
+	alpha: number;
+}
+
+const BARRIER_STYLES: Record<number, BarrierStyle> = {
+	[RH.EdgeBarrier.FullWall]: {
+		heightFraction: 1,
+		topColor: WALL_TOP_COLOR,
+		leftColor: WALL_LEFT_FACE_COLOR,
+		rightColor: WALL_RIGHT_FACE_COLOR,
+		alpha: 1,
+	},
+	[RH.EdgeBarrier.Door]: {
+		heightFraction: DOOR_HEIGHT_FRACTION,
+		topColor: DOOR_TOP_COLOR,
+		leftColor: DOOR_LEFT_FACE_COLOR,
+		rightColor: DOOR_RIGHT_FACE_COLOR,
+		alpha: 1,
+	},
+	[RH.EdgeBarrier.Fence]: {
+		heightFraction: 1,
+		topColor: FENCE_TOP_COLOR,
+		leftColor: FENCE_LEFT_FACE_COLOR,
+		rightColor: FENCE_RIGHT_FACE_COLOR,
+		alpha: 1,
+	},
+	[RH.EdgeBarrier.Glass]: {
+		heightFraction: 1,
+		topColor: GLASS_TOP_COLOR,
+		leftColor: GLASS_LEFT_FACE_COLOR,
+		rightColor: GLASS_RIGHT_FACE_COLOR,
+		alpha: GLASS_ALPHA,
+	},
+	[RH.EdgeBarrier.LowWall]: {
+		heightFraction: LOW_WALL_HEIGHT_FRACTION,
+		topColor: LOW_WALL_TOP_COLOR,
+		leftColor: LOW_WALL_LEFT_FACE_COLOR,
+		rightColor: LOW_WALL_RIGHT_FACE_COLOR,
+		alpha: 1,
+	},
+};
+
+function styleFor(barrier: RH.EdgeBarrier): BarrierStyle {
+	return BARRIER_STYLES[barrier] ?? BARRIER_STYLES[RH.EdgeBarrier.FullWall];
+}
+
+/** What a piece of the map should draw as, combining room-focus and fog-of-war into one answer instead of two separately-applied effects. "hidden" wins over everything (fog unseen); otherwise "washed" if either fog marks it explored-but-not-visible OR room-focus says it's not the room you're in; otherwise "normal". */
+type VisualState = "hidden" | "washed" | "normal";
+
+/**
+ * Renders an edge-based map (Grid + EdgeGrid, from compileEdgeMap).
  *
- * Pure rendering concern — holds no game state. Accepts a Grid and writes
- * into the provided Container. MapScene calls build() on enter and on
- * [R] regen; nothing else in the scene touches tile graphics.
+ * The core trick for correct overlap without any zIndex: every tile,
+ * wall piece, and corner piece computes a single depth number (the
+ * screen-Y of its own forward-most point) before anything is drawn,
+ * everything is sorted by that number, and only then added to the
+ * container in that order. PixiJS renders children in the order
+ * they're added, so painter's-algorithm depth sorting is the entire
+ * mechanism — a piece nearer the camera (larger depth) is always
+ * added after, and therefore drawn on top of, anything farther away.
  *
- * Designed to work with any map type (dungeon, arena, town, overworld) —
- * the tile color palette is the only battle-specific thing here, and that
- * will eventually be driven by map config rather than hardcoded.
+ * Room-focus and fog-of-war are both applied at build time, not as
+ * later per-object alpha tweaks — passing fresh focusRoom/fog state
+ * and rebuilding is simple and correct for a map this size, and
+ * critically, keeps both effects going through the exact same code
+ * path instead of one being a real rebuild and the other a bolted-on
+ * incremental patch that's easy to forget to wire up everywhere the
+ * first one already is. That's exactly what happened before this: fog
+ * had its own separate updateFogVisibility method that nothing ever
+ * actually called, so it silently did nothing on every real map.
  */
 export class MapRenderer {
-	/** Each tile's own Graphics, keyed by coord — kept around so fog visibility can update alpha per-tile without rebuilding the whole grid every time a unit moves. */
-	private tileGraphics = new Map<string, Graphics>();
-	/** Each tile's own fog-tier alpha, tracked separately from graphic.alpha — occlusion fade multiplies on top of this without ever losing what fog itself actually says, so a wall moving out of fade range restores to the correct fog state exactly, not some approximation. */
-	private baseFogAlpha = new Map<string, number>();
-	/** Ground-level screen position of every tile tall enough to occlude a character (full-height walls and equivalent) — only this small subset needs a distance check each frame, not all ~1,600 tiles on the board. */
-	private occlusionCandidates = new Map<string, { x: number; y: number }>();
-
-	constructor(
-		private tilesContainer: Container,
-		private boardContainer: Container,
-		private camera: CameraController,
-		private game: Game,
-	) {}
+	constructor(private container: Container) {}
 
 	/**
-	 * Clear and redraw all tile graphics for the given grid. `elevation`
-	 * is optional per-tile height data (coordKey -> elevation, in
-	 * character-height terms per elevation-rules.md) — when supplied,
-	 * each tile's screen position rises proportionally and gains shaded
-	 * side faces, so raised ground and low walls read as actual raised
-	 * blocks rather than flat tiles. Returns timing stats for the debug
-	 * overlay.
+	 * @param focusRoom When set, this room's own boundary walls draw
+	 * visually shorter (an outline you can see and move past, not a
+	 * view-blocking wall), and everything not part of this room —
+	 * other rooms' tiles, walls, corners, including the open street —
+	 * draws with a dark wash over it. Pass null for the normal,
+	 * undimmed, full-height view (e.g. while standing outside any
+	 * room — the caller is responsible for not passing the outside
+	 * room itself here, see MapScene.focusRoomFor).
+	 * @param fog When set, applies real fog-of-war on top of
+	 * everything else: an unseen tile/wall isn't drawn at all, an
+	 * explored-but-not-currently-visible one gets the same dark wash
+	 * room-focus uses, and a currently-visible one falls through to
+	 * whatever room-focus alone would already give it. Pass null to
+	 * disable fog-of-war entirely (matching the mission's own
+	 * fogOfWarEnabled toggle).
 	 */
 	build(
-		grid: Grid,
-		generationMs: number,
-		elevation?: Map<string, number>,
-		stairsTiles?: Set<string>,
-	): MapRenderStats {
-		const start = performance.now();
-		this.tilesContainer.removeChildren();
-		this.tileGraphics.clear();
-		this.baseFogAlpha.clear();
-		this.occlusionCandidates.clear();
+		compiled: RH.CompiledEdgeMap,
+		focusRoom: RH.Room | null = null,
+		fog: {
+			state: RH.HasFogOfWar;
+			center: RH.GridCoord;
+			turn: number;
+		} | null = null,
+	): void {
+		this.container.removeChildren();
+		const drawables: Drawable[] = [];
 
-		let count = 0;
-		for (let x = 0; x < grid.width; x++) {
-			for (let y = 0; y < grid.height; y++) {
-				const tile = grid.getTile({ x, y });
-				if (!tile) continue;
-				count++;
+		const focusCellKeys = focusRoom
+			? new Set(focusRoom.cells.map((c) => `${c.x},${c.y}`))
+			: null;
+		const focusBoundaryKeys = focusRoom
+			? new Set(
+					focusRoom.boundaryEdges.map((e) => this.edgeDedupeKey(e.a, e.b)),
+				)
+			: null;
 
-				const key = RH.coordKey(tile.coord);
-				const screenPos = gridToScreen(tile.coord);
-				const tileElevation = this.readElevation(elevation, key);
-				const elevationPx = tileElevation * ELEVATION_PX_PER_UNIT;
+		const visualStateAt = (
+			coord: RH.GridCoord,
+			roomFocused: boolean,
+		): VisualState => {
+			if (fog) {
+				const visibility = RH.getTileVisibility(
+					fog.state,
+					coord,
+					fog.center,
+					fog.turn,
+				);
+				if (visibility === "unseen") return "hidden";
+				if (visibility === "explored") return "washed";
+				// "visible": fall through to room-focus, same as fog disabled.
+			}
+			return roomFocused ? "washed" : "normal";
+		};
 
-				const diamond = stairsTiles?.has(key)
-					? this.drawStairsTile(elevationPx)
-					: this.drawTileDiamond(TILE_COLORS[tile.type], elevationPx);
-				diamond.x = screenPos.x;
-				diamond.y = screenPos.y - elevationPx;
-				this.tilesContainer.addChild(diamond);
-				this.tileGraphics.set(key, diamond);
-
-				if (
-					tile.type === "wall" &&
-					tileElevation >= OCCLUSION_ELEVATION_THRESHOLD
-				) {
-					this.occlusionCandidates.set(key, screenPos);
-				}
+		for (let y = 0; y < compiled.grid.height; y++) {
+			for (let x = 0; x < compiled.grid.width; x++) {
+				const coord = { x, y };
+				const elevation = compiled.elevation.get(`${x},${y}`) ?? 0;
+				if (!Number.isFinite(elevation)) continue; // void — nothing to draw
+				const roomFocused =
+					focusCellKeys !== null && !focusCellKeys.has(`${x},${y}`);
+				const state = visualStateAt(coord, roomFocused);
+				if (state === "hidden") continue;
+				drawables.push(this.tileDrawable(coord, elevation, state === "washed"));
 			}
 		}
 
+		// rounded screen point -> tallest (state, height) touching it.
+		// A corner matches whichever connecting wall needs it most, so
+		// it never looks more visible/taller than a wall piece it's
+		// directly bridging, and never more hidden than the least
+		// hidden of the walls meeting it (a corner between a visible
+		// wall and a hidden one still needs to draw).
+		const STATE_RANK: Record<VisualState, number> = {
+			hidden: 0,
+			washed: 1,
+			normal: 2,
+		};
+		const cornerTouches = new Map<
+			string,
+			{ height: number; state: VisualState; barrier: RH.EdgeBarrier }
+		>();
+
+		const registerCorner = (
+			b: ScreenPoint,
+			height: number,
+			state: VisualState,
+			barrier: RH.EdgeBarrier,
+		) => {
+			const key = this.cornerKey(b);
+			const existing = cornerTouches.get(key);
+			const nextHeight = Math.max(existing?.height ?? 0, height);
+			const nextState: VisualState =
+				!existing || STATE_RANK[state] > STATE_RANK[existing.state]
+					? state
+					: existing.state;
+			cornerTouches.set(key, {
+				height: nextHeight,
+				state: nextState,
+				barrier:
+					nextHeight === height ? barrier : (existing?.barrier ?? barrier),
+			});
+		};
+
+		for (let y = 0; y < compiled.grid.height; y++) {
+			for (let x = 0; x < compiled.grid.width - 1; x++) {
+				const a = { x, y };
+				const b = { x: x + 1, y };
+				const barrier = RH.getEdgeBetween(compiled.edges, a, b);
+				if (barrier === RH.EdgeBarrier.None) continue;
+				drawables.push(
+					this.wallDrawable(
+						a,
+						b,
+						"E",
+						barrier,
+						compiled,
+						focusBoundaryKeys,
+						visualStateAt,
+						registerCorner,
+					),
+				);
+			}
+		}
+		for (let y = 0; y < compiled.grid.height - 1; y++) {
+			for (let x = 0; x < compiled.grid.width; x++) {
+				const a = { x, y };
+				const b = { x, y: y + 1 };
+				const barrier = RH.getEdgeBetween(compiled.edges, a, b);
+				if (barrier === RH.EdgeBarrier.None) continue;
+				drawables.push(
+					this.wallDrawable(
+						a,
+						b,
+						"S",
+						barrier,
+						compiled,
+						focusBoundaryKeys,
+						visualStateAt,
+						registerCorner,
+					),
+				);
+			}
+		}
+
+		for (const [key, { height, state, barrier }] of cornerTouches) {
+			if (state === "hidden") continue;
+			const [cx, cy] = key.split(",").map(Number);
+			drawables.push(
+				this.cornerDrawable(
+					{ x: cx, y: cy },
+					height,
+					state === "washed",
+					barrier,
+				),
+			);
+		}
+
+		drawables.sort((a, b) => a.depth - b.depth);
+		for (const d of drawables) {
+			this.container.addChild(d.draw());
+		}
+	}
+
+	/** A direction-independent key for an edge, so a boundary edge stored as (a,b) matches the same edge encountered as (b,a) while iterating the grid the other way. */
+	private edgeDedupeKey(a: RH.GridCoord, b: RH.GridCoord): string {
+		const [lo, hi] =
+			a.x === b.x ? (a.y < b.y ? [a, b] : [b, a]) : a.x < b.x ? [a, b] : [b, a];
+		return `${lo.x},${lo.y}-${hi.x},${hi.y}`;
+	}
+
+	private trueTileCorners(coord: RH.GridCoord, elevationPx: number) {
+		const base = gridToScreen(coord);
+		const sy = base.y - elevationPx;
 		return {
-			tileCount: count,
-			generationMs,
-			renderMs: performance.now() - start,
+			top: { x: base.x, y: sy - TILE_HEIGHT / 2 },
+			right: { x: base.x + TILE_WIDTH / 2, y: sy },
+			bottom: { x: base.x, y: sy + TILE_HEIGHT / 2 },
+			left: { x: base.x - TILE_WIDTH / 2, y: sy },
+			center: { x: base.x, y: sy },
 		};
 	}
 
-	/** Elevation to use for a tile: the supplied value if present and finite, otherwise 0 — Void/River carry Infinity in the data (they're never walkable at all, height is meaningless for them), which would otherwise send the tile flying off screen. */
-	private readElevation(
-		elevation: Map<string, number> | undefined,
-		key: string,
-	): number {
-		const value = elevation?.get(key);
-		if (value === undefined || !Number.isFinite(value)) return 0;
-		return value;
-	}
+	private tileDrawable(
+		coord: RH.GridCoord,
+		elevation: number,
+		washed: boolean,
+	): Drawable {
+		const elevationPx = elevation * TILE_HEIGHT;
+		const trueCorners = this.trueTileCorners(coord, elevationPx);
+		const hw = (TILE_WIDTH / 2) * TILE_OVERSIZE;
+		const hh = (TILE_HEIGHT / 2) * TILE_OVERSIZE;
+		const c = trueCorners.center;
+		const color = elevation > 0 ? PAVEMENT_COLOR : FLOOR_COLOR;
+		const depth = trueCorners.bottom.y - 100_000; // tiles always sort behind anything standing on their own edge
 
-	/**
-	 * Sets every tile's alpha per the three-tier fog model for one
-	 * unit's own fog memory — call whenever that unit's position or
-	 * turn count changes (after a move, at turn end), not every frame;
-	 * a full grid pass every frame is unnecessary work maps this size
-	 * don't need.
-	 */
-	updateFogVisibility(
-		fog: RH.HasFogOfWar,
-		center: RH.GridCoord,
-		currentTurn: number,
-	): void {
-		for (const [key, graphic] of this.tileGraphics) {
-			const [x, y] = key.split(",").map(Number);
-			const visibility = RH.getTileVisibility(
-				fog,
-				{ x, y },
-				center,
-				currentTurn,
-			);
-			this.baseFogAlpha.set(key, FOG_ALPHA[visibility]);
-			graphic.alpha = this.computeDisplayedAlpha(key);
-		}
-	}
-
-	/**
-	 * Fades tall walls near the given screen position — the local
-	 * player's own character, always, per the current scope — so a
-	 * character standing behind a full-height wall stays visible
-	 * through it rather than being hidden behind an always-on-top
-	 * wall graphic. The fade is strongest exactly at the character's
-	 * position and falls off smoothly to no effect at
-	 * OCCLUSION_FADE_RADIUS, the classic "circle of transparency
-	 * centered on the player" RPG occlusion effect — not a full
-	 * depth-sort of tiles against characters, which this deliberately
-	 * avoids as a much larger rendering change. Only checks the small
-	 * set of tall-wall tiles gathered in build(), not the whole board,
-	 * so this is cheap enough to call every frame from update() and
-	 * track smooth, mid-animation movement rather than snapping only
-	 * at discrete tile steps. Pass null to clear any current fade
-	 * (e.g. the local character's turn has ended, nothing to occlude
-	 * for).
-	 */
-	updateWallOcclusion(
-		characterScreenPos: { x: number; y: number } | null,
-	): void {
-		for (const [key, screenPos] of this.occlusionCandidates) {
-			const graphic = this.tileGraphics.get(key);
-			if (!graphic) continue;
-
-			let fadeFactor = 1;
-			if (characterScreenPos) {
-				const dx = screenPos.x - characterScreenPos.x;
-				const dy = screenPos.y - characterScreenPos.y;
-				const dist = Math.sqrt(dx * dx + dy * dy);
-				if (dist < OCCLUSION_FADE_RADIUS) {
-					const t = dist / OCCLUSION_FADE_RADIUS; // 0 at character, 1 at radius edge
-					fadeFactor = OCCLUSION_MIN_ALPHA + (1 - OCCLUSION_MIN_ALPHA) * t;
+		return {
+			depth,
+			draw: () => {
+				const g = new Graphics();
+				const poly = [
+					c.x,
+					c.y - hh,
+					c.x + hw,
+					c.y,
+					c.x,
+					c.y + hh,
+					c.x - hw,
+					c.y,
+				];
+				g.poly(poly);
+				g.fill(color);
+				if (washed) {
+					g.poly(poly);
+					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
 				}
-			}
-
-			const fogAlpha = this.baseFogAlpha.get(key) ?? 1;
-			graphic.alpha = fogAlpha * fadeFactor;
-		}
+				return g;
+			},
+		};
 	}
 
-	/** The actual alpha a tile displays outside of the per-frame occlusion pass — just its own fog alpha. updateWallOcclusion overwrites this for occlusion candidates each frame; this is what a fog-only update (a non-occluding tile, or no character position yet) falls back to. */
-	private computeDisplayedAlpha(key: string): number {
-		return this.baseFogAlpha.get(key) ?? 1;
+	private perpOffset(
+		p1: ScreenPoint,
+		p2: ScreenPoint,
+		dist: number,
+	): ScreenPoint {
+		const dx = p2.x - p1.x;
+		const dy = p2.y - p1.y;
+		const length = Math.hypot(dx, dy);
+		if (length === 0) return { x: 0, y: 0 };
+		return { x: (-dy / length) * dist, y: (dx / length) * dist };
 	}
 
-	/** Snap the camera to the centre of the map after a build or regen. */
-	centerCamera(): void {
-		const bounds = this.boardContainer.getLocalBounds();
-		this.camera.centerOn(
-			{ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
-			this.game.app.screen.width,
-			this.game.app.screen.height,
-		);
+	private cornerKey(p: ScreenPoint): string {
+		return `${Math.round(p.x * 10) / 10},${Math.round(p.y * 10) / 10}`;
 	}
 
-	/**
-	 * Build one iso diamond tile graphic in the given color, raised by
-	 * elevationPx. When raised, also draws two shaded side faces (left
-	 * and right, each a different shade so the block reads with real
-	 * depth rather than a flat silhouette) connecting the top face down
-	 * to ground level — the actual "block sitting above the ground"
-	 * look, not just a diamond floating higher on screen.
-	 */
-	private drawTileDiamond(color: number, elevationPx: number): Graphics {
-		const g = new Graphics();
-		const top = { x: 0, y: -TILE_HEIGHT / 2 };
-		const right = { x: TILE_WIDTH / 2, y: 0 };
-		const bottom = { x: 0, y: TILE_HEIGHT / 2 };
-		const left = { x: -TILE_WIDTH / 2, y: 0 };
+	private wallDrawable(
+		coord: RH.GridCoord,
+		other: RH.GridCoord,
+		dir: "E" | "S",
+		barrier: RH.EdgeBarrier,
+		compiled: RH.CompiledEdgeMap,
+		focusBoundaryKeys: Set<string> | null,
+		visualStateAt: (coord: RH.GridCoord, roomFocused: boolean) => VisualState,
+		registerCorner: (
+			b: ScreenPoint,
+			height: number,
+			state: VisualState,
+			barrier: RH.EdgeBarrier,
+		) => void,
+	): Drawable {
+		const style = styleFor(barrier);
+		const isFocusedBoundary =
+			focusBoundaryKeys?.has(this.edgeDedupeKey(coord, other)) ?? false;
+		// Not part of the focused room's own boundary at all (and a
+		// focus room IS set) means this wall belongs to some other
+		// room or the open street — wash it rather than shrink it.
+		const roomFocused = focusBoundaryKeys !== null && !isFocusedBoundary;
 
-		if (elevationPx > 0) {
-			g.poly([
-				left.x,
-				left.y,
-				bottom.x,
-				bottom.y,
-				bottom.x,
-				bottom.y + elevationPx,
-				left.x,
-				left.y + elevationPx,
-			]);
-			g.fill(shadeColor(color, 0.55));
+		// A wall sits BETWEEN two cells — it should render at whichever
+		// of them is more visible, not whichever one happened to be
+		// "coord" for this loop iteration. coord/other is purely an
+		// artifact of iterating x/y in increasing order (coord is
+		// always the west or north cell of the pair); it says nothing
+		// about which side the player is actually standing on. Using
+		// coord alone meant a wall would incorrectly vanish whenever
+		// its OTHER side (the one nobody was checking) happened to be
+		// unexplored — you can clearly see a wall from the side you're
+		// standing next to, even if you've never seen what's past it.
+		const STATE_RANK: Record<VisualState, number> = {
+			hidden: 0,
+			washed: 1,
+			normal: 2,
+		};
+		const stateAtCoord = visualStateAt(coord, roomFocused);
+		const stateAtOther = visualStateAt(other, roomFocused);
+		const state =
+			STATE_RANK[stateAtCoord] >= STATE_RANK[stateAtOther]
+				? stateAtCoord
+				: stateAtOther;
 
-			g.poly([
-				bottom.x,
-				bottom.y,
-				right.x,
-				right.y,
-				right.x,
-				right.y + elevationPx,
-				bottom.x,
-				bottom.y + elevationPx,
-			]);
-			g.fill(shadeColor(color, 0.72));
-		}
+		const baseHeight = WALL_HEIGHT_PX * style.heightFraction;
+		const height = isFocusedBoundary
+			? baseHeight * FOCUSED_WALL_HEIGHT_FRACTION
+			: baseHeight;
 
-		g.poly([
-			top.x,
-			top.y,
-			right.x,
-			right.y,
-			bottom.x,
-			bottom.y,
-			left.x,
-			left.y,
-		]);
-		g.fill(color);
-		g.stroke({ width: 1, color: 0x000000, alpha: 0.3 });
-		return g;
-	}
+		// Elevation is used purely to position the wall visually at the
+		// correct height on screen - it should reflect real, walkable
+		// ground, not whichever cell happened to be "coord" for this
+		// loop iteration. Void's elevation is Infinity (see
+		// edgeMapCompiler's TILE_ELEVATION), and "coord" is always the
+		// west/north cell of the pair - for any wall sitting on the
+		// map's outermost boundary, that's exactly the void side. An
+		// Infinite elevationPx collapsed every corner of the wall to
+		// y=-Infinity, silently drawing it off-screen with no error -
+		// not hidden by any visibility check, just geometrically
+		// broken. Falls back to "other"'s elevation, and to 0 (floor
+		// height) only if genuinely neither side has finite elevation.
+		const coordElevation = compiled.elevation.get(`${coord.x},${coord.y}`);
+		const otherElevation = compiled.elevation.get(`${other.x},${other.y}`);
+		const usableElevation =
+			coordElevation !== undefined && Number.isFinite(coordElevation)
+				? coordElevation
+				: Number.isFinite(otherElevation)
+					? otherElevation
+					: 0;
+		const elevationPx = (usableElevation ?? 0) * TILE_HEIGHT;
+		const corners = this.trueTileCorners(coord, elevationPx);
+		const [b1, b2] =
+			dir === "E"
+				? [corners.right, corners.bottom]
+				: [corners.bottom, corners.left];
 
-	/**
-	 * Draws a stairs tile as a visible stepped slope — a small series
-	 * of progressively-raised bands (each shaped to the diamond's own
-	 * width at that depth, so steps don't overhang the tile's actual
-	 * footprint) with a shaded riser face between each, rather than
-	 * the single flat top every other tile gets. This is a visual
-	 * prototype only: there's no second floor for the stairs to
-	 * actually lead to yet, so the "climb" here is purely cosmetic —
-	 * enough to see the shape before the real connection exists.
-	 */
-	private drawStairsTile(baseElevationPx: number): Graphics {
-		const g = new Graphics();
-		const halfW = TILE_WIDTH / 2;
-		const halfH = TILE_HEIGHT / 2;
-		const steps = 4;
-		const totalRise = TILE_HEIGHT;
-		const risePerStep = totalRise / steps;
-		const stairsColor = 0xb4a028;
+		registerCorner(b1, height, state, barrier);
+		registerCorner(b2, height, state, barrier);
 
-		for (let i = 0; i < steps; i++) {
-			const y0 = halfH - (i / steps) * (2 * halfH);
-			const y1 = halfH - ((i + 1) / steps) * (2 * halfH);
-			const w0 = halfW * (1 - Math.abs(y0) / halfH);
-			const w1 = halfW * (1 - Math.abs(y1) / halfH);
-			const stepTop = baseElevationPx + i * risePerStep;
-			const shadeFactor = 1 - i * 0.12;
-
-			// Riser (the vertical-ish face connecting down from this
-			// step to the one below) — drawn first so the tread sits
-			// visually on top of it.
-			g.poly([
-				-w1,
-				y1 - stepTop,
-				w1,
-				y1 - stepTop,
-				w1,
-				y1 - stepTop + risePerStep,
-				-w1,
-				y1 - stepTop + risePerStep,
-			]);
-			g.fill(shadeColor(stairsColor, shadeFactor * 0.6));
-
-			// Tread (the flat part of the step you'd actually stand on).
-			g.poly([
-				-w0,
-				y0 - stepTop,
-				w0,
-				y0 - stepTop,
-				w1,
-				y1 - stepTop,
-				-w1,
-				y1 - stepTop,
-			]);
-			g.fill(shadeColor(stairsColor, shadeFactor));
+		if (state === "hidden") {
+			return { depth: -Infinity, draw: () => new Graphics() };
 		}
 
-		g.stroke({ width: 1, color: 0x000000, alpha: 0.3 });
-		return g;
-	}
-}
+		const off = this.perpOffset(b1, b2, WALL_THICKNESS_PX);
+		const near1 = { x: b1.x + off.x, y: b1.y + off.y };
+		const near2 = { x: b2.x + off.x, y: b2.y + off.y };
+		const far1 = { x: b1.x - off.x, y: b1.y - off.y };
+		const far2 = { x: b2.x - off.x, y: b2.y - off.y };
+		const up = (p: ScreenPoint) => ({ x: p.x, y: p.y - height });
+		const depth = Math.max(b1.y, b2.y);
 
-/** Darkens a 0xRRGGBB color by `factor` (0-1, lower = darker) — used for a raised tile's side faces, so they read as shaded sides of a block rather than the same flat color as the top. */
-function shadeColor(color: number, factor: number): number {
-	const r = Math.floor(((color >> 16) & 0xff) * factor);
-	const g = Math.floor(((color >> 8) & 0xff) * factor);
-	const b = Math.floor((color & 0xff) * factor);
-	return (r << 16) | (g << 8) | b;
+		return {
+			depth,
+			draw: () => {
+				const g = new Graphics();
+				const n1u = up(near1),
+					n2u = up(near2),
+					f1u = up(far1),
+					f2u = up(far2);
+				const leftFace = [
+					near1.x,
+					near1.y,
+					near2.x,
+					near2.y,
+					n2u.x,
+					n2u.y,
+					n1u.x,
+					n1u.y,
+				];
+				const rightFace = [
+					far1.x,
+					far1.y,
+					far2.x,
+					far2.y,
+					f2u.x,
+					f2u.y,
+					f1u.x,
+					f1u.y,
+				];
+				const topFace = [
+					n1u.x,
+					n1u.y,
+					f1u.x,
+					f1u.y,
+					f2u.x,
+					f2u.y,
+					n2u.x,
+					n2u.y,
+				];
+
+				g.poly(leftFace);
+				g.fill({ color: style.leftColor, alpha: style.alpha });
+				g.poly(rightFace);
+				g.fill({ color: style.rightColor, alpha: style.alpha });
+				g.poly(topFace);
+				g.fill({ color: style.topColor, alpha: style.alpha });
+
+				if (state === "washed") {
+					g.poly(leftFace);
+					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
+					g.poly(rightFace);
+					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
+					g.poly(topFace);
+					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
+				}
+				return g;
+			},
+		};
+	}
+
+	private cornerDrawable(
+		screenPos: ScreenPoint,
+		height: number,
+		washed: boolean,
+		barrier: RH.EdgeBarrier,
+	): Drawable {
+		const style = styleFor(barrier);
+		const { x: cx, y: cy } = screenPos;
+		const top = { x: cx, y: cy - CORNER_HALF_PX };
+		const right = { x: cx + CORNER_HALF_PX, y: cy };
+		const bottom = { x: cx, y: cy + CORNER_HALF_PX };
+		const left = { x: cx - CORNER_HALF_PX, y: cy };
+		const up = (p: ScreenPoint) => ({ x: p.x, y: p.y - height });
+		const depth = bottom.y + 0.1; // corners draw fractionally after walls at the same depth, so they sit visually on top of the seam they're bridging
+
+		return {
+			depth,
+			draw: () => {
+				const g = new Graphics();
+				const topU = up(top),
+					rightU = up(right),
+					bottomU = up(bottom),
+					leftU = up(left);
+				const leftFace = [
+					left.x,
+					left.y,
+					bottom.x,
+					bottom.y,
+					bottomU.x,
+					bottomU.y,
+					leftU.x,
+					leftU.y,
+				];
+				const rightFace = [
+					bottom.x,
+					bottom.y,
+					right.x,
+					right.y,
+					rightU.x,
+					rightU.y,
+					bottomU.x,
+					bottomU.y,
+				];
+				const topFace = [
+					topU.x,
+					topU.y,
+					rightU.x,
+					rightU.y,
+					bottomU.x,
+					bottomU.y,
+					leftU.x,
+					leftU.y,
+				];
+
+				g.poly(leftFace);
+				g.fill({ color: style.leftColor, alpha: style.alpha });
+				g.poly(rightFace);
+				g.fill({ color: style.rightColor, alpha: style.alpha });
+				g.poly(topFace);
+				g.fill({ color: style.topColor, alpha: style.alpha });
+
+				if (washed) {
+					g.poly(leftFace);
+					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
+					g.poly(rightFace);
+					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
+					g.poly(topFace);
+					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
+				}
+				return g;
+			},
+		};
+	}
 }

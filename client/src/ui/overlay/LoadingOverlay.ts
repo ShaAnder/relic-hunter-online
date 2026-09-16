@@ -9,10 +9,7 @@ import {
 	type Grid,
 	type GridCoord,
 	compileEdgeMap,
-	compileAlleywaysFloors,
-	ALLEYWAYS_MAP_BLUEPRINT,
-	ALLEYWAYS_MAP_FLOOR_2_BLUEPRINT,
-	detectStaircaseClusters,
+	ALLEYWAYS_EDGE_BLUEPRINT,
 	findFirstWalkableTile,
 	planChests,
 	coordKey,
@@ -147,47 +144,30 @@ export class LoadingOverlay implements Overlay {
 
 		const choice = this.game.session.missionParams?.selectedMap;
 
-		if (choice?.type === "custom") {
-			const blueprint = missionCustomMapRepo.load(choice.id);
-			if (!blueprint) {
-				throw new Error(`Custom map "${choice.id}" not found`);
-			}
+		const blueprint =
+			choice?.type === "custom"
+				? (() => {
+						const b = missionCustomMapRepo.load(choice.id);
+						if (!b) throw new Error(`Custom map "${choice.id}" not found`);
+						return b;
+					})()
+				: ALLEYWAYS_EDGE_BLUEPRINT;
 
-			const compiled = compileEdgeMap(blueprint);
+		const compiled = compileEdgeMap(blueprint);
 
-			this.grid = compiled.grid;
-			this.game.session.generatedGrid = compiled.grid;
-			this.game.session.mapEdges = compiled.edges;
-			this.game.session.mapElevation = compiled.elevation;
+		this.grid = compiled.grid;
+		this.game.session.generatedGrid = compiled.grid;
+		this.game.session.mapEdges = compiled.edges;
+		this.game.session.mapElevation = compiled.elevation;
 
-			// Edge maps currently have no multi-floor / stairs data
-			this.game.session.mapTransparent = null;
-			this.game.session.mapStairsTiles = null;
-			this.game.session.mapFloors = null;
-			this.game.session.mapStaircaseClusters = [];
-			this.game.session.localPlayerFloor = 0;
-		} else {
-			// Legacy Alleyways (cell-based barriers) — keep until fully retired
-			const floors = compileAlleywaysFloors([
-				ALLEYWAYS_MAP_BLUEPRINT,
-				ALLEYWAYS_MAP_FLOOR_2_BLUEPRINT,
-			]);
-			this.game.session.mapFloors = floors;
-			this.game.session.localPlayerFloor = 0;
-
-			const ground = floors.floors[0];
-			this.game.session.mapElevation = ground.elevation;
-			this.game.session.mapTransparent = ground.transparent;
-			this.game.session.mapStairsTiles = new Set(
-				ground.stairsTiles.map((c) => coordKey(c)),
-			);
-			this.game.session.mapStaircaseClusters = detectStaircaseClusters(
-				ground.stairsTiles,
-			);
-			this.grid = ground.grid;
-			this.game.session.generatedGrid = this.grid;
-			this.game.session.mapEdges = null;
-		}
+		// No multi-floor / stairs data yet on the edge path - see the
+		// project's plan for building this out on top of the Map
+		// Creator (paint a second floor, matching stair connectors).
+		this.game.session.mapTransparent = null;
+		this.game.session.mapStairsTiles = null;
+		this.game.session.mapFloors = null;
+		this.game.session.mapStaircaseClusters = [];
+		this.game.session.localPlayerFloor = 0;
 	}
 
 	/**

@@ -1,10 +1,12 @@
 /**
- * Custom map saved from the in-game Map Creator.
+ * Official ground-floor Alleyways map, authored in the Map Creator and
+ * promoted to the shipped default. This is now THE Alleyways map - the
+ * legacy cell-based version (alleywaysMapBlueprint.ts) has been retired.
  * Double-resolution format — compiles directly with compileEdgeMap()
  * from this package. See MapCreatorScene.ts for the code scheme.
  */
-export const Alleyways_NAME = "Alleyways";
-export const Alleyways_BLUEPRINT: number[][] = [
+export const ALLEYWAYS_EDGE_NAME = "Alleyways";
+export const ALLEYWAYS_EDGE_BLUEPRINT: number[][] = [
 	[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 	[0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 3, 0, 3, 0, 3, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 2, 0, 2, 0, 2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 0],
 	[0, 0, 4, 0, 4, 0, 4, 3, 2, 0, 1, 0, 1, 0, 2, 2, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 2, 2, 0, 1, 0, 2, 2, 2, 0, 2, 0, 2, 0, 2, 2, 2, 0, 1, 0, 2, 3, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 3, 0],
