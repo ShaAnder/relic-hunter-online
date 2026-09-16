@@ -42,6 +42,18 @@ export class Game {
 		this.sceneManager = new SceneManager(app.stage);
 		this.overlays = new OverlayManager(app.stage);
 
+		// The stage needs to be hit-testable across its whole area, not
+		// just wherever a child's own bounds happen to be - several
+		// drag interactions (Slider, Hand's card-drag) listen for
+		// "pointermove" directly on the stage specifically because the
+		// pointer routinely moves outside the small object being
+		// dragged mid-gesture. Without an explicit hitArea, PixiJS has
+		// no "blank space" to hit-test against, so those stage
+		// listeners silently stop firing the moment the cursor drifts
+		// off whatever's directly underneath it.
+		this.app.stage.eventMode = "static";
+		this.app.stage.hitArea = this.app.screen;
+
 		// main game loop
 		this.app.ticker.add((ticker) => {
 			this.sceneManager.update(ticker.deltaTime);
@@ -101,6 +113,7 @@ export class Game {
 	 * Internal method that forwards resize events to the SceneManager.
 	 */
 	private handleResize(): void {
+		this.app.stage.hitArea = this.app.screen;
 		this.sceneManager.onResize(this.app.screen.width, this.app.screen.height);
 		this.overlays.onResize(this.app.screen.width, this.app.screen.height);
 	}
