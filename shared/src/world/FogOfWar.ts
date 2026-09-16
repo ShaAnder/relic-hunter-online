@@ -81,17 +81,44 @@ function hasClearLineOfSight(
 	while (x0 !== x1 || y0 !== y1) {
 		const prev = { x: x0, y: y0 };
 		const e2 = 2 * err;
-		if (e2 > -dy) {
+		const stepsX = e2 > -dy;
+		const stepsY = e2 < dx;
+		if (stepsX) {
 			err -= dy;
 			x0 += sx;
 		}
-		if (e2 < dx) {
+		if (stepsY) {
 			err += dx;
 			y0 += sy;
 		}
 		const reachedDestination = x0 === x1 && y0 === y1;
 		if (edges) {
-			if (edgeBlocksVision(getEdgeBetween(edges, prev, { x: x0, y: y0 }))) {
+			if (stepsX && stepsY) {
+				// A genuinely diagonal step — getEdgeBetween only
+				// understands orthogonally-adjacent cells, so it can't
+				// answer "is there a wall on this diagonal" directly.
+				// The sightline passes exactly through the point where
+				// four cells meet (prev, the two orthogonal
+				// "in-between" cells, and the destination), so all
+				// four edges bordering that corner need checking — a
+				// wall on any one of them means solid matter sits
+				// right at the corner the sightline is trying to cut
+				// through. This is the standard "no seeing/moving
+				// diagonally past a wall corner" rule.
+				const horizontalNeighbor = { x: x0, y: prev.y };
+				const verticalNeighbor = { x: prev.x, y: y0 };
+				const dest = { x: x0, y: y0 };
+				if (
+					edgeBlocksVision(getEdgeBetween(edges, prev, horizontalNeighbor)) ||
+					edgeBlocksVision(getEdgeBetween(edges, prev, verticalNeighbor)) ||
+					edgeBlocksVision(getEdgeBetween(edges, horizontalNeighbor, dest)) ||
+					edgeBlocksVision(getEdgeBetween(edges, verticalNeighbor, dest))
+				) {
+					return false;
+				}
+			} else if (
+				edgeBlocksVision(getEdgeBetween(edges, prev, { x: x0, y: y0 }))
+			) {
 				return false;
 			}
 		} else if (!reachedDestination && grid.blocksVision({ x: x0, y: y0 })) {

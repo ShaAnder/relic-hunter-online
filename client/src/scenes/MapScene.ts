@@ -164,7 +164,14 @@ export class MapScene implements Scene, TutorialPort {
 			const rooms = RH.detectRooms(this.grid, this.game.session.mapEdges);
 			const currentRoom = RH.findRoomAt(rooms, this.localUnit.state.coord);
 			const focus = this.focusRoomFor(currentRoom, rooms);
-			this.edgeMapRenderer.build(compiled, focus);
+			const fog = this.fogOfWarEnabled
+				? {
+						state: this.localUnit.state,
+						center: this.localUnit.state.coord,
+						turn: this.turnsTaken,
+					}
+				: null;
+			this.edgeMapRenderer.build(compiled, focus, fog);
 			return;
 		}
 
@@ -2388,9 +2395,30 @@ export class MapScene implements Scene, TutorialPort {
 		});
 	}
 
+	/**
+	 * The single path every fog/room-focus-triggering event in this
+	 * scene calls through — movement, undo, floor transitions, the
+	 * exit reveal, all of it. For a legacy map this updates fog
+	 * incrementally on the existing renderer, same as before. For an
+	 * edge map it does a full rebuild instead: EdgeMapRenderer has no
+	 * incremental update, only build() — and rebuilding is what
+	 * actually recomputes both fog visibility and which room is
+	 * currently focused (see rebuildMapRenderWithFog); a real map this
+	 * size makes a full rebuild cheap enough that a second, more
+	 * complex incremental path isn't worth it.
+	 *
+	 * This used to bail out immediately for any edge map (`if
+	 * (mapEdges) return`), which was the actual bug: every one of this
+	 * method's callers fired correctly, but did nothing at all once a
+	 * custom map was loaded — fog and wall-shrink both silently
+	 * stopped updating the moment the player took a single step.
+	 */
 	private updateLegacyFog(state: RH.MercenaryState, coord: RH.GridCoord): void {
 		if (!this.fogOfWarEnabled) return;
-		if (this.game.session.mapEdges) return;
+		if (this.game.session.mapEdges) {
+			if (state === this.localUnit.state) this.rebuildMapRenderWithFog();
+			return;
+		}
 		this.mapRenderer.updateFogVisibility(state, coord, this.turnsTaken);
 	}
 

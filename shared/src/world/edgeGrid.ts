@@ -143,8 +143,13 @@ export function setEdgeDestructible(
 }
 
 /** Whether movement can cross this edge at all — full wall is the only hard block; everything else (including low wall) is passable, with low wall's extra cost being the pathfinder's concern, not this function's. */
+/** Fence and Glass are both "full height, but transparent" by design (see the tile-code scheme this all traces back to) — see-through (edgeBlocksVision correctly says so already) but still solid enough to block movement, same as a full wall in that one respect. Only Door and LowWall are genuinely walkable. */
 export function edgeIsPassable(barrier: EdgeBarrier): boolean {
-	return barrier !== EdgeBarrier.FullWall;
+	return (
+		barrier !== EdgeBarrier.FullWall &&
+		barrier !== EdgeBarrier.Fence &&
+		barrier !== EdgeBarrier.Glass
+	);
 }
 
 /** Whether this edge blocks line of sight — matches the existing per-tile elevation rule: full-height barriers block sight, except fence/glass, which are transparent by material regardless of height. Low wall is short enough to see over. */

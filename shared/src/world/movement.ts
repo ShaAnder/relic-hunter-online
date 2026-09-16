@@ -84,6 +84,7 @@ export function computeMovementRangeWithEdges(
 			for (const neighbour of grid.getNeighbors(coord)) {
 				const key = coordKey(neighbour);
 				if (range.has(key)) continue;
+				if (!grid.isWalkable(neighbour)) continue;
 				if (!edgeIsPassable(getEdgeBetween(edges, coord, neighbour))) continue;
 				if (blockedTiles?.has(key)) continue;
 

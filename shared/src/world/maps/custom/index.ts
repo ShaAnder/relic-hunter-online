@@ -6,7 +6,6 @@
  * deleted. Never edit this file by hand; it will be overwritten.
  */
 import { Alleyways_NAME, Alleyways_BLUEPRINT } from "./Alleyways";
-import { Test_NAME, Test_BLUEPRINT } from "./Test";
 
 export interface CustomMapEntry {
 	name: string;
@@ -15,5 +14,4 @@ export interface CustomMapEntry {
 
 export const CUSTOM_MAPS: CustomMapEntry[] = [
 	{ name: Alleyways_NAME, blueprint: Alleyways_BLUEPRINT },
-	{ name: Test_NAME, blueprint: Test_BLUEPRINT },
 ];
