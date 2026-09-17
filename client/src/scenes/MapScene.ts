@@ -1048,25 +1048,9 @@ export class MapScene implements Scene, TutorialPort {
 			);
 		}
 
-		// Staircase floor-switching is retired for now, pending proper
-		// edge-based multi-floor support (paint a second floor in the
-		// Map Creator, connect via matching stair-connector tiles).
-		// The old trigger lived here, keyed off RH.findStaircaseClusterAt
-		// / RH.isTopOfStaircase / RH.getFloorLink against the legacy
-		// CompiledAlleywaysFloors shape — this is where its edge-based
-		// replacement plugs back in once that data exists.
-
-		// Deferred until after the walk animation finishes — the
-		// per-frame live-movement logic in update() already revealed
-		// fog progressively along the way (using the live, interpolated
-		// screen position, not this logical coord). Calling this here,
-		// before the animation, was the actual bug: it revealed the
-		// entire destination area instantly, the moment a move was
-		// confirmed, well before the character had visually moved at
-		// all — which made the per-frame reveal redundant and
-		// invisible, since there was nothing left for it to add. This
-		// final call just makes sure fog ends up exactly matching the
-		// unit's true final position once movement is fully done.
+		// Staircase floor-switching is retired
+		await this.trySwitchFloor(local.state.coord);
+		// Deferred until after the walk animation finishes
 		RH.updateFogOfWar(
 			local.state,
 			local.state.coord,
@@ -1846,11 +1830,52 @@ export class MapScene implements Scene, TutorialPort {
 		this.syncUI();
 	}
 
-	// switchFloor (staircase-triggered floor changes) is retired along
-	// with the rest of the legacy multi-floor system it was built
-	// against. Its replacement plugs in once edge maps have real
-	// multi-floor support - see the note at this method's old call
-	// site in onMoveCommitted.
+	// switchFloor (staircase-triggered floor changes)
+	private async trySwitchFloor(coord: RH.GridCoord): Promise<void> {
+		const bundle = this.game.session.mapBundle;
+		const floors = this.game.session.mapFloors;
+		if (!bundle || !floors) return;
+
+		const next = RH.resolveFloorTransition(
+			bundle,
+			this.game.session.localPlayerFloor,
+			coord.x,
+			coord.y,
+		);
+		if (next === null || next === this.game.session.localPlayerFloor) return;
+		if (!floors[next]) return;
+
+		this.applyFloor(next);
+		this.showFeedback(
+			next > this.game.session.mapGroundFloorIndex
+				? "Ascended a floor"
+				: "Descended a floor",
+		);
+	}
+
+	private applyFloor(floorIndex: number): void {
+		const floors = this.game.session.mapFloors;
+		if (!floors?.[floorIndex]) return;
+
+		const compiled = floors[floorIndex];
+		this.grid = compiled.grid;
+		this.mapWidth = compiled.grid.width;
+		this.mapHeight = compiled.grid.height;
+		this.game.session.generatedGrid = compiled.grid;
+		this.game.session.mapEdges = compiled.edges;
+		this.game.session.mapElevation = compiled.elevation;
+		this.game.session.localPlayerFloor = floorIndex;
+
+		const onGround = floorIndex === this.game.session.mapGroundFloorIndex;
+		this.mapController.chestSystem.container.visible = onGround;
+		this.mapController.chestSystem.container.visible = onGround;
+
+		for (const monster of this.mapController.monsterSystem.all) {
+			monster.token.view.visible = onGround;
+		}
+
+		this.rebuildMapRenderWithFog();
+	}
 
 	/**
 	 * Animates a static actor's token from its current screen position
@@ -2391,11 +2416,17 @@ export class MapScene implements Scene, TutorialPort {
 		this.game.session.generatedGrid = compiled.grid;
 		this.game.session.mapEdges = compiled.edges;
 		this.game.session.mapElevation = compiled.elevation;
+		this.game.session.mapFloors = [compiled];
+		this.game.session.mapBundle = {
+			name: "Alleyways",
+			floors: [RH.ALLEYWAYS_EDGE_BLUEPRINT],
+			groundFloorIndex: 0,
+		};
+		this.game.session.mapGroundFloorIndex = 0;
+		this.game.session.localPlayerFloor = 0;
 		this.game.session.mapTransparent = null;
 		this.game.session.mapStairsTiles = null;
-		this.game.session.mapFloors = null;
 		this.game.session.mapStaircaseClusters = [];
-		this.game.session.localPlayerFloor = 0;
 		return compiled.grid;
 	}
 

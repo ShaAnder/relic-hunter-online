@@ -8,6 +8,8 @@ import type {
 	RandomFn,
 	Grid,
 	StaircaseCluster,
+	CompiledEdgeMap,
+	MapBundle,
 } from "@relic-hunter/shared";
 import { createSeededRandom } from "@relic-hunter/shared";
 
@@ -110,13 +112,11 @@ export class GameSession {
 	mapTransparent: Map<string, boolean> | null = null;
 	// Coord keys of every stairs tile on the current map
 	mapStairsTiles: Set<string> | null = null;
-	// All compiled floors of the current map plus the staircase links
-	// between them - placeholder until edge maps have real multi-floor
-	// support (see the project's plan: paint a second floor in the Map
-	// Creator, connect via matching stair-connector tiles). Always
-	// null for now.
-	mapFloors: null = null;
-	// Index into mapFloors.floors
+	/** Every compiled floor of the loaded MapBundle, bottom-to-top. */
+	mapFloors: CompiledEdgeMap[] | null = null;
+	/** Source bundle — needed so floor switches can read tile codes. */
+	mapBundle: MapBundle | null = null;
+	mapGroundFloorIndex = 0;
 	localPlayerFloor = 0;
 	// Staircase clusters
 	mapStaircaseClusters: StaircaseCluster[] = [];

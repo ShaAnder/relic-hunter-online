@@ -9,21 +9,19 @@ import { missionCustomMapRepo } from "@/core/maps/missionCustomMapRepo";
 import { SelectedMapId } from "@/core/game/GameSession";
 
 /**
- * Per-match config. Only one map exists right now — the hand-drawn
- * alleyways map — so this is currently just a confirmation screen
- * rather than a real config picker. Procedural generation (dungeon,
- * backstreets) was removed in favor of pre-drawn maps as the more
- * reliable approach; if a second hand-drawn map is added later, a
- * map-choice control belongs back here. Start writes missionParams
- * into the session and enters LoadingScene, which generates the
- * chests and does the pre-match reveal before handing off to MapScene
- * itself.
+ * Per-match config. Official maps and custom maps are separate tabs.
+ * Start writes missionParams into the session and opens LoadingOverlay,
+ * which compiles the chosen MapBundle and hands off to MapScene.
  */
 export class MissionSelectScene implements Scene {
 	readonly view = new Container();
 	private content = new Container();
 
-	private selectedMap: SelectedMapId = { type: "custom", id: "" };
+	private mapSource: "official" | "custom" = "official";
+	private officialBtn!: Button;
+	private customBtn!: Button;
+
+	private selectedMap: SelectedMapId = { type: "builtin", id: "alleyways" };
 	private mapButtons: Button[] = [];
 
 	private title!: Text;
@@ -36,7 +34,7 @@ export class MissionSelectScene implements Scene {
 	private fogOfWarEnabled = true;
 
 	private readonly DESIGN_WIDTH = 700;
-	private readonly DESIGN_HEIGHT = 460;
+	private readonly DESIGN_HEIGHT = 560;
 
 	constructor(private game: Game) {}
 
@@ -53,20 +51,43 @@ export class MissionSelectScene implements Scene {
 		this.layout(width, height);
 	}
 
-	private buildMapList(): void {
-		const maps: { id: SelectedMapId; label: string }[] = missionCustomMapRepo
-			.list()
-			.map((name) => ({
-				id: { type: "custom" as const, id: name },
-				label: name,
-			}));
+	private officialMaps(): { id: SelectedMapId; label: string }[] {
+		return [{ id: { type: "builtin", id: "alleyways" }, label: "Alleyways" }];
+	}
+
+	private customMaps(): { id: SelectedMapId; label: string }[] {
+		return missionCustomMapRepo.list().map((name) => ({
+			id: { type: "custom" as const, id: name },
+			label: name,
+		}));
+	}
+
+	private currentMaps() {
+		return this.mapSource === "official"
+			? this.officialMaps()
+			: this.customMaps();
+	}
+
+	private clearMapButtons(): void {
+		for (const btn of this.mapButtons) {
+			this.content.removeChild(btn.view);
+		}
+		this.mapButtons = [];
+	}
+
+	private rebuildMapList(): void {
+		this.clearMapButtons();
+		const maps = this.currentMaps();
 
 		if (maps.length === 0) {
-			this.mapLabel.text = "No maps saved yet";
+			this.selectedMap = { type: "custom", id: "" };
+			this.mapLabel.text = "No custom maps saved";
+			this.startBtn.setEnabled(false);
+			this.layout(this.game.app.screen.width, this.game.app.screen.height);
 			return;
 		}
 
-		// default to first
+		this.startBtn.setEnabled(true);
 		this.selectedMap = maps[0].id;
 		this.mapLabel.text = maps[0].label;
 
@@ -79,12 +100,25 @@ export class MissionSelectScene implements Scene {
 				onClick: () => {
 					this.selectedMap = m.id;
 					this.mapLabel.text = m.label;
+					this.highlightSelected(i);
 				},
 			});
-			btn.view.y = 80 + i * 42;
 			this.content.addChild(btn.view);
 			this.mapButtons.push(btn);
 		});
+		this.highlightSelected(0);
+		this.layout(this.game.app.screen.width, this.game.app.screen.height);
+	}
+
+	private highlightSelected(index: number): void {
+		this.mapButtons.forEach((btn, i) => btn.setActive(i === index));
+	}
+
+	private setMapSource(source: "official" | "custom"): void {
+		this.mapSource = source;
+		this.officialBtn.setActive(source === "official");
+		this.customBtn.setActive(source === "custom");
+		this.rebuildMapList();
 	}
 
 	private buildUI(): void {
@@ -102,7 +136,23 @@ export class MissionSelectScene implements Scene {
 		});
 		this.content.addChild(this.mapLabel);
 
-		this.buildMapList();
+		this.officialBtn = new Button({
+			text: "Official",
+			width: 130,
+			height: 36,
+			fontSize: 14,
+			onClick: () => this.setMapSource("official"),
+		});
+		this.customBtn = new Button({
+			text: "Custom",
+			width: 130,
+			height: 36,
+			fontSize: 14,
+			onClick: () => this.setMapSource("custom"),
+		});
+		this.content.addChild(this.officialBtn.view);
+		this.content.addChild(this.customBtn.view);
+		this.officialBtn.setActive(true);
 
 		this.fogToggleBtn = new Button({
 			text: "Fog of War: ON",
@@ -134,6 +184,8 @@ export class MissionSelectScene implements Scene {
 			},
 		});
 		this.content.addChild(this.backBtn.view);
+
+		this.rebuildMapList();
 	}
 
 	private toggleFogOfWar(): void {
@@ -144,6 +196,7 @@ export class MissionSelectScene implements Scene {
 	}
 
 	private onStart(): void {
+		if (this.selectedMap.type === "custom" && !this.selectedMap.id) return;
 		this.game.session.missionParams = {
 			fogOfWarEnabled: this.fogOfWarEnabled,
 			selectedMap: this.selectedMap,
@@ -152,20 +205,33 @@ export class MissionSelectScene implements Scene {
 	}
 
 	private layout(width: number, height: number): void {
-		this.title.x = this.DESIGN_WIDTH / 2 - this.title.width / 2;
-		this.title.y = this.DESIGN_HEIGHT * 0.22;
+		const cx = this.DESIGN_WIDTH / 2;
 
-		this.mapLabel.x = this.DESIGN_WIDTH / 2 - this.mapLabel.width / 2;
-		this.mapLabel.y = this.DESIGN_HEIGHT * 0.4;
+		this.title.x = cx - this.title.width / 2;
+		this.title.y = 24;
 
-		this.fogToggleBtn.view.x = this.DESIGN_WIDTH / 2 - 110;
-		this.fogToggleBtn.view.y = this.DESIGN_HEIGHT * 0.55;
+		this.officialBtn.view.x = cx - 135;
+		this.officialBtn.view.y = 72;
+		this.customBtn.view.x = cx + 5;
+		this.customBtn.view.y = 72;
 
-		this.startBtn.view.x = this.DESIGN_WIDTH / 2 - 100;
-		this.startBtn.view.y = this.DESIGN_HEIGHT * 0.7;
+		this.mapLabel.x = cx - this.mapLabel.width / 2;
+		this.mapLabel.y = 118;
 
-		this.backBtn.view.x = this.DESIGN_WIDTH / 2 - 70;
-		this.backBtn.view.y = this.DESIGN_HEIGHT * 0.84;
+		this.mapButtons.forEach((btn, i) => {
+			btn.view.x = cx - 130;
+			btn.view.y = 150 + i * 42;
+		});
+
+		const listBottom = 150 + this.mapButtons.length * 42;
+		const controlsY = Math.max(listBottom + 16, 260);
+
+		this.fogToggleBtn.view.x = cx - 110;
+		this.fogToggleBtn.view.y = controlsY;
+		this.startBtn.view.x = cx - 100;
+		this.startBtn.view.y = controlsY + 56;
+		this.backBtn.view.x = cx - 70;
+		this.backBtn.view.y = controlsY + 118;
 
 		const scale = computeFitScale(
 			width,

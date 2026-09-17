@@ -1,4 +1,9 @@
-import { compileEdgeMap, EdgeMapTileCode, type CompiledEdgeMap } from "./edgeMapCompiler";
+import {
+	compileEdgeMap,
+	EdgeMapTileCode,
+	type CompiledEdgeMap,
+} from "./edgeMapCompiler";
+import { ALLEYWAYS_EDGE_BLUEPRINT } from "./alleywaysEdgeBlueprint";
 
 /**
  * Elevation a StairConnector renders at once we know which side of a
@@ -45,7 +50,11 @@ export interface ValidationResult {
 }
 
 /** Reads one tile's code out of a floor's double-resolution blueprint at logical (x, y) — logical coordinates are half the blueprint's own indices, since every other position in a double-resolution grid is an edge slot, not a tile. */
-function tileCodeAt(floorBlueprint: number[][], x: number, y: number): number | null {
+function tileCodeAt(
+	floorBlueprint: number[][],
+	x: number,
+	y: number,
+): number | null {
 	const row = floorBlueprint[2 * y];
 	if (row === undefined) return null;
 	const value = row[2 * x];
@@ -144,7 +153,10 @@ export function validateMapBundle(bundle: MapBundle): ValidationResult {
 					continue;
 				}
 
-				if (code === EdgeMapTileCode.LadderBottom || code === EdgeMapTileCode.LadderTop) {
+				if (
+					code === EdgeMapTileCode.LadderBottom ||
+					code === EdgeMapTileCode.LadderTop
+				) {
 					const isBottom = code === EdgeMapTileCode.LadderBottom;
 					const neighborFloorIndex = isBottom ? floorIndex + 1 : floorIndex - 1;
 					const neighborFloor = bundle.floors[neighborFloorIndex];
@@ -219,7 +231,9 @@ export function validateMapBundle(bundle: MapBundle): ValidationResult {
  * instant-floor-switch model has no way to represent anyway.
  */
 export function compileMapBundle(bundle: MapBundle): CompiledEdgeMap[] {
-	const compiledFloors = bundle.floors.map((blueprint) => compileEdgeMap(blueprint));
+	const compiledFloors = bundle.floors.map((blueprint) =>
+		compileEdgeMap(blueprint),
+	);
 
 	for (let floorIndex = 0; floorIndex < bundle.floors.length; floorIndex++) {
 		const floor = bundle.floors[floorIndex];
@@ -230,7 +244,8 @@ export function compileMapBundle(bundle: MapBundle): CompiledEdgeMap[] {
 
 		for (let y = 0; y < height; y++) {
 			for (let x = 0; x < width; x++) {
-				if (tileCodeAt(floor, x, y) !== EdgeMapTileCode.StairConnector) continue;
+				if (tileCodeAt(floor, x, y) !== EdgeMapTileCode.StairConnector)
+					continue;
 
 				const matchesBelow =
 					below !== undefined &&
@@ -254,4 +269,69 @@ export function compileMapBundle(bundle: MapBundle): CompiledEdgeMap[] {
 	}
 
 	return compiledFloors;
+}
+
+export function tileCodeAtLogical(
+	floorBlueprint: number[][],
+	x: number,
+	y: number,
+): number | null {
+	return tileCodeAt(floorBlueprint, x, y);
+}
+
+/**
+ * If (x, y) on fromFloor is a working stair connector or ladder,
+ * return the neighbor floor index to switch to. Otherwise null.
+ * Both-direction connectors (rare pass-through) go up.
+ */
+export function resolveFloorTransition(
+	bundle: MapBundle,
+	fromFloor: number,
+	x: number,
+	y: number,
+): number | null {
+	const floor = bundle.floors[fromFloor];
+	if (!floor) return null;
+	const code = tileCodeAt(floor, x, y);
+	if (code === null) return null;
+
+	if (code === EdgeMapTileCode.StairConnector) {
+		const below = bundle.floors[fromFloor - 1];
+		const above = bundle.floors[fromFloor + 1];
+		const matchesBelow =
+			below !== undefined &&
+			tileCodeAt(below, x, y) === EdgeMapTileCode.StairConnector;
+		const matchesAbove =
+			above !== undefined &&
+			tileCodeAt(above, x, y) === EdgeMapTileCode.StairConnector;
+		if (matchesAbove) return fromFloor + 1;
+		if (matchesBelow) return fromFloor - 1;
+		return null;
+	}
+
+	if (code === EdgeMapTileCode.LadderBottom) {
+		const above = bundle.floors[fromFloor + 1];
+		if (above && tileCodeAt(above, x, y) === EdgeMapTileCode.LadderTop) {
+			return fromFloor + 1;
+		}
+		return null;
+	}
+
+	if (code === EdgeMapTileCode.LadderTop) {
+		const below = bundle.floors[fromFloor - 1];
+		if (below && tileCodeAt(below, x, y) === EdgeMapTileCode.LadderBottom) {
+			return fromFloor - 1;
+		}
+		return null;
+	}
+
+	return null;
+}
+
+export function officialAlleywaysBundle(): MapBundle {
+	return {
+		name: "Alleyways",
+		floors: [ALLEYWAYS_EDGE_BLUEPRINT],
+		groundFloorIndex: 0,
+	};
 }

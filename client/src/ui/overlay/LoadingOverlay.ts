@@ -8,8 +8,8 @@ import {
 import {
 	type Grid,
 	type GridCoord,
-	compileEdgeMap,
-	ALLEYWAYS_EDGE_BLUEPRINT,
+	compileMapBundle,
+	officialAlleywaysBundle,
 	findFirstWalkableTile,
 	planChests,
 	coordKey,
@@ -144,37 +144,32 @@ export class LoadingOverlay implements Overlay {
 
 		const choice = this.game.session.missionParams?.selectedMap;
 
-		// A saved custom map is a full MapBundle now (every floor the
-		// Map Creator had, plus which one is ground) — but gameplay
-		// itself only knows how to walk a single floor so far (see the
-		// "no multi-floor / stairs data yet" comment below), so this
-		// pulls out just the bundle's own ground floor to compile.
-		// Whichever other floors it has ride along safely in storage
-		// for whenever that gameplay support gets built.
-		const blueprint =
+		const bundle =
 			choice?.type === "custom"
 				? (() => {
-						const bundle = missionCustomMapRepo.load(choice.id);
-						if (!bundle) throw new Error(`Custom map "${choice.id}" not found`);
-						return bundle.floors[bundle.groundFloorIndex];
+						const loaded = missionCustomMapRepo.load(choice.id);
+						if (!loaded) {
+							throw new Error(`Custom map "${choice.id}" not found`);
+						}
+						return loaded;
 					})()
-				: ALLEYWAYS_EDGE_BLUEPRINT;
+				: officialAlleywaysBundle();
 
-		const compiled = compileEdgeMap(blueprint);
+		const compiledFloors = compileMapBundle(bundle);
+		const ground = bundle.groundFloorIndex;
+		const current = compiledFloors[ground];
 
-		this.grid = compiled.grid;
-		this.game.session.generatedGrid = compiled.grid;
-		this.game.session.mapEdges = compiled.edges;
-		this.game.session.mapElevation = compiled.elevation;
-
-		// No multi-floor / stairs data yet on the edge path - see the
-		// project's plan for building this out on top of the Map
-		// Creator (paint a second floor, matching stair connectors).
+		this.grid = current.grid;
+		this.game.session.generatedGrid = current.grid;
+		this.game.session.mapEdges = current.edges;
+		this.game.session.mapElevation = current.elevation;
+		this.game.session.mapFloors = compiledFloors;
+		this.game.session.mapBundle = bundle;
+		this.game.session.mapGroundFloorIndex = ground;
+		this.game.session.localPlayerFloor = ground;
 		this.game.session.mapTransparent = null;
 		this.game.session.mapStairsTiles = null;
-		this.game.session.mapFloors = null;
 		this.game.session.mapStaircaseClusters = [];
-		this.game.session.localPlayerFloor = 0;
 	}
 
 	/**
