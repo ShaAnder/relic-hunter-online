@@ -53,6 +53,7 @@ export interface MatchLogEntry {
 export interface PlacedChestRecord {
 	plan: ChestPlan;
 	coord: GridCoord;
+	floorIndex: number;
 }
 
 export interface MatchParticipant {

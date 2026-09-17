@@ -33,10 +33,7 @@ export interface AiTurnCallbacks {
 	playBossAudio(): void;
 	isTutorial(): boolean;
 	applyFloor(floorIndex: number): void;
-	trySwitchFloor(
-		unit: { state: { coord: RH.GridCoord; floorIndex: number } },
-		moveCamera: boolean,
-	): Promise<void>;
+	trySwitchFloor(unit: PilotedMercenary, moveCamera: boolean): Promise<void>;
 }
 
 /**

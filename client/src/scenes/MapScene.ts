@@ -180,12 +180,22 @@ export class MapScene implements Scene, TutorialPort {
 		);
 	}
 
+	private cachedTileFills: {
+		floorIndex: number;
+		fills: Map<string, number>;
+	} | null = null;
+
 	private tileFillsForCurrentFloor(): Map<string, number> {
+		const viewedFloor = this.game.session.viewedFloor;
+		if (this.cachedTileFills?.floorIndex === viewedFloor) {
+			return this.cachedTileFills.fills;
+		}
+
 		const fills = new Map<string, number>();
 		const bundle = this.game.session.mapBundle;
 		if (!bundle) return fills;
 
-		const floor = bundle.floors[this.game.session.viewedFloor];
+		const floor = bundle.floors[viewedFloor];
 		if (!floor) return fills;
 
 		const height = (floor.length + 1) / 2;
@@ -197,6 +207,7 @@ export class MapScene implements Scene, TutorialPort {
 				if (color !== undefined) fills.set(`${x},${y}`, color);
 			}
 		}
+		this.cachedTileFills = { floorIndex: viewedFloor, fills };
 		return fills;
 	}
 
@@ -1266,6 +1277,7 @@ export class MapScene implements Scene, TutorialPort {
 				},
 				aiClass,
 				aiName,
+				this.localUnit.state.floorIndex,
 			);
 			RH.updateFogOfWar(state, state.coord, this.turnsTaken, this.grid);
 			const mercenary = new Mercenary(
@@ -1879,7 +1891,7 @@ export class MapScene implements Scene, TutorialPort {
 
 	// switchFloor (staircase-triggered floor changes)
 	private async trySwitchFloor(
-		unit: { state: { coord: RH.GridCoord; floorIndex: number } },
+		unit: PilotedMercenary,
 		moveCamera: boolean,
 	): Promise<void> {
 		const bundle = this.game.session.mapBundle;
@@ -1901,11 +1913,30 @@ export class MapScene implements Scene, TutorialPort {
 		}
 		if (moveCamera) this.applyFloor(next);
 		else this.syncFloorVisibility();
+
+		// Re-sync screen position to the NEW floor's elevation at this
+		// same tile - the walk animation positioned the sprite using
+		// the floor it was just standing on, which is stale the moment
+		// the floor actually switches underneath it. Most visible on a
+		// stair connector specifically, since its elevation deliberately
+		// differs between the lower floor's copy (+0.5) and the upper
+		// floor's copy (-0.5) - without this, the sprite stayed floating
+		// at the lower floor's climb height instead of settling to the
+		// upper floor's sunken-landing height.
+		unit.mercenary.setPositionInstant(
+			gridToScreenElevatedWithClimb(
+				unit.state.coord,
+				this.game.session.mapElevation ?? undefined,
+				this.game.session.mapStaircaseClusters,
+			),
+		);
 	}
 
 	private applyFloor(floorIndex: number): void {
 		const floors = this.game.session.mapFloors;
 		if (!floors?.[floorIndex]) return;
+
+		const floorActuallyChanged = this.game.session.viewedFloor !== floorIndex;
 
 		const compiled = floors[floorIndex];
 		this.grid = compiled.grid;
@@ -1915,6 +1946,32 @@ export class MapScene implements Scene, TutorialPort {
 		this.game.session.mapEdges = compiled.edges;
 		this.game.session.mapElevation = compiled.elevation;
 		this.game.session.viewedFloor = floorIndex;
+
+		// MoveController snapshots grid/edges/elevation at construction
+		// time rather than reading them live - it has to be rebuilt
+		// whenever the floor actually changes, or movement keeps
+		// validating against whichever floor the player started on,
+		// even though rendering has already moved on to the new one
+		// (this was the actual root cause of walkability/void behaving
+		// backward on a basement floor - visuals were right, movement
+		// was still checking the spawn floor's data underneath).
+		// Gated on floorActuallyChanged specifically because applyFloor
+		// itself runs unconditionally at the start of every player turn
+		// (see beginPlayerTurn) - without this guard, MoveController
+		// would be torn down and rebuilt every single turn even when
+		// nothing about the floor ever changed. Not present on the very
+		// first call, from the constructor, before moveController
+		// exists yet.
+		if (this.moveController && floorActuallyChanged) {
+			this.boardContainer.removeChild(this.moveController.view);
+			this.moveController = this.createMoveController();
+			this.boardContainer.addChild(this.moveController.view);
+			// Re-adding the view above moved it to the end of
+			// boardContainer's children - restore mercenaryContainer's
+			// on-top position, the same invariant the constructor and
+			// regenerateMap() both already maintain.
+			this.boardContainer.addChild(this.mercenaryContainer);
+		}
 
 		this.syncFloorVisibility();
 		this.rebuildMapRenderWithFog();

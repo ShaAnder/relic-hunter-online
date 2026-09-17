@@ -40,7 +40,7 @@ function pushCopies(
  */
 function buildBlueCards(): CardData[] {
 	const cards: CardData[] = [];
-	pushCopies(cards, 2, {
+	pushCopies(cards, 1, {
 		color: "blue",
 		name: "Exit (E)",
 		value: "E",
@@ -48,21 +48,21 @@ function buildBlueCards(): CardData[] {
 			"Teleport to exit — wins if carrying the target item, otherwise random teleport",
 		actionType: "move",
 	});
-	pushCopies(cards, 8, {
+	pushCopies(cards, 1, {
 		color: "blue",
 		name: "Move +1",
 		value: 1,
 		description: "+1 Movement",
 		actionType: "move",
 	});
-	pushCopies(cards, 8, {
+	pushCopies(cards, 1, {
 		color: "blue",
 		name: "Move +2",
 		value: 2,
 		description: "+2 Movement",
 		actionType: "move",
 	});
-	pushCopies(cards, 8, {
+	pushCopies(cards, 1, {
 		color: "blue",
 		name: "Move +3",
 		value: 3,
@@ -78,7 +78,7 @@ function buildBlueCards(): CardData[] {
 function buildRedCards(): CardData[] {
 	const cards: CardData[] = [];
 	for (let value = 1; value <= 6; value++) {
-		pushCopies(cards, 4, {
+		pushCopies(cards, 1, {
 			color: "red",
 			name: `Attack +${value}`,
 			value,
@@ -86,14 +86,14 @@ function buildRedCards(): CardData[] {
 			actionType: "attack",
 		});
 	}
-	pushCopies(cards, 5, {
+	pushCopies(cards, 1, {
 		color: "red",
 		name: "Double Dmg (A)",
 		value: "A",
 		description: "Attack stat ×2, applied before defense",
 		actionType: "attack",
 	});
-	pushCopies(cards, 4, {
+	pushCopies(cards, 1, {
 		color: "red",
 		name: "Critical (C)",
 		value: "C",
@@ -109,42 +109,42 @@ function buildRedCards(): CardData[] {
  */
 function buildYellowCards(): CardData[] {
 	const cards: CardData[] = [];
-	pushCopies(cards, 4, {
+	pushCopies(cards, 1, {
 		color: "yellow",
 		name: "Def +1",
 		value: 1,
 		description: "+1 Defense",
 		actionType: "defense",
 	});
-	pushCopies(cards, 3, {
+	pushCopies(cards, 1, {
 		color: "yellow",
 		name: "Def +2",
 		value: 2,
 		description: "+2 Defense",
 		actionType: "defense",
 	});
-	pushCopies(cards, 4, {
+	pushCopies(cards, 1, {
 		color: "yellow",
 		name: "Def +3",
 		value: 3,
 		description: "+3 Defense",
 		actionType: "defense",
 	});
-	pushCopies(cards, 3, {
+	pushCopies(cards, 1, {
 		color: "yellow",
 		name: "Def +4",
 		value: 4,
 		description: "+4 Defense",
 		actionType: "defense",
 	});
-	pushCopies(cards, 4, {
+	pushCopies(cards, 1, {
 		color: "yellow",
 		name: "Nullify (A)",
 		value: "A",
 		description: "Negates the hit entirely, or instantly disarms a trap",
 		actionType: "defense",
 	});
-	pushCopies(cards, 2, {
+	pushCopies(cards, 1, {
 		color: "yellow",
 		name: "Double Def (C)",
 		value: "C",
@@ -160,7 +160,7 @@ function buildYellowCards(): CardData[] {
  */
 function buildGreenCards(): CardData[] {
 	const cards: CardData[] = [];
-	pushCopies(cards, 21, {
+	pushCopies(cards, 1, {
 		color: "green",
 		name: "Stun",
 		value: 1,

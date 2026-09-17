@@ -32,7 +32,7 @@ export class ChestSystem {
 
 	/** Rebuilds from session's already-decided placements — a returning player, not a fresh match. */
 	spawnFromPlacements(
-		records: { coord: RH.GridCoord; plan: RH.ChestPlan }[],
+		records: { coord: RH.GridCoord; plan: RH.ChestPlan; floorIndex: number }[],
 	): void {
 		this.container.removeChildren();
 		this.placedChests = [];
@@ -44,7 +44,7 @@ export class ChestSystem {
 				coord: record.coord,
 				plan: record.plan,
 				entity,
-				floorIndex: 0,
+				floorIndex: record.floorIndex,
 			});
 		}
 	}
