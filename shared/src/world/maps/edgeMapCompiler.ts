@@ -14,6 +14,50 @@ export enum EdgeMapTileCode {
 	Pavement = 2,
 	Nature = 3,
 	River = 4,
+	/**
+	 * Purely decorative — marks the bottom landing of a staircase so
+	 * it reads clearly on screen. Carries no cross-floor matching
+	 * requirement at all; the actual floor-switch trigger is
+	 * StairConnector, which can sit anywhere along the run between
+	 * this and StairTop (including around a corner - see StairStep).
+	 */
+	StairBottom = 5,
+	/** Purely decorative — the top landing, same idea as StairBottom. */
+	StairTop = 6,
+	/**
+	 * Same connecting relationship as the old StairBottom, for a
+	 * ladder instead of a staircase. Deliberately just the one tile -
+	 * unlike a staircase, a ladder needs no path tiles or separate
+	 * trigger point; the climb is a single, direct connection.
+	 */
+	LadderBottom = 7,
+	/** Same connecting relationship as LadderBottom's match, for a ladder. */
+	LadderTop = 8,
+	/**
+	 * A walkable step along a staircase's run, connecting a
+	 * StairBottom to a StairTop (or to a StairConnector). Purely
+	 * decorative and freely placeable - a run of these can corner,
+	 * switchback, wind however the map needs, since nothing about
+	 * validation depends on their shape or position.
+	 */
+	StairStep = 9,
+	/**
+	 * The actual floor-switch trigger for a staircase - unlike
+	 * StairBottom/StairTop, THIS is what validateMapBundle checks:
+	 * every StairConnector needs a matching StairConnector at the
+	 * identical (x, y) on exactly one neighboring floor (the floor
+	 * below if this is the "lower" copy of the pair, above if this is
+	 * the "upper" copy - see compileMapBundle's elevation pass, which
+	 * uses this same lower/upper distinction to render the two copies
+	 * at different heights so the transition reads as one continuous
+	 * rise across the instant floor-switch).
+	 *
+	 * Deliberately decoupled from StairBottom/StairTop's positions -
+	 * this can sit anywhere along a winding or cornering run of
+	 * StairStep tiles, not necessarily at the midpoint of a straight
+	 * line between the two landings.
+	 */
+	StairConnector = 10,
 }
 
 const TILE_ELEVATION: Record<EdgeMapTileCode, number> = {
@@ -22,6 +66,17 @@ const TILE_ELEVATION: Record<EdgeMapTileCode, number> = {
 	[EdgeMapTileCode.Pavement]: 0.1,
 	[EdgeMapTileCode.Nature]: 0,
 	[EdgeMapTileCode.River]: Infinity,
+	[EdgeMapTileCode.StairBottom]: 0,
+	[EdgeMapTileCode.StairTop]: 0,
+	[EdgeMapTileCode.LadderBottom]: 0,
+	[EdgeMapTileCode.LadderTop]: 0,
+	[EdgeMapTileCode.StairStep]: 0,
+	// Default for a single-floor compile with no cross-floor context -
+	// the "lower half of the pair" value. compileMapBundle's elevation
+	// pass overrides this to -0.5 for whichever copy of a matched pair
+	// turns out to be the upper floor - see StairConnector's own doc
+	// comment in the enum above.
+	[EdgeMapTileCode.StairConnector]: 0.5,
 };
 
 export interface CompiledEdgeMap {
