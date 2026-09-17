@@ -54,6 +54,7 @@ import type {
 	TutorialCombatGuide,
 } from "@/tutorial/tutorialPort";
 import type { DialogueLine } from "@/tutorial/dialogue";
+import { fillForTileCode } from "@/rendering/tileFills";
 
 /**
  * Tactical map scene — grid, mercenary, AP turns, cards, chests, win condition.
@@ -171,7 +172,32 @@ export class MapScene implements Scene, TutorialPort {
 					turn: this.turnsTaken,
 				}
 			: null;
-		this.mapRenderer.build(compiled, focus, fog);
+		this.mapRenderer.build(
+			compiled,
+			focus,
+			fog,
+			this.tileFillsForCurrentFloor(),
+		);
+	}
+
+	private tileFillsForCurrentFloor(): Map<string, number> {
+		const fills = new Map<string, number>();
+		const bundle = this.game.session.mapBundle;
+		if (!bundle) return fills;
+
+		const floor = bundle.floors[this.game.session.viewedFloor];
+		if (!floor) return fills;
+
+		const height = (floor.length + 1) / 2;
+		const width = ((floor[0]?.length ?? 1) + 1) / 2;
+
+		for (let y = 0; y < height; y++) {
+			for (let x = 0; x < width; x++) {
+				const color = fillForTileCode(floor[2 * y]?.[2 * x]);
+				if (color !== undefined) fills.set(`${x},${y}`, color);
+			}
+		}
+		return fills;
 	}
 
 	/**
@@ -285,7 +311,10 @@ export class MapScene implements Scene, TutorialPort {
 			getLocalUnit: () => this.localUnit,
 			getUnits: () => this.units,
 			getGrid: () => this.grid,
-			rebuildMapRender: () => this.rebuildMapRenderWithFog(),
+			rebuildMapRender: () => {
+				this.syncFloorVisibility();
+				this.rebuildMapRenderWithFog();
+			},
 			revealExitArea: () => this.revealExitArea(),
 			exitTargetingMode: () => this.exitTargetingMode(),
 			pickEnemySpawnTile: (used) => this.pickEnemySpawnTile(used),
@@ -337,6 +366,9 @@ export class MapScene implements Scene, TutorialPort {
 				showBossAlert: (ms) => this.hud.showBossAlert(ms),
 				playBossAudio: () => this.game.audio.playMusic("boss"),
 				isTutorial: () => !!this.tutorialConfig,
+				applyFloor: (floorIndex) => this.applyFloor(floorIndex),
+				trySwitchFloor: (unit, moveCamera) =>
+					this.trySwitchFloor(unit, moveCamera),
 			},
 		);
 
@@ -348,6 +380,9 @@ export class MapScene implements Scene, TutorialPort {
 		if (!this.tutorialConfig || this.tutorialConfig.spawnAiHunters) {
 			this.spawnEnemyHunters();
 		}
+		// Now that at least the local unit exists, sync grid/edges/elevation
+		// and floor-scoped visibility to its actual starting floor.
+		this.applyFloor(this.localUnit.state.floorIndex);
 
 		if (this.tutorialConfig?.script.staticActors) {
 			this.tutorialMarkers.spawnStaticActors(
@@ -537,31 +572,39 @@ export class MapScene implements Scene, TutorialPort {
 			// they move — so fog only shows them while their current
 			// tile is actively in sight range right now, never merely
 			// "explored," which would misleadingly suggest they're still
-			// standing wherever they were last seen.
+			// standing wherever they were last seen. Also gated on being
+			// on the currently-viewed floor — a unit on a different floor
+			// could otherwise flash through at the same (x,y).
+			const onViewedFloor =
+				unit.state.floorIndex === this.game.session.viewedFloor;
 			const fogVisible =
-				!this.fogOfWarEnabled ||
-				unit.pilot === "local" ||
-				RH.getTileVisibility(
-					this.localUnit.state,
-					unit.state.coord,
-					this.localUnit.state.coord,
-					this.turnsTaken,
-				) === "visible";
+				onViewedFloor &&
+				(!this.fogOfWarEnabled ||
+					unit.pilot === "local" ||
+					RH.getTileVisibility(
+						this.localUnit.state,
+						unit.state.coord,
+						this.localUnit.state.coord,
+						this.turnsTaken,
+					) === "visible");
 			unit.mercenary.view.alpha = fogVisible ? downedAlpha : 0;
 			unit.mercenary.setIncapacitated(
 				unit.state.currentHp <= 0 || unit.state.stunnedTurnsRemaining > 0,
 			);
 		}
 		for (const monster of this.mapController.monsterSystem.all) {
+			const onViewedFloor =
+				monster.state.floorIndex === this.game.session.viewedFloor;
 			monster.token.update(deltaTime);
 			monster.token.view.alpha =
-				!this.fogOfWarEnabled ||
-				RH.getTileVisibility(
-					this.localUnit.state,
-					monster.state.coord,
-					this.localUnit.state.coord,
-					this.turnsTaken,
-				) === "visible"
+				onViewedFloor &&
+				(!this.fogOfWarEnabled ||
+					RH.getTileVisibility(
+						this.localUnit.state,
+						monster.state.coord,
+						this.localUnit.state.coord,
+						this.turnsTaken,
+					) === "visible")
 					? 1
 					: 0;
 		}
@@ -570,14 +613,16 @@ export class MapScene implements Scene, TutorialPort {
 		// chests is tracked entirely separately (each unit's own
 		// exploredTiles) and is unaffected by what's drawn here.
 		for (const chest of this.mapController.chestSystem.all) {
+			const onViewedFloor = chest.floorIndex === this.game.session.viewedFloor;
 			chest.entity.view.alpha =
-				!this.fogOfWarEnabled ||
-				RH.getTileVisibility(
-					this.localUnit.state,
-					chest.coord,
-					this.localUnit.state.coord,
-					this.turnsTaken,
-				) === "visible"
+				onViewedFloor &&
+				(!this.fogOfWarEnabled ||
+					RH.getTileVisibility(
+						this.localUnit.state,
+						chest.coord,
+						this.localUnit.state.coord,
+						this.turnsTaken,
+					) === "visible")
 					? 1
 					: 0;
 		}
@@ -768,6 +813,7 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	private async beginPlayerTurn(): Promise<void> {
+		this.applyFloor(this.localUnit.state.floorIndex);
 		this.camera.unlock();
 
 		if (this.localUnit.state.stunnedTurnsRemaining > 0) {
@@ -1049,7 +1095,7 @@ export class MapScene implements Scene, TutorialPort {
 		}
 
 		// Staircase floor-switching is retired
-		await this.trySwitchFloor(local.state.coord);
+		await this.trySwitchFloor(local, true);
 		// Deferred until after the walk animation finishes
 		RH.updateFogOfWar(
 			local.state,
@@ -1210,6 +1256,7 @@ export class MapScene implements Scene, TutorialPort {
 			const state = RH.createMercenary(
 				`enemy_${archetype}_${i}`,
 				coord,
+
 				{
 					movement: 3 + (archetype === "aggressive" ? 1 : 0),
 					attack: archetype === "aggressive" ? 4 : 3,
@@ -1831,26 +1878,29 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	// switchFloor (staircase-triggered floor changes)
-	private async trySwitchFloor(coord: RH.GridCoord): Promise<void> {
+	private async trySwitchFloor(
+		unit: { state: { coord: RH.GridCoord; floorIndex: number } },
+		moveCamera: boolean,
+	): Promise<void> {
 		const bundle = this.game.session.mapBundle;
 		const floors = this.game.session.mapFloors;
 		if (!bundle || !floors) return;
 
 		const next = RH.resolveFloorTransition(
 			bundle,
-			this.game.session.localPlayerFloor,
-			coord.x,
-			coord.y,
+			unit.state.floorIndex,
+			unit.state.coord.x,
+			unit.state.coord.y,
 		);
-		if (next === null || next === this.game.session.localPlayerFloor) return;
+		if (next === null || next === unit.state.floorIndex) return;
 		if (!floors[next]) return;
 
-		this.applyFloor(next);
-		this.showFeedback(
-			next > this.game.session.mapGroundFloorIndex
-				? "Ascended a floor"
-				: "Descended a floor",
-		);
+		unit.state.floorIndex = next;
+		if (unit === this.localUnit) {
+			this.game.session.localPlayerFloor = next;
+		}
+		if (moveCamera) this.applyFloor(next);
+		else this.syncFloorVisibility();
 	}
 
 	private applyFloor(floorIndex: number): void {
@@ -1864,17 +1914,26 @@ export class MapScene implements Scene, TutorialPort {
 		this.game.session.generatedGrid = compiled.grid;
 		this.game.session.mapEdges = compiled.edges;
 		this.game.session.mapElevation = compiled.elevation;
-		this.game.session.localPlayerFloor = floorIndex;
+		this.game.session.viewedFloor = floorIndex;
 
-		const onGround = floorIndex === this.game.session.mapGroundFloorIndex;
-		this.mapController.chestSystem.container.visible = onGround;
-		this.mapController.chestSystem.container.visible = onGround;
+		this.syncFloorVisibility();
+		this.rebuildMapRenderWithFog();
+	}
 
-		for (const monster of this.mapController.monsterSystem.all) {
-			monster.token.view.visible = onGround;
+	private syncFloorVisibility(): void {
+		const here = this.game.session.viewedFloor;
+
+		for (const chest of this.mapController.chestSystem.all) {
+			chest.entity.view.visible = chest.floorIndex === here;
 		}
 
-		this.rebuildMapRenderWithFog();
+		for (const monster of this.mapController.monsterSystem.all) {
+			monster.token.view.visible = monster.state.floorIndex === here;
+		}
+
+		for (const unit of this.units) {
+			unit.mercenary.view.visible = unit.state.floorIndex === here;
+		}
 	}
 
 	/**
@@ -2436,17 +2495,26 @@ export class MapScene implements Scene, TutorialPort {
 			this.game.session.playerSpawn ??
 			RH.findFirstWalkableTile(this.grid) ?? { x: 0, y: 0 };
 
+		const floorIndex = this.game.session.playerSpawnFloor ?? 0;
+
 		const character = this.game.session.character;
 		if (character) {
-			return RH.spawnFromCharacter(character, spawnCoord);
+			return RH.spawnFromCharacter(character, spawnCoord, floorIndex);
 		}
 
-		return RH.createMercenary("player", spawnCoord, {
-			movement: 4,
-			attack: 3,
-			defense: 2,
-			maxHp: 20,
-			ap: 3,
-		});
+		return RH.createMercenary(
+			"player",
+			spawnCoord,
+			{
+				movement: 4,
+				attack: 3,
+				defense: 2,
+				maxHp: 20,
+				ap: 3,
+			},
+			"brawler",
+			"Hunter",
+			floorIndex,
+		);
 	}
 }

@@ -57,6 +57,7 @@ export function createMercenary(
 	stats: MercenaryStats,
 	characterClass: CharacterClass = "brawler",
 	name: string = "Hunter",
+	floorIndex: number = 0,
 ): MercenaryState {
 	return {
 		id,
@@ -64,6 +65,7 @@ export function createMercenary(
 		stats,
 		characterClass,
 		name,
+		floorIndex,
 		currentHp: stats.maxHp,
 		hpCeiling: stats.maxHp,
 		items: new Array(6).fill(null),

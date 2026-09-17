@@ -104,6 +104,8 @@ export class GameSession {
 
 	// Player spawn chosen once in LoadingOverlay
 	playerSpawn: GridCoord | null = null;
+	/** Which floor the player's planned spawn coord is on — read by spawnMercenary alongside playerSpawn. */
+	playerSpawnFloor: number | null = null;
 	// The map itself, generated once in LoadingOverlay
 	generatedGrid: Grid | null = null;
 	// Per-tile elevation for the current map
@@ -118,6 +120,8 @@ export class GameSession {
 	mapBundle: MapBundle | null = null;
 	mapGroundFloorIndex = 0;
 	localPlayerFloor = 0;
+	/** Which floor is currently being rendered/looked at - distinct from localPlayerFloor, since these genuinely diverge whenever the camera/render follows an AI unit's turn on a different floor than the player's own. Every render-facing read (tile fills, visibility toggling) should use this, not localPlayerFloor. */
+	viewedFloor = 0;
 	// Staircase clusters
 	mapStaircaseClusters: StaircaseCluster[] = [];
 	participants: MatchParticipant[] | null = null;

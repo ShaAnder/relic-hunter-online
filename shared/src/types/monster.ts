@@ -36,11 +36,13 @@ export function createMonster(
 	id: string,
 	tier: MonsterTier,
 	coord: GridCoord,
+	floorIndex: number = 0,
 ): MonsterState {
 	return {
 		id,
 		tier,
 		coord,
+		floorIndex,
 		stats: MONSTER_TIER_STATS[tier],
 		currentHp: MONSTER_TIER_STATS[tier].maxHp,
 		frenzied: false,
@@ -74,6 +76,7 @@ export function monsterAsMercenaryState(monster: MonsterState): MercenaryState {
 	return {
 		id: monster.id,
 		coord: monster.coord,
+		floorIndex: monster.floorIndex,
 		stats: monster.stats,
 		characterClass: "brawler",
 		name: "Monster",

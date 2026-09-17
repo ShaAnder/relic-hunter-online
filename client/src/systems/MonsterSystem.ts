@@ -65,7 +65,11 @@ export class MonsterSystem {
 	}
 
 	/** Spawns the next-tier monster at coord. Returns the tier spawned, or null if shouldSpawn() would now say no. */
-	trySpawn(coord: RH.GridCoord, rng: RH.RandomFn): RH.MonsterTier | null {
+	trySpawn(
+		coord: RH.GridCoord,
+		rng: RH.RandomFn,
+		floorIndex: number = 0,
+	): RH.MonsterTier | null {
 		if (!this.shouldSpawn(rng)) return null;
 
 		const tier =
@@ -78,6 +82,7 @@ export class MonsterSystem {
 			`monster_${Date.now()}_${this.monsterSpawnIndex}`,
 			tier,
 			coord,
+			floorIndex,
 		);
 		const token = new MonsterToken(coord, tier, this.elevation);
 		this.mercenaryContainer.addChild(token.view);
@@ -88,8 +93,13 @@ export class MonsterSystem {
 	}
 
 	/** Spawns the boss at coord — always succeeds, no shouldSpawn gate (checkDeckExhaustion decides when this fires). */
-	spawnBoss(coord: RH.GridCoord): MonsterEntity {
-		const state = RH.createMonster(`boss_${Date.now()}`, "boss", coord);
+	spawnBoss(coord: RH.GridCoord, floorIndex: number = 0): MonsterEntity {
+		const state = RH.createMonster(
+			`boss_${Date.now()}`,
+			"boss",
+			coord,
+			floorIndex,
+		);
 		const token = new MonsterToken(coord, "boss", this.elevation);
 		this.mercenaryContainer.addChild(token.view);
 
@@ -104,8 +114,9 @@ export class MonsterSystem {
 		id: string,
 		tier: RH.MonsterTier,
 		coord: RH.GridCoord,
+		floorIndex: number = 0,
 	): MonsterEntity {
-		const state = RH.createMonster(id, tier, coord);
+		const state = RH.createMonster(id, tier, coord, floorIndex);
 		const token = new MonsterToken(coord, tier, this.elevation);
 		this.mercenaryContainer.addChild(token.view);
 

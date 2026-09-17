@@ -14,6 +14,8 @@ export interface EntityCore {
 	coord: GridCoord;
 	stats: MercenaryStats;
 	currentHp: number;
+	/** Which floor of the current map this entity is on — a coord alone is ambiguous once a map has more than one floor (the same x,y exists on every floor). Defaults to 0 (ground) everywhere it's constructed. */
+	floorIndex: number;
 }
 
 /** Draws from and plays the shared card deck. Hunters have this; monsters don't. */

@@ -158,6 +158,7 @@ function generateId(): string {
 export function spawnFromCharacter(
 	character: CharacterData,
 	coord: MercenaryState["coord"],
+	floorIndex: number = 0,
 ): MercenaryState {
 	return createMercenary(
 		character.id,
@@ -165,5 +166,6 @@ export function spawnFromCharacter(
 		character.stats,
 		character.characterClass,
 		character.name,
+		floorIndex,
 	);
 }

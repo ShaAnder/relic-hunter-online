@@ -175,6 +175,12 @@ export class MapRenderer {
 	 * whatever room-focus alone would already give it. Pass null to
 	 * disable fog-of-war entirely (matching the mission's own
 	 * fogOfWarEnabled toggle).
+	 * @param tileFills When set, overrides a specific tile's fill color
+	 * by coordinate - used for stair/ladder/connector tiles so they
+	 * read as distinct from plain floor or pavement rather than
+	 * looking like ordinary ground. Elevation-based fog/wash treatment
+	 * still applies on top exactly as normal; this only changes the
+	 * base color underneath it.
 	 */
 	build(
 		compiled: RH.CompiledEdgeMap,
@@ -184,6 +190,7 @@ export class MapRenderer {
 			center: RH.GridCoord;
 			turn: number;
 		} | null = null,
+		tileFills: Map<string, number> | null = null,
 	): void {
 		this.container.removeChildren();
 		const drawables: Drawable[] = [];
@@ -224,7 +231,14 @@ export class MapRenderer {
 					focusCellKeys !== null && !focusCellKeys.has(`${x},${y}`);
 				const state = visualStateAt(coord, roomFocused);
 				if (state === "hidden") continue;
-				drawables.push(this.tileDrawable(coord, elevation, state === "washed"));
+				drawables.push(
+					this.tileDrawable(
+						coord,
+						elevation,
+						state === "washed",
+						tileFills?.get(`${x},${y}`),
+					),
+				);
 			}
 		}
 
@@ -348,13 +362,15 @@ export class MapRenderer {
 		coord: RH.GridCoord,
 		elevation: number,
 		washed: boolean,
+		fillOverride?: number,
 	): Drawable {
 		const elevationPx = elevation * TILE_HEIGHT;
 		const trueCorners = this.trueTileCorners(coord, elevationPx);
 		const hw = (TILE_WIDTH / 2) * TILE_OVERSIZE;
 		const hh = (TILE_HEIGHT / 2) * TILE_OVERSIZE;
 		const c = trueCorners.center;
-		const color = elevation > 0 ? PAVEMENT_COLOR : FLOOR_COLOR;
+		const color =
+			fillOverride ?? (elevation > 0 ? PAVEMENT_COLOR : FLOOR_COLOR);
 		const depth = trueCorners.bottom.y - 100_000; // tiles always sort behind anything standing on their own edge
 
 		return {

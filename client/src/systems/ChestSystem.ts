@@ -7,6 +7,7 @@ export interface PlacedChest {
 	coord: RH.GridCoord;
 	plan: RH.ChestPlan;
 	entity: Chest;
+	floorIndex: number;
 }
 
 export type ChestOpenOutcome =
@@ -43,6 +44,7 @@ export class ChestSystem {
 				coord: record.coord,
 				plan: record.plan,
 				entity,
+				floorIndex: 0,
 			});
 		}
 	}
@@ -64,7 +66,7 @@ export class ChestSystem {
 			used.add(RH.coordKey(coord));
 			const entity = new Chest(coord);
 			this.container.addChild(entity.view);
-			this.placedChests.push({ coord, plan: chestPlan, entity });
+			this.placedChests.push({ coord, plan: chestPlan, entity, floorIndex: 0 });
 		}
 	}
 

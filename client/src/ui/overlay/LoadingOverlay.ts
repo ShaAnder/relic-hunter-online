@@ -6,14 +6,10 @@ import {
 	type PlacedChestRecord,
 } from "@/core/game/GameSession";
 import {
-	type Grid,
 	type GridCoord,
 	compileMapBundle,
 	officialAlleywaysBundle,
-	findFirstWalkableTile,
 	planChests,
-	coordKey,
-	pickSpreadWalkableTile,
 } from "@relic-hunter/shared";
 import { MapScene } from "@/scenes/MapScene";
 import { missionCustomMapRepo } from "@/core/maps/missionCustomMapRepo";
@@ -38,8 +34,6 @@ const FADE_MS = 500;
  */
 export class LoadingOverlay implements Overlay {
 	readonly view = new Container();
-
-	private grid!: Grid;
 
 	private backdrop = new Graphics();
 	private cover = new Graphics();
@@ -159,7 +153,6 @@ export class LoadingOverlay implements Overlay {
 		const ground = bundle.groundFloorIndex;
 		const current = compiledFloors[ground];
 
-		this.grid = current.grid;
 		this.game.session.generatedGrid = current.grid;
 		this.game.session.mapEdges = current.edges;
 		this.game.session.mapElevation = current.elevation;
@@ -180,37 +173,71 @@ export class LoadingOverlay implements Overlay {
 		const plan = planChests(this.game.session.rng);
 		this.game.session.chestPlan = plan;
 
-		// Exit is not placed at generation — only reserve the player spawn.
-		const used = new Set<string>();
+		const floors = this.game.session.mapFloors;
+		if (!floors?.length) return;
 
-		const spawn =
-			findFirstWalkableTile(this.grid) ?? ({ x: 0, y: 0 } as GridCoord);
-		this.spawnCoord = spawn;
-		used.add(coordKey(spawn));
-		this.game.session.playerSpawn = spawn;
+		const used = new Set<string>();
+		const rng = this.game.session.rng;
+
+		const spawn = this.pickFloorAndTile(floors, rng, used) ?? {
+			floorIndex: 0,
+			coord: { x: 0, y: 0 },
+		};
+		this.spawnCoord = spawn.coord;
+		this.game.session.playerSpawn = spawn.coord;
+		this.game.session.playerSpawnFloor = spawn.floorIndex;
+		this.game.session.viewedFloor = spawn.floorIndex;
+		this.game.session.localPlayerFloor = spawn.floorIndex;
+
+		const compiled = floors[spawn.floorIndex];
+
+		this.game.session.generatedGrid = compiled.grid;
+		this.game.session.mapEdges = compiled.edges;
+		this.game.session.mapElevation = compiled.elevation;
 
 		this.placements = [];
 		for (const chestPlan of plan.chests) {
-			const coord = pickSpreadWalkableTile(
-				this.grid,
-				used,
-				this.game.session.rng,
-			);
-			if (!coord) break;
-			used.add(coordKey(coord));
-			this.placements.push({ plan: chestPlan, coord });
+			const picked = this.pickFloorAndTile(floors, rng, used);
+			if (!picked) break;
+			this.placements.push({
+				plan: chestPlan,
+				coord: picked.coord,
+				floorIndex: picked.floorIndex,
+			});
 		}
 
 		this.game.session.participants = [
 			{
 				id: "player",
 				label: this.game.session.character?.name ?? "Player",
-				coord: spawn,
+				coord: spawn.coord,
 				isLocal: true,
 			},
 		];
-
 		this.game.session.chestPlacements = this.placements;
+	}
+
+	private pickFloorAndTile(
+		floors: import("@relic-hunter/shared").CompiledEdgeMap[],
+		rng: () => number,
+		used: Set<string>,
+	): { floorIndex: number; coord: GridCoord } | null {
+		const options: { floorIndex: number; coord: GridCoord }[] = [];
+		for (let i = 0; i < floors.length; i++) {
+			const grid = floors[i].grid;
+			for (let y = 0; y < grid.height; y++) {
+				for (let x = 0; x < grid.width; x++) {
+					const coord = { x, y };
+					if (!grid.isWalkable(coord)) continue;
+					if (used.has(`${i}:${x},${y}`)) continue;
+					options.push({ floorIndex: i, coord });
+				}
+			}
+		}
+		if (options.length === 0) return null;
+		const picked = options[Math.floor(rng() * options.length)];
+		used.add(`${picked.floorIndex}:${picked.coord.x},${picked.coord.y}`);
+		return picked;
 	}
 
 	private rollTurnOrder(): void {

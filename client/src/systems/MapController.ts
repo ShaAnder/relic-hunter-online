@@ -425,6 +425,7 @@ export class MapController {
 			this.cb.getUnits().map((u) => ({
 				id: u.state.id,
 				coord: u.state.coord,
+				floorIndex: u.state.floorIndex,
 				stats: u.state.stats,
 				currentHp: u.state.currentHp,
 				special: u.state.special,
@@ -438,6 +439,7 @@ export class MapController {
 			this.cb.getUnits().map((u) => ({
 				id: u.state.id,
 				coord: u.state.coord,
+				floorIndex: u.state.floorIndex,
 				stats: u.state.stats,
 				currentHp: u.state.currentHp,
 				special: u.state.special,

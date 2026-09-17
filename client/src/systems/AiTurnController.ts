@@ -32,6 +32,11 @@ export interface AiTurnCallbacks {
 	showBossAlert(ms: number): Promise<void>;
 	playBossAudio(): void;
 	isTutorial(): boolean;
+	applyFloor(floorIndex: number): void;
+	trySwitchFloor(
+		unit: { state: { coord: RH.GridCoord; floorIndex: number } },
+		moveCamera: boolean,
+	): Promise<void>;
 }
 
 /**
@@ -75,6 +80,7 @@ export class AiTurnController {
 		return {
 			id: state.id,
 			coord: state.coord,
+			floorIndex: state.floorIndex,
 			stats: state.stats,
 			currentHp: state.currentHp,
 			items: state.items.filter((i): i is RH.ItemData => i !== null),
@@ -285,6 +291,7 @@ export class AiTurnController {
 					{
 						id: "__lastKnownRival__",
 						coord: lead.coord,
+						floorIndex: self.floorIndex,
 						stats: self.stats,
 						currentHp: 1,
 						items: [],
@@ -711,6 +718,7 @@ export class AiTurnController {
 			.map((u) => ({
 				id: u.state.id,
 				coord: u.state.coord,
+				floorIndex: u.state.floorIndex,
 				stats: u.state.stats,
 				currentHp: u.state.currentHp,
 				isCarryingTarget: targetItemId
