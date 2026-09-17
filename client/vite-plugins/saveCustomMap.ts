@@ -10,7 +10,8 @@ const REGISTRY_PATH = path.join(CUSTOM_MAPS_DIR, "index.ts");
 
 interface SaveRequestBody {
 	name: string;
-	blueprint: number[][];
+	floors: number[][][];
+	groundFloorIndex: number;
 }
 
 /** Turns an arbitrary map name into a safe TS identifier/filename — letters, digits, underscore only, never starting with a digit. */
@@ -23,7 +24,9 @@ function toSafeIdentifier(name: string): string {
 	return withLeadingLetter || "UnnamedMap";
 }
 
-async function readJsonBody(req: import("node:http").IncomingMessage): Promise<unknown> {
+async function readJsonBody(
+	req: import("node:http").IncomingMessage,
+): Promise<unknown> {
 	const chunks: Buffer[] = [];
 	for await (const chunk of req) {
 		chunks.push(chunk as Buffer);
@@ -57,11 +60,17 @@ async function regenerateRegistry(): Promise<void> {
 	}
 
 	const imports = entries
-		.map((e) => `import { ${e.identifier}_NAME, ${e.identifier}_BLUEPRINT } from "./${e.moduleName}";`)
+		.map(
+			(e) =>
+				`import { ${e.identifier}_NAME, ${e.identifier}_FLOORS, ${e.identifier}_GROUND_FLOOR_INDEX } from "./${e.moduleName}";`,
+		)
 		.join("\n");
 
 	const listEntries = entries
-		.map((e) => `\t{ name: ${e.identifier}_NAME, blueprint: ${e.identifier}_BLUEPRINT },`)
+		.map(
+			(e) =>
+				`\t{ name: ${e.identifier}_NAME, floors: ${e.identifier}_FLOORS, groundFloorIndex: ${e.identifier}_GROUND_FLOOR_INDEX },`,
+		)
 		.join("\n");
 
 	const content = `/**
@@ -75,7 +84,8 @@ ${imports}
 
 export interface CustomMapEntry {
 	name: string;
-	blueprint: number[][];
+	floors: number[][][];
+	groundFloorIndex: number;
 }
 
 export const CUSTOM_MAPS: CustomMapEntry[] = [
@@ -86,17 +96,38 @@ ${listEntries}
 	await fs.writeFile(REGISTRY_PATH, content, "utf-8");
 }
 
-function toBlueprintFileContent(safeId: string, displayName: string, blueprint: number[][]): string {
-	const rows = blueprint.map((row) => `\t[${row.join(", ")}],`).join("\n");
+/**
+ * Every floor is written as its own double-resolution blueprint, same
+ * as a single-floor map always was — floors is just an array of them
+ * now, in the same bottom-to-top order as MapBundle.floors in the
+ * shared package, with groundFloorIndex alongside to say which one is
+ * "Ground Floor" for display.
+ */
+function toMapBundleFileContent(
+	safeId: string,
+	displayName: string,
+	floors: number[][][],
+	groundFloorIndex: number,
+): string {
+	const floorsSource = floors
+		.map((floor) => {
+			const rows = floor.map((row) => `\t\t[${row.join(", ")}],`).join("\n");
+			return `\t[\n${rows}\n\t]`;
+		})
+		.join(",\n");
+
 	return `/**
  * Custom map saved from the in-game Map Creator.
  * Double-resolution format — compiles directly with compileEdgeMap()
- * from this package. See MapCreatorScene.ts for the code scheme.
+ * from this package, one floor at a time. See MapCreatorScene.ts for
+ * the code scheme, and mapBundle.ts for the floors/groundFloorIndex
+ * shape this mirrors.
  */
 export const ${safeId}_NAME = ${JSON.stringify(displayName)};
-export const ${safeId}_BLUEPRINT: number[][] = [
-${rows}
+export const ${safeId}_FLOORS: number[][][] = [
+${floorsSource}
 ];
+export const ${safeId}_GROUND_FLOOR_INDEX = ${groundFloorIndex};
 `;
 }
 
@@ -106,7 +137,7 @@ ${rows}
  * inside the same `npm run dev` process — no separate server to
  * start. The browser itself never touches the filesystem (it can't —
  * that's a hard sandboxing boundary, not a missing feature); it POSTs
- * the blueprint to this endpoint, and this Node-side code — which
+ * the map's floors to this endpoint, and this Node-side code — which
  * runs as part of the Vite dev server, not in the browser — does the
  * actual write.
  *
@@ -125,9 +156,18 @@ export function saveCustomMapPlugin(): Plugin {
 				if (req.url === "/api/save-custom-map" && req.method === "POST") {
 					try {
 						const body = (await readJsonBody(req)) as SaveRequestBody;
-						if (!body.name || !Array.isArray(body.blueprint)) {
+						if (
+							!body.name ||
+							!Array.isArray(body.floors) ||
+							body.floors.length === 0 ||
+							typeof body.groundFloorIndex !== "number"
+						) {
 							res.statusCode = 400;
-							res.end(JSON.stringify({ error: "name and blueprint are required" }));
+							res.end(
+								JSON.stringify({
+									error: "name, floors, and groundFloorIndex are required",
+								}),
+							);
 							return;
 						}
 
@@ -136,7 +176,12 @@ export function saveCustomMapPlugin(): Plugin {
 						const filePath = path.join(CUSTOM_MAPS_DIR, `${safeId}.ts`);
 						await fs.writeFile(
 							filePath,
-							toBlueprintFileContent(safeId, body.name, body.blueprint),
+							toMapBundleFileContent(
+								safeId,
+								body.name,
+								body.floors,
+								body.groundFloorIndex,
+							),
 							"utf-8",
 						);
 						await regenerateRegistry();
@@ -151,9 +196,14 @@ export function saveCustomMapPlugin(): Plugin {
 					return;
 				}
 
-				if (req.url?.startsWith("/api/delete-custom-map/") && req.method === "DELETE") {
+				if (
+					req.url?.startsWith("/api/delete-custom-map/") &&
+					req.method === "DELETE"
+				) {
 					try {
-						const safeId = decodeURIComponent(req.url.slice("/api/delete-custom-map/".length));
+						const safeId = decodeURIComponent(
+							req.url.slice("/api/delete-custom-map/".length),
+						);
 						const filePath = path.join(CUSTOM_MAPS_DIR, `${safeId}.ts`);
 						await fs.rm(filePath, { force: true });
 						await regenerateRegistry();

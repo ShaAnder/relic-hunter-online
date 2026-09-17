@@ -25,6 +25,7 @@ export * from "./world/maps/alleywaysEdgeBlueprint";
 export * from "./world/maps/staircaseClusters";
 export * from "./world/edgeGrid";
 export * from "./world/maps/edgeMapCompiler";
+export * from "./world/maps/mapBundle";
 export * from "./world/maps/rooms";
 export * from "./world/maps/custom";
 

@@ -1,3 +1,6 @@
+import type { MapBundle } from "@relic-hunter/shared";
+import { CUSTOM_MAPS } from "@relic-hunter/shared";
+
 const STORAGE_PREFIX = "relic-hunter-custom-map:";
 
 /**
@@ -7,6 +10,11 @@ const STORAGE_PREFIX = "relic-hunter-custom-map:";
  * changing — same shape as CharacterRepo's own interface/local-impl
  * split.
  *
+ * A saved map is a full MapBundle now (every floor, plus which one is
+ * ground) rather than a single floor's blueprint — this is the
+ * wiring the multi-floor map data model was always meant to plug
+ * into; see mapBundle.ts in the shared package.
+ *
  * save/delete are async: both are genuine network I/O against the
  * local dev save endpoint (see client/vite-plugins/saveCustomMap.ts)
  * or, eventually, a real backend. list/load stay synchronous — they
@@ -14,10 +22,22 @@ const STORAGE_PREFIX = "relic-hunter-custom-map:";
  * by the time any code runs, not a live request each call.
  */
 export interface CustomMapRepo {
-	save(name: string, blueprint: number[][]): Promise<void>;
+	save(name: string, bundle: MapBundle): Promise<void>;
 	list(): string[];
-	load(name: string): number[][] | null;
+	load(name: string): MapBundle | null;
 	delete(name: string): Promise<void>;
+}
+
+/** True only for something that could plausibly be a MapBundle — used to reject corrupted/foreign localStorage content rather than handing it to the rest of the app and failing somewhere less obvious. Doesn't check each floor's actual dimensions; callers that care about exact shape (Map Creator's own load) still do that themselves. */
+function looksLikeMapBundle(value: unknown): value is MapBundle {
+	if (typeof value !== "object" || value === null) return false;
+	const candidate = value as Record<string, unknown>;
+	return (
+		typeof candidate.name === "string" &&
+		Array.isArray(candidate.floors) &&
+		candidate.floors.length > 0 &&
+		typeof candidate.groundFloorIndex === "number"
+	);
 }
 
 /**
@@ -32,8 +52,8 @@ export interface CustomMapRepo {
  * build with no filesystem to write to).
  */
 export class LocalCustomMapRepo implements CustomMapRepo {
-	async save(name: string, blueprint: number[][]): Promise<void> {
-		localStorage.setItem(STORAGE_PREFIX + name, JSON.stringify(blueprint));
+	async save(name: string, bundle: MapBundle): Promise<void> {
+		localStorage.setItem(STORAGE_PREFIX + name, JSON.stringify(bundle));
 	}
 
 	list(): string[] {
@@ -47,12 +67,12 @@ export class LocalCustomMapRepo implements CustomMapRepo {
 		return names.sort();
 	}
 
-	load(name: string): number[][] | null {
+	load(name: string): MapBundle | null {
 		try {
 			const raw = localStorage.getItem(STORAGE_PREFIX + name);
 			if (!raw) return null;
-			const parsed = JSON.parse(raw);
-			return Array.isArray(parsed) ? parsed : null;
+			const parsed: unknown = JSON.parse(raw);
+			return looksLikeMapBundle(parsed) ? parsed : null;
 		} catch {
 			return null;
 		}
@@ -69,15 +89,15 @@ export class DualWriteCustomMapRepo implements CustomMapRepo {
 		private cache: CustomMapRepo, // LocalCustomMapRepo
 	) {}
 
-	async save(name: string, blueprint: number[][]): Promise<void> {
+	async save(name: string, bundle: MapBundle): Promise<void> {
 		// Always write the offline browser copy first so offline play
 		// never depends on the file write succeeding.
-		await this.cache.save(name, blueprint);
+		await this.cache.save(name, bundle);
 
 		// Then the real file (dev) / future cloud write.
 		// If this fails we still have the localStorage copy.
 		try {
-			await this.primary.save(name, blueprint);
+			await this.primary.save(name, bundle);
 		} catch (err) {
 			// Re-throw so the UI can still show "file save failed"
 			// but the offline copy is already safe.
@@ -93,7 +113,7 @@ export class DualWriteCustomMapRepo implements CustomMapRepo {
 		return [...new Set([...a, ...b])].sort();
 	}
 
-	load(name: string): number[][] | null {
+	load(name: string): MapBundle | null {
 		// Prefer the primary (file/registry), fall back to localStorage.
 		return this.primary.load(name) ?? this.cache.load(name);
 	}
@@ -130,11 +150,15 @@ export class DualWriteCustomMapRepo implements CustomMapRepo {
 export class DevFileCustomMapRepo implements CustomMapRepo {
 	private sessionKnownNames = new Set<string>();
 
-	async save(name: string, blueprint: number[][]): Promise<void> {
+	async save(name: string, bundle: MapBundle): Promise<void> {
 		const response = await fetch("/api/save-custom-map", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ name, blueprint }),
+			body: JSON.stringify({
+				name,
+				floors: bundle.floors,
+				groundFloorIndex: bundle.groundFloorIndex,
+			}),
 		});
 		if (!response.ok) {
 			const body = await response.text();
@@ -155,9 +179,14 @@ export class DevFileCustomMapRepo implements CustomMapRepo {
 		return [...merged].sort();
 	}
 
-	load(name: string): number[][] | null {
+	load(name: string): MapBundle | null {
 		const entry = registryEntries().find((e) => e.name === name);
-		return entry ? entry.blueprint : null;
+		if (!entry) return null;
+		return {
+			name: entry.name,
+			floors: entry.floors,
+			groundFloorIndex: entry.groundFloorIndex,
+		};
 	}
 
 	async delete(name: string): Promise<void> {
@@ -178,9 +207,12 @@ export class DevFileCustomMapRepo implements CustomMapRepo {
 // ---- registry access helpers ----
 // Kept as plain functions (not methods) since they wrap a single,
 // eagerly-evaluated static import — see the comment on DevFileCustomMapRepo.list().
-import { CUSTOM_MAPS } from "@relic-hunter/shared";
 
-function registryEntries(): { name: string; blueprint: number[][] }[] {
+function registryEntries(): {
+	name: string;
+	floors: number[][][];
+	groundFloorIndex: number;
+}[] {
 	return CUSTOM_MAPS;
 }
 
@@ -188,7 +220,7 @@ function registryNames(): string[] {
 	return CUSTOM_MAPS.map((e) => e.name);
 }
 
-/** The registry doesn't store each map's filename (only its display name + blueprint), so deleting needs the same name->identifier rule the save endpoint used when it wrote the file. Falls back to re-deriving it if a name isn't found in the registry at all (e.g. deleting a just-saved map before HMR has caught up). */
+/** The registry doesn't store each map's filename (only its display name + floor data), so deleting needs the same name->identifier rule the save endpoint used when it wrote the file. Falls back to re-deriving it if a name isn't found in the registry at all (e.g. deleting a just-saved map before HMR has caught up). */
 function findSafeIdForName(name: string): string {
 	return toGuessedSafeId(name);
 }

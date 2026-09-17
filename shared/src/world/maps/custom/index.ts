@@ -4,15 +4,15 @@
  * local save-custom-map dev endpoint (see
  * client/vite-plugins/saveCustomMap.ts) every time a map is saved or
  * deleted. Never edit this file by hand; it will be overwritten.
- *
- * Alleyways used to live here — it's been promoted to the shipped
- * official map (see alleywaysEdgeBlueprint.ts) and removed from this
- * registry, since it's no longer a player-saved custom map.
  */
+import { Alleyways_NAME, Alleyways_FLOORS, Alleyways_GROUND_FLOOR_INDEX } from "./Alleyways";
 
 export interface CustomMapEntry {
 	name: string;
-	blueprint: number[][];
+	floors: number[][][];
+	groundFloorIndex: number;
 }
 
-export const CUSTOM_MAPS: CustomMapEntry[] = [];
+export const CUSTOM_MAPS: CustomMapEntry[] = [
+	{ name: Alleyways_NAME, floors: Alleyways_FLOORS, groundFloorIndex: Alleyways_GROUND_FLOOR_INDEX },
+];

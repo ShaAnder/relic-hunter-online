@@ -144,12 +144,19 @@ export class LoadingOverlay implements Overlay {
 
 		const choice = this.game.session.missionParams?.selectedMap;
 
+		// A saved custom map is a full MapBundle now (every floor the
+		// Map Creator had, plus which one is ground) — but gameplay
+		// itself only knows how to walk a single floor so far (see the
+		// "no multi-floor / stairs data yet" comment below), so this
+		// pulls out just the bundle's own ground floor to compile.
+		// Whichever other floors it has ride along safely in storage
+		// for whenever that gameplay support gets built.
 		const blueprint =
 			choice?.type === "custom"
 				? (() => {
-						const b = missionCustomMapRepo.load(choice.id);
-						if (!b) throw new Error(`Custom map "${choice.id}" not found`);
-						return b;
+						const bundle = missionCustomMapRepo.load(choice.id);
+						if (!bundle) throw new Error(`Custom map "${choice.id}" not found`);
+						return bundle.floors[bundle.groundFloorIndex];
 					})()
 				: ALLEYWAYS_EDGE_BLUEPRINT;
 

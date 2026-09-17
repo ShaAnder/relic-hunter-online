@@ -9,7 +9,11 @@ import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
 import { Button } from "@/ui/generics/Button";
 import { MainMenuScene } from "./MainMenuScene";
-import { EdgeBarrier } from "@relic-hunter/shared";
+import {
+	EdgeBarrier,
+	EdgeMapTileCode,
+	type MapBundle,
+} from "@relic-hunter/shared";
 import {
 	DevFileCustomMapRepo,
 	DualWriteCustomMapRepo,
@@ -32,29 +36,87 @@ const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 4;
 const ZOOM_STEP = 1.15;
 
-/** Tile-level codes — matches EdgeMapTileCode in edgeMapCompiler.ts exactly, so this tool's output is already in the format compileEdgeMap expects, no separate converter needed. */
-enum TileCode {
-	Void = 0,
-	Floor = 1,
-	Pavement = 2,
-	Nature = 3,
-	River = 4,
-}
+/** One floor square in the middle column — same size used for the squares, the "+" add-floor buttons above/below them, and the horizontal column width, so the whole stack reads as one continuous, evenly-sized column. */
+const FLOOR_SQUARE_SIZE = 44;
+const FLOOR_SQUARE_GAP = 8;
+/** Horizontal space the floor-list column takes up, and the margin kept on either side of it — used by layout() to place the grid, floor list, and palette as three distinct columns. */
+const FLOOR_LIST_COLUMN_WIDTH = FLOOR_SQUARE_SIZE;
+const FLOOR_LIST_MARGIN = 20;
+
+/** How many floors can be added above ground level, and how many basements below it — caps chosen to keep a map designable/testable by hand, matching the handoff doc's locked-in limits. */
+const MAX_FLOORS_ABOVE_GROUND = 5;
+const MAX_BASEMENTS = 2;
 
 interface PaletteEntry {
 	label: string;
 	color: number;
-	/** Which array this code belongs to — a tile position only ever accepts a TileCode, an edge position only ever accepts an EdgeBarrier. Keeps the picker from letting you paint a door onto a tile center or a floor color onto an edge slot. */
+	/** Which array this code belongs to — a tile position only ever accepts an EdgeMapTileCode, an edge position only ever accepts an EdgeBarrier. Keeps the picker from letting you paint a door onto a tile center or a floor color onto an edge slot. */
 	kind: "tile" | "edge";
 	code: number;
 }
 
 const TILE_PALETTE: PaletteEntry[] = [
-	{ label: "Void", color: 0x101010, kind: "tile", code: TileCode.Void },
-	{ label: "Floor", color: 0xc8c8c8, kind: "tile", code: TileCode.Floor },
-	{ label: "Pavement", color: 0xaaaac8, kind: "tile", code: TileCode.Pavement },
-	{ label: "Nature", color: 0x96c850, kind: "tile", code: TileCode.Nature },
-	{ label: "River", color: 0x3c5ae6, kind: "tile", code: TileCode.River },
+	{ label: "Void", color: 0x101010, kind: "tile", code: EdgeMapTileCode.Void },
+	{
+		label: "Floor",
+		color: 0xc8c8c8,
+		kind: "tile",
+		code: EdgeMapTileCode.Floor,
+	},
+	{
+		label: "Pavement",
+		color: 0xaaaac8,
+		kind: "tile",
+		code: EdgeMapTileCode.Pavement,
+	},
+	{
+		label: "Nature",
+		color: 0x96c850,
+		kind: "tile",
+		code: EdgeMapTileCode.Nature,
+	},
+	{
+		label: "River",
+		color: 0x3c5ae6,
+		kind: "tile",
+		code: EdgeMapTileCode.River,
+	},
+	{
+		label: "Stair Bottom",
+		color: 0xa0703c,
+		kind: "tile",
+		code: EdgeMapTileCode.StairBottom,
+	},
+	{
+		label: "Stair Top",
+		color: 0xc89050,
+		kind: "tile",
+		code: EdgeMapTileCode.StairTop,
+	},
+	{
+		label: "Stair Step",
+		color: 0x8c5a28,
+		kind: "tile",
+		code: EdgeMapTileCode.StairStep,
+	},
+	{
+		label: "Stair Connector",
+		color: 0xff8c1e,
+		kind: "tile",
+		code: EdgeMapTileCode.StairConnector,
+	},
+	{
+		label: "Ladder Bottom",
+		color: 0x647888,
+		kind: "tile",
+		code: EdgeMapTileCode.LadderBottom,
+	},
+	{
+		label: "Ladder Top",
+		color: 0x8ca0b4,
+		kind: "tile",
+		code: EdgeMapTileCode.LadderTop,
+	},
 ];
 
 /** "Open" isn't really a color you paint — it's the absence of a wall, which just erases back to nothing (the tiles' own overlap covers it). Kept in the palette as an explicit, selectable option so there's a clear way to clear a single edge without switching to the eraser. */
@@ -121,6 +183,7 @@ export class MapCreatorScene implements Scene {
 	private gridViewport = new Container(); // masked, fixed-size window into the grid
 	private gridContainer = new Container(); // the pannable/zoomable content inside the viewport
 	private gridGraphics = new Graphics();
+	private floorListContainer = new Container(); // the new middle column
 	private paletteContainer = new Container();
 	private statusText!: Text;
 	private zoomText!: Text;
@@ -131,6 +194,8 @@ export class MapCreatorScene implements Scene {
 	);
 	private currentMapName: string | null = null;
 	private viewportMask = new Graphics();
+	/** Screen height as of the last layout() call — kept around so the floor list can re-center itself (positionFloorList) whenever a floor is added/removed, without needing a full layout() call, which would also re-center the grid and wipe out any panning the user had done. */
+	private screenHeight = 0;
 
 	// DOM-based dialogs, not window.prompt/confirm/alert — those are
 	// commonly blocked or silently no-op in sandboxed/embedded preview
@@ -144,8 +209,19 @@ export class MapCreatorScene implements Scene {
 	private dialogOkBtn!: HTMLButtonElement;
 	private dialogCancelBtn!: HTMLButtonElement;
 
-	/** grid[y][x] — same row-major shape as every blueprint array elsewhere in the project. */
-	private grid: number[][] = [];
+	/**
+	 * Every floor being edited right now, ordered bottom-to-top exactly
+	 * like MapBundle.floors in the shared package (deepest basement
+	 * first, highest floor last) — deliberately mirroring that shape now
+	 * so the later wiring phase can hand this array to a MapBundle
+	 * as-is, with no reshaping.
+	 */
+	private floors: number[][][] = [];
+	/** Which index into `floors` is shown to the player as "0" / Ground Floor — indices below it are basements, indices above it are regular floors. */
+	private groundFloorIndex = 0;
+	/** Which index into `floors` is currently being painted/viewed. */
+	private currentFloorIndex = 0;
+
 	private selectedIndex = 1; // starts on "Floor"
 	private isPainting = false;
 	private zoom = 1;
@@ -155,13 +231,65 @@ export class MapCreatorScene implements Scene {
 	private panStartContainer = { x: 0, y: 0 };
 
 	constructor(private game: Game) {
+		this.resetToSingleFloor(this.makeBlankGrid());
+	}
+
+	/**
+	 * `grid` used to be the one blueprint array this whole file painted
+	 * onto and saved from. Now that a map can have several floors, it's
+	 * a getter/setter over "whichever floor is currently selected"
+	 * instead of a real field. Every paint/render/save method further
+	 * down still just reads and writes `this.grid` exactly as before —
+	 * only what `grid` *means* has changed, so none of that code needed
+	 * touching or re-testing for this phase.
+	 */
+	private get grid(): number[][] {
+		return this.floors[this.currentFloorIndex];
+	}
+	private set grid(value: number[][]) {
+		this.floors[this.currentFloorIndex] = value;
+	}
+
+	/** A brand-new, fully empty GRID_SIZE x GRID_SIZE floor blueprint — used for the very first floor and every floor added afterward. */
+	private makeBlankGrid(): number[][] {
+		const blank: number[][] = [];
 		for (let y = 0; y < GRID_SIZE; y++) {
-			this.grid.push(new Array(GRID_SIZE).fill(0));
+			blank.push(new Array(GRID_SIZE).fill(0));
 		}
+		return blank;
+	}
+
+	/**
+	 * Drops every floor and replaces them with just `blueprint` as the
+	 * one ground floor — this is what makes the editor "map based":
+	 * whatever floor stack you'd built up belongs to the map you were
+	 * just editing, and has no business surviving into a different map
+	 * you load or a brand-new one you start with Clear. Callers still
+	 * need to redrawGrid()/updateStatus()/rebuildFloorList() themselves
+	 * afterward — this only touches the floors/index state, not the UI.
+	 */
+	private resetToSingleFloor(blueprint: number[][]): void {
+		this.floors = [blueprint];
+		this.groundFloorIndex = 0;
+		this.currentFloorIndex = 0;
+	}
+
+	/**
+	 * Loads a full MapBundle into editor state — used by loadMap() now
+	 * that saved maps carry every floor, not just one. Opens on the
+	 * bundle's own ground floor rather than always index 0, since a
+	 * multi-floor bundle's ground floor isn't necessarily the first
+	 * array entry.
+	 */
+	private loadBundleIntoState(bundle: MapBundle): void {
+		this.floors = bundle.floors.map((floor) => floor.map((row) => [...row]));
+		this.groundFloorIndex = bundle.groundFloorIndex;
+		this.currentFloorIndex = bundle.groundFloorIndex;
 	}
 
 	onEnter(): void {
 		this.view.addChild(this.gridPanel);
+		this.view.addChild(this.floorListContainer);
 		this.view.addChild(this.paletteContainer);
 
 		this.gridPanel.addChild(this.gridViewport);
@@ -169,6 +297,7 @@ export class MapCreatorScene implements Scene {
 		this.gridContainer.addChild(this.gridGraphics);
 
 		this.buildPalette();
+		this.rebuildFloorList();
 		this.buildGridInteraction();
 		this.buildDialogOverlay();
 		this.redrawGrid();
@@ -243,10 +372,15 @@ export class MapCreatorScene implements Scene {
 			fontSize: 13,
 			bgColor: 0x6e2a2a,
 			onClick: () => {
-				for (let row = 0; row < GRID_SIZE; row++) this.grid[row].fill(0);
+				// Clear starts a brand-new map, same as if you'd loaded one —
+				// so it resets the whole floor stack back to a single blank
+				// floor, not just the blueprint of whichever floor you
+				// happened to be looking at.
+				this.resetToSingleFloor(this.makeBlankGrid());
 				this.currentMapName = null;
 				this.redrawGrid();
 				this.updateStatus();
+				this.rebuildFloorList();
 			},
 		});
 		clearBtn.view.x = 345;
@@ -306,13 +440,21 @@ export class MapCreatorScene implements Scene {
 
 		const swatchSize = 40;
 		const swatchGap = 8;
+		// Wraps to a new row past this many swatches, rather than
+		// running a single row off the edge of the palette column — the
+		// Tiles section grew from 5 entries to 11 once stairs and
+		// ladders were added, so it no longer fits in one row.
+		const swatchesPerRow = 6;
+		const rowHeight = swatchSize + 28; // leaves room for a two-line label under a swatch, e.g. "Stair Connector"
 		const rowY = startY + 26;
 
 		entries.forEach((entry, col) => {
 			const globalIndex = PALETTE.indexOf(entry);
+			const row = Math.floor(col / swatchesPerRow);
+			const colInRow = col % swatchesPerRow;
 			const swatch = new Container();
-			swatch.x = col * (swatchSize + swatchGap);
-			swatch.y = rowY;
+			swatch.x = colInRow * (swatchSize + swatchGap);
+			swatch.y = rowY + row * rowHeight;
 			swatch.eventMode = "static";
 			swatch.cursor = "pointer";
 
@@ -358,7 +500,8 @@ export class MapCreatorScene implements Scene {
 			this.paletteContainer.addChild(swatch);
 		});
 
-		return rowY + swatchSize + 20;
+		const rowCount = Math.ceil(entries.length / swatchesPerRow);
+		return rowY + rowCount * rowHeight + 20;
 	}
 
 	private refreshPaletteSelection(): void {
@@ -378,6 +521,141 @@ export class MapCreatorScene implements Scene {
 
 	private updateZoomText(): void {
 		this.zoomText.text = `Zoom: ${Math.round(this.zoom * 100)}% — wheel to zoom, right-click-drag to pan`;
+	}
+
+	// ---------- Floor list (middle column) ----------
+
+	/**
+	 * Clears and redraws the whole middle column: the "add floor above"
+	 * button, one square per floor (topmost floor drawn first, so the
+	 * stack reads top-to-bottom the same way the floors sit in the
+	 * world), and the "add basement below" button. Rebuilding everything
+	 * on every change — rather than patching individual squares in
+	 * place — mirrors how rebuildMapList() already handles the saved-map
+	 * list further down this file, and the list is small enough (at
+	 * most 1 ground + 5 floors + 2 basements = 8 squares) that it costs
+	 * nothing to redo it whole.
+	 */
+	private rebuildFloorList(): void {
+		this.floorListContainer.removeChildren();
+
+		let cursorY = 0;
+
+		const floorsAboveGround = this.floors.length - 1 - this.groundFloorIndex;
+		const addAboveBtn = new Button({
+			text: "+",
+			width: FLOOR_SQUARE_SIZE,
+			height: FLOOR_SQUARE_SIZE,
+			fontSize: 16,
+			bgColor: 0x2a4e8e,
+			onClick: () => this.addFloorAbove(),
+		});
+		addAboveBtn.setEnabled(floorsAboveGround < MAX_FLOORS_ABOVE_GROUND);
+		addAboveBtn.view.y = cursorY;
+		this.floorListContainer.addChild(addAboveBtn.view);
+		cursorY += FLOOR_SQUARE_SIZE + FLOOR_SQUARE_GAP;
+
+		for (let index = this.floors.length - 1; index >= 0; index--) {
+			const floorBtn = new Button({
+				text: this.floorLabel(index),
+				width: FLOOR_SQUARE_SIZE,
+				height: FLOOR_SQUARE_SIZE,
+				fontSize: 15,
+				onClick: () => this.selectFloor(index),
+			});
+			floorBtn.setActive(index === this.currentFloorIndex);
+			floorBtn.view.y = cursorY;
+			this.floorListContainer.addChild(floorBtn.view);
+			cursorY += FLOOR_SQUARE_SIZE + FLOOR_SQUARE_GAP;
+		}
+
+		const addBelowBtn = new Button({
+			text: "+",
+			width: FLOOR_SQUARE_SIZE,
+			height: FLOOR_SQUARE_SIZE,
+			fontSize: 16,
+			bgColor: 0x2a6e3c,
+			onClick: () => this.addBasement(),
+		});
+		addBelowBtn.setEnabled(this.groundFloorIndex < MAX_BASEMENTS);
+		addBelowBtn.view.y = cursorY;
+		this.floorListContainer.addChild(addBelowBtn.view);
+
+		// Re-center every time the list is rebuilt — the column's total
+		// height changes as floors are added, so where "centered" means
+		// changes with it.
+		this.positionFloorList();
+	}
+
+	/**
+	 * Vertically centers the floor-list column in the available screen
+	 * height, the same way the grid editor is already centered in its
+	 * own panel. Deliberately its own small method rather than just
+	 * calling the full layout() after every floor add/remove — layout()
+	 * also re-centers the grid container unconditionally, which would
+	 * silently undo any panning the user had done while it happened.
+	 */
+	private positionFloorList(): void {
+		const contentHeight =
+			FLOOR_SQUARE_SIZE + // "add floor above" button
+			FLOOR_SQUARE_GAP +
+			this.floors.length * (FLOOR_SQUARE_SIZE + FLOOR_SQUARE_GAP) + // one square per floor
+			FLOOR_SQUARE_SIZE; // "add basement below" button
+
+		this.floorListContainer.y = Math.max(
+			FLOOR_LIST_MARGIN,
+			(this.screenHeight - contentHeight) / 2,
+		);
+	}
+
+	/** "0" for ground, "1"/"2"/... going up, "B1"/"B2"/... going down — display-only, derived from where `index` sits relative to `groundFloorIndex` rather than stored anywhere. */
+	private floorLabel(index: number): string {
+		const offset = index - this.groundFloorIndex;
+		if (offset === 0) return "0";
+		return offset > 0 ? String(offset) : `B${-offset}`;
+	}
+
+	private selectFloor(index: number): void {
+		if (index === this.currentFloorIndex) return;
+		this.currentFloorIndex = index;
+		this.redrawGrid();
+		this.updateStatus();
+		this.rebuildFloorList(); // only the highlighted square actually changed, but see the doc comment above on why a full rebuild is fine here
+	}
+
+	/**
+	 * `floors` is ordered bottom-to-top, so a new floor above the
+	 * current top goes on the *end* of the array — nothing below it
+	 * shifts, so groundFloorIndex doesn't need to change.
+	 */
+	private addFloorAbove(): void {
+		const floorsAboveGround = this.floors.length - 1 - this.groundFloorIndex;
+		if (floorsAboveGround >= MAX_FLOORS_ABOVE_GROUND) return;
+
+		this.floors.push(this.makeBlankGrid());
+		this.currentFloorIndex = this.floors.length - 1; // switch straight to editing it
+		this.redrawGrid();
+		this.updateStatus();
+		this.rebuildFloorList();
+	}
+
+	/**
+	 * A new basement goes at index 0 (floors is bottom-to-top, and a
+	 * basement is the new bottom) — which pushes every floor that
+	 * already existed up by one array index. groundFloorIndex has to
+	 * move with them to keep pointing at the same real floor as before;
+	 * currentFloorIndex is set to 0 outright rather than shifted, since
+	 * we're deliberately switching the user onto the new basement.
+	 */
+	private addBasement(): void {
+		if (this.groundFloorIndex >= MAX_BASEMENTS) return;
+
+		this.floors.unshift(this.makeBlankGrid());
+		this.groundFloorIndex += 1;
+		this.currentFloorIndex = 0;
+		this.redrawGrid();
+		this.updateStatus();
+		this.rebuildFloorList();
 	}
 
 	// ---------- Grid interaction (left half) ----------
@@ -726,8 +1004,16 @@ export class MapCreatorScene implements Scene {
 		);
 		if (!name) return; // cancelled or empty
 
+		// The whole floor stack goes in, not just the currently-selected
+		// floor — a MapBundle is what a saved map actually is now.
+		const bundle: MapBundle = {
+			name,
+			floors: this.floors,
+			groundFloorIndex: this.groundFloorIndex,
+		};
+
 		try {
-			await this.repo.save(name, this.grid);
+			await this.repo.save(name, bundle);
 		} catch (err) {
 			await this.confirmDialog(
 				`Couldn't save "${name}": ${err instanceof Error ? err.message : String(err)}`,
@@ -741,26 +1027,41 @@ export class MapCreatorScene implements Scene {
 	}
 
 	private async loadMap(name: string): Promise<void> {
-		const blueprint = this.repo.load(name);
-		if (!blueprint) return;
+		const bundle = this.repo.load(name);
+		if (!bundle) return;
 
-		// Defensive: a saved map should always be GRID_SIZE x GRID_SIZE,
-		// but if something malformed ever gets into storage, don't let
-		// it wreck the current session — just ignore it.
+		// Defensive: every floor in a saved bundle should be
+		// GRID_SIZE x GRID_SIZE, and groundFloorIndex should point at an
+		// actual floor — but if something malformed ever gets into
+		// storage, don't let it wreck the current session, just refuse
+		// to load it.
+		const hasMalformedFloor = bundle.floors.some(
+			(floor) =>
+				floor.length !== GRID_SIZE ||
+				floor.some((row) => row.length !== GRID_SIZE),
+		);
 		if (
-			blueprint.length !== GRID_SIZE ||
-			blueprint.some((row) => row.length !== GRID_SIZE)
+			bundle.floors.length === 0 ||
+			hasMalformedFloor ||
+			bundle.groundFloorIndex < 0 ||
+			bundle.groundFloorIndex >= bundle.floors.length
 		) {
 			await this.confirmDialog(
-				`"${name}" isn't a valid ${GRID_SIZE}x${GRID_SIZE} map — not loading it.`,
+				`"${name}" isn't a valid saved map — not loading it.`,
 			);
 			return;
 		}
 
-		this.grid = blueprint.map((row) => [...row]);
+		// Loading a map is switching to a *different* map entirely — any
+		// extra floors built up while editing the previous one aren't
+		// part of this one, so the whole floor stack resets to exactly
+		// this bundle's floors, not only the blueprint of whichever
+		// floor happened to be selected.
+		this.loadBundleIntoState(bundle);
 		this.currentMapName = name;
 		this.redrawGrid();
 		this.updateStatus();
+		this.rebuildFloorList();
 	}
 
 	private rebuildMapList(): void {
@@ -833,7 +1134,7 @@ export class MapCreatorScene implements Scene {
 
 	private exportBlueprint(): void {
 		const rows = this.grid.map((row) => `\t[${row.join(", ")}],`).join("\n");
-		const content = `/**\n * Map drawn with the in-game Map Creator.\n * Double-resolution format: tiles on even,even positions (see\n * TileCode in MapCreatorScene.ts / EdgeMapTileCode in\n * edgeMapCompiler.ts), edges on odd,even and even,odd positions (see\n * EdgeBarrier in edgeGrid.ts). Odd,odd positions are always 0 — no\n * diagonal walls.\n *\n * Compiles directly with compileEdgeMap() from this package, no\n * separate conversion step needed.\n */\nexport const CUSTOM_MAP_BLUEPRINT: number[][] = [\n${rows}\n];\n`;
+		const content = `/**\n * Map drawn with the in-game Map Creator.\n * Double-resolution format: tiles on even,even positions (see\n * EdgeMapTileCode in edgeMapCompiler.ts), edges on odd,even and\n * even,odd positions (see EdgeBarrier in edgeGrid.ts). Odd,odd\n * positions are always 0 — no diagonal walls.\n *\n * Compiles directly with compileEdgeMap() from this package, no\n * separate conversion step needed.\n */\nexport const CUSTOM_MAP_BLUEPRINT: number[][] = [\n${rows}\n];\n`;
 
 		const blob = new Blob([content], { type: "text/typescript" });
 		const url = URL.createObjectURL(blob);
@@ -849,7 +1150,7 @@ export class MapCreatorScene implements Scene {
 	// ---------- Layout ----------
 
 	private layout(width: number, height: number): void {
-		const leftWidth = width / 2;
+		const leftWidth = width / 2; // grid editor keeps exactly the same width it had before this phase
 
 		this.gridPanel.x = 0;
 		this.gridPanel.y = 0;
@@ -873,7 +1174,20 @@ export class MapCreatorScene implements Scene {
 		this.gridContainer.x = leftWidth / 2 - (gridPx * this.zoom) / 2;
 		this.gridContainer.y = height / 2 - (gridPx * this.zoom) / 2;
 
-		this.paletteContainer.x = leftWidth + 20;
+		// Middle column: the floor list, sitting directly right of the
+		// grid editor and vertically centered (positionFloorList uses
+		// screenHeight, so it has to be kept current here).
+		this.floorListContainer.x = leftWidth + FLOOR_LIST_MARGIN;
+		this.screenHeight = height;
+		this.positionFloorList();
+
+		// Third column: the palette, now pushed further right to make
+		// room for the floor list between it and the grid.
+		this.paletteContainer.x =
+			leftWidth +
+			FLOOR_LIST_MARGIN +
+			FLOOR_LIST_COLUMN_WIDTH +
+			FLOOR_LIST_MARGIN;
 		this.paletteContainer.y = 20;
 	}
 }
