@@ -62,7 +62,7 @@ export function tilesInSightRange(
  * When `edges` is omitted, behavior is unchanged: grid.blocksVision on
  * intermediate cells.
  */
-function hasClearLineOfSight(
+export function hasClearLineOfSight(
 	grid: Grid,
 	from: GridCoord,
 	to: GridCoord,

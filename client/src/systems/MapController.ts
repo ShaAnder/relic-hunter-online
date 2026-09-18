@@ -84,6 +84,31 @@ export class MapController {
 		this.battleHost = new BattleHost(this.game);
 	}
 
+	private canEngageAdjacent(
+		firstFloor: number,
+		firstCoord: RH.GridCoord,
+		secondFloor: number,
+		secondCoord: RH.GridCoord,
+	): boolean {
+		if (firstFloor !== secondFloor) {
+			return false;
+		}
+
+		if (!RH.isAdjacent(firstCoord, secondCoord)) {
+			return false;
+		}
+
+		const edges =
+			this.game.session.mapFloors?.[firstFloor]?.edges ??
+			this.game.session.mapEdges;
+
+		if (!edges) {
+			return true;
+		}
+
+		return RH.edgeIsPassable(RH.getEdgeBetween(edges, firstCoord, secondCoord));
+	}
+
 	// ---------- Chests & exit ----------
 
 	/** Rebuilds chests from the session's saved layout, or a fresh plan — MapScene decides which source, this just constructs. */
@@ -227,6 +252,16 @@ export class MapController {
 		monster: MonsterEntity,
 		target: PilotedMercenary,
 	): Promise<void> {
+		if (
+			!this.canEngageAdjacent(
+				monster.state.floorIndex,
+				monster.state.coord,
+				target.state.floorIndex,
+				target.state.coord,
+			)
+		) {
+			return;
+		}
 		const attackerDescriptor = describeMonster(monster);
 		const defenderDescriptor = describeHunter(target);
 
@@ -304,7 +339,12 @@ export class MapController {
 		if (!unit || unit.state.currentHp <= 0) return;
 
 		const local = this.cb.getLocalUnit();
-		const inRange = RH.isAdjacent(local.state.coord, unit.state.coord);
+		const inRange = this.canEngageAdjacent(
+			local.state.floorIndex,
+			local.state.coord,
+			unit.state.floorIndex,
+			unit.state.coord,
+		);
 
 		if (!inRange) {
 			this.cb.showFeedback("⚔ Target out of range");
@@ -328,7 +368,12 @@ export class MapController {
 
 	tryStartCombatVsMonster(monster: MonsterEntity): void {
 		const local = this.cb.getLocalUnit();
-		const inRange = RH.isAdjacent(local.state.coord, monster.state.coord);
+		const inRange = this.canEngageAdjacent(
+			local.state.floorIndex,
+			local.state.coord,
+			monster.state.floorIndex,
+			monster.state.coord,
+		);
 
 		if (!inRange) {
 			this.cb.showFeedback("⚔ Target out of range");

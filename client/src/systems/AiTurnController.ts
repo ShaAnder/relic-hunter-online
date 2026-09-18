@@ -23,7 +23,7 @@ export interface AiTurnCallbacks {
 	getGrid(): RH.Grid;
 	getFloorMap(floorIndex: number): RH.CompiledEdgeMap | null;
 	canSpectateCrossFloor(): boolean;
-	viewFloorForSpectating(floorIndex: number): void;
+	viewFloorForSpectating(floorIndex: number, observerCoord: RH.GridCoord): void;
 	canLocalPlayerSee(floorIndex: number, coord: RH.GridCoord): boolean;
 	getTurnsTaken(): number;
 	getFogOfWarEnabled(): boolean;
@@ -84,6 +84,22 @@ export class AiTurnController {
 		}
 
 		return RH.computeMovementRange(grid, start, budget, blocked);
+	}
+
+	private canEngageAdjacent(
+		floorIndex: number,
+		from: RH.GridCoord,
+		to: RH.GridCoord,
+	): boolean {
+		if (!RH.isAdjacent(from, to)) {
+			return false;
+		}
+
+		const floor = this.cb.getFloorMap(floorIndex);
+
+		if (!floor) return false;
+
+		return RH.edgeIsPassable(RH.getEdgeBetween(floor.edges, from, to));
 	}
 
 	private toCombatant(state: RH.MercenaryState): RH.AiCombatant {
@@ -386,7 +402,7 @@ export class AiTurnController {
 			unit.state.floorIndex !== localUnit.state.floorIndex;
 
 		if (this.crossFloorSpectating) {
-			this.cb.viewFloorForSpectating(unit.state.floorIndex);
+			this.cb.viewFloorForSpectating(unit.state.floorIndex, unit.state.coord);
 		}
 		const floorMap = this.cb.getFloorMap(unit.state.floorIndex);
 
@@ -475,13 +491,39 @@ export class AiTurnController {
 		// targets globally too, not silently staying restricted while
 		// the player can see everything.
 		const currentTurn = this.cb.getTurnsTaken();
-		const isKnown = (coord: RH.GridCoord) =>
-			!fogEnabled ||
-			RH.getTileVisibility(unit.state, coord, unit.state.coord, currentTurn) !==
-				"unseen";
-		let others = allOthers.filter((o) => isKnown(o.coord));
-		const chestInfos = allChestInfos.filter((c) => isKnown(c.coord));
-		const monsterCoords = allMonsterCoords.filter((c) => isKnown(c));
+
+		const rooms = RH.detectRooms(grid, edges);
+
+		const hasDirectVisibility = (coord: RH.GridCoord): boolean => {
+			if (!RH.canSeeRoomContent(rooms, unit.state.coord, coord)) {
+				return false;
+			}
+
+			return RH.hasClearLineOfSight(grid, unit.state.coord, coord, edges);
+		};
+
+		const isKnown = (coord: RH.GridCoord): boolean => {
+			if (!hasDirectVisibility(coord)) {
+				return false;
+			}
+
+			if (!fogEnabled) {
+				return true;
+			}
+
+			return (
+				RH.getTileVisibility(
+					unit.state,
+					coord,
+					unit.state.coord,
+					currentTurn,
+				) !== "unseen"
+			);
+		};
+
+		let others = allOthers.filter((other) => isKnown(other.coord));
+		const chestInfos = allChestInfos.filter((chest) => isKnown(chest.coord));
+		const monsterCoords = allMonsterCoords.filter((coord) => isKnown(coord));
 
 		// Record a fresh sighting for every rival actually, currently
 		// visible (not merely "explored") — this is the memory that
@@ -489,6 +531,7 @@ export class AiTurnController {
 		if (fogEnabled && unit.memory) {
 			for (const o of allOthers) {
 				if (
+					hasDirectVisibility(o.coord) &&
 					RH.getTileVisibility(
 						unit.state,
 						o.coord,
@@ -742,7 +785,10 @@ export class AiTurnController {
 						}
 
 						if (this.crossFloorSpectating) {
-							this.cb.viewFloorForSpectating(unit.state.floorIndex);
+							this.cb.viewFloorForSpectating(
+								unit.state.floorIndex,
+								unit.state.coord,
+							);
 						}
 					}
 
@@ -763,7 +809,16 @@ export class AiTurnController {
 					// Counter stays so the *next* turn is also skipped at loop start.
 					if (unit.state.stunnedTurnsRemaining > 0) {
 						this.mapController.tryOpenChestAt(unit.state, unit.state.coord);
+
 						await this.mapController.checkWinCondition(unit);
+
+						if (this.crossFloorSpectating) {
+							this.cb.viewFloorForSpectating(
+								unit.state.floorIndex,
+								unit.state.coord,
+							);
+						}
+
 						this.activeAi = null;
 						this.camera.unlock();
 						return;
@@ -776,19 +831,44 @@ export class AiTurnController {
 		await this.mapController.checkWinCondition(unit);
 
 		const selfAfter = this.toCombatant(unit.state);
+
 		const othersAfter = this.buildOtherCombatants(
 			unit.state.id,
 			unit.state.floorIndex,
 		);
-		const selfForEngagement = { ...selfAfter, currentHp: preMoveHp };
+
+		const selfForEngagement = {
+			...selfAfter,
+			currentHp: preMoveHp,
+		};
+
+		const roomsAfter = RH.detectRooms(grid, edges);
+
+		const engagementOthers = othersAfter.filter((other) => {
+			if (!RH.canSeeRoomContent(roomsAfter, unit.state.coord, other.coord)) {
+				return false;
+			}
+
+			return RH.hasClearLineOfSight(grid, unit.state.coord, other.coord, edges);
+		});
+
 		const inRangeKeys = new Set(
-			this.cb.adjacentTiles(unit.state.coord).map((c) => `${c.x},${c.y}`),
+			this.cb
+				.adjacentTiles(unit.state.coord)
+				.filter((coord) =>
+					this.canEngageAdjacent(
+						unit.state.floorIndex,
+						unit.state.coord,
+						coord,
+					),
+				)
+				.map((coord) => `${coord.x},${coord.y}`),
 		);
 
 		const victim = RH.pickEngagementTarget(
 			unit.archetype,
 			selfForEngagement,
-			othersAfter,
+			engagementOthers,
 			inRangeKeys,
 		);
 
@@ -821,13 +901,19 @@ export class AiTurnController {
 				await this.runFallbackBehavior(
 					unit,
 					selfAfter,
-					othersAfter,
+					engagementOthers,
 					grid,
 					edges,
 				);
 			}
 		} else {
-			await this.runFallbackBehavior(unit, selfAfter, othersAfter, grid, edges);
+			await this.runFallbackBehavior(
+				unit,
+				selfAfter,
+				engagementOthers,
+				grid,
+				edges,
+			);
 		}
 
 		this.activeAi = null;
@@ -840,6 +926,11 @@ export class AiTurnController {
 	 */
 	private async processRecoveryTurn(unit: PilotedMercenary): Promise<void> {
 		this.activeAi = unit;
+
+		if (this.crossFloorSpectating) {
+			this.cb.viewFloorForSpectating(unit.state.floorIndex, unit.state.coord);
+		}
+
 		const canSeeUnit = this.cb.canLocalPlayerSee(
 			unit.state.floorIndex,
 			unit.state.coord,
@@ -995,6 +1086,12 @@ export class AiTurnController {
 			return;
 		}
 		this.activeMonster = monster;
+		if (this.crossFloorSpectating) {
+			this.cb.viewFloorForSpectating(
+				monster.state.floorIndex,
+				monster.state.coord,
+			);
+		}
 		const floorMap = this.cb.getFloorMap(monster.state.floorIndex);
 
 		if (!floorMap) {
@@ -1046,7 +1143,11 @@ export class AiTurnController {
 
 		const isAdjacentNow =
 			monster.state.floorIndex === targetUnit.state.floorIndex &&
-			RH.isAdjacent(monster.state.coord, targetUnit.state.coord);
+			this.canEngageAdjacent(
+				monster.state.floorIndex,
+				monster.state.coord,
+				targetUnit.state.coord,
+			);
 
 		if (!isAdjacentNow) {
 			const blocked = new Set([
@@ -1130,14 +1231,31 @@ export class AiTurnController {
 					monster,
 					transitionTowardFloor ?? undefined,
 				);
+				if (this.crossFloorSpectating) {
+					this.cb.viewFloorForSpectating(
+						monster.state.floorIndex,
+						monster.state.coord,
+					);
+				}
 			}
 		}
 
 		if (
 			monster.state.floorIndex === targetUnit.state.floorIndex &&
-			RH.isAdjacent(monster.state.coord, targetUnit.state.coord)
+			this.canEngageAdjacent(
+				monster.state.floorIndex,
+				monster.state.coord,
+				targetUnit.state.coord,
+			)
 		) {
 			await this.mapController.monsterAttack(monster, targetUnit);
+		}
+
+		if (this.crossFloorSpectating) {
+			this.cb.viewFloorForSpectating(
+				monster.state.floorIndex,
+				monster.state.coord,
+			);
 		}
 
 		this.activeMonster = null;

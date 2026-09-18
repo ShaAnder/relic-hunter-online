@@ -161,6 +161,13 @@ export class MapScene implements Scene, TutorialPort {
 
 	private lastLiveVisibilityCoordKey: string | null = null;
 
+	private spectatorObserver: {
+		floorIndex: number;
+		coord: RH.GridCoord;
+	} | null = null;
+
+
+	
 	private roomsForCurrentFloor(edges: RH.EdgeGrid): RH.Room[] {
 		const viewedFloor = this.game.session.viewedFloor;
 		if (this.cachedRooms?.floorIndex === viewedFloor) {
@@ -178,14 +185,34 @@ export class MapScene implements Scene, TutorialPort {
 	): boolean {
 		const local = this.localUnit.state;
 
-		// Currently spectating this exact floor (cross-floor AI/monster
-		// turn playback, fog-of-war off) - see it all, same exception
-		// already granted to the one active AI/monster unit itself.
+		// While spectating, visibility belongs to the unit whose perspective
+		// we're watching — NOT to the local player's room on another floor.
+		//
+		// This keeps the same room/privacy rule as normal play and also stops
+		// entities behind a solid wall from appearing simply because fog is off.
 		if (
 			this.aiTurnController.crossFloorSpectating &&
-			floorIndex === this.game.session.viewedFloor
+			floorIndex === this.game.session.viewedFloor &&
+			this.spectatorObserver?.floorIndex === floorIndex
 		) {
-			return true;
+			const floor = this.game.session.mapFloors?.[floorIndex];
+
+			if (!floor) return false;
+
+			const rooms = RH.detectRooms(floor.grid, floor.edges);
+
+			if (
+				!RH.canSeeRoomContent(rooms, this.spectatorObserver.coord, targetCoord)
+			) {
+				return false;
+			}
+
+			return RH.hasClearLineOfSight(
+				floor.grid,
+				this.spectatorObserver.coord,
+				targetCoord,
+				floor.edges,
+			);
 		}
 
 		// Another floor is never visible to the local player.
@@ -226,23 +253,13 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	private canSpectateCrossFloorEnemyTurns(): boolean {
-		if (this.fogOfWarEnabled) return false;
-
-		const local = this.localUnit.state;
-		const floor = this.game.session.mapFloors?.[local.floorIndex];
-
-		if (!floor) return false;
-
-		const rooms = RH.detectRooms(floor.grid, floor.edges);
-
-		const localRoom = RH.findRoomAt(rooms, local.coord);
-
-		const outside = RH.findOutsideRoom(rooms);
-
-		return !!localRoom && !!outside && localRoom.id === outside.id;
+		return !this.fogOfWarEnabled;
 	}
 
-	private viewFloorForSpectating(floorIndex: number): void {
+	private viewFloorForSpectating(
+		floorIndex: number,
+		observerCoord: RH.GridCoord,
+	): void {
 		const floors = this.game.session.mapFloors;
 		const compiled = floors?.[floorIndex];
 
@@ -257,16 +274,14 @@ export class MapScene implements Scene, TutorialPort {
 		this.game.session.mapElevation = compiled.elevation;
 		this.game.session.viewedFloor = floorIndex;
 
+		this.spectatorObserver = {
+			floorIndex,
+			coord: { ...observerCoord },
+		};
+
 		this.syncFloorVisibility();
 
-		// Spectator view deliberately has no room focus.
-		// The local player is not physically standing on this floor.
-		this.mapRenderer.build(
-			compiled,
-			null,
-			null,
-			this.tileFillsForCurrentFloor(),
-		);
+		this.rebuildMapRenderWithFog();
 	}
 
 	private rebuildMapRenderWithFog(liveCoordOverride?: RH.GridCoord): void {
@@ -277,17 +292,36 @@ export class MapScene implements Scene, TutorialPort {
 				RH.createEmptyEdgeGrid(this.grid.width, this.grid.height),
 			elevation: this.game.session.mapElevation ?? new Map(),
 		};
-		const playerCoord = liveCoordOverride ?? this.localUnit.state.coord;
+
+		const viewedFloor = this.game.session.viewedFloor;
+
+		const spectator =
+			this.aiTurnController.crossFloorSpectating &&
+			this.spectatorObserver?.floorIndex === viewedFloor
+				? this.spectatorObserver
+				: null;
+
+		const observerCoord =
+			spectator?.coord ?? liveCoordOverride ?? this.localUnit.state.coord;
+
 		const rooms = this.roomsForCurrentFloor(compiled.edges);
-		const currentRoom = RH.findRoomAt(rooms, playerCoord);
+
+		const currentRoom = RH.findRoomAt(rooms, observerCoord);
+
 		const focus = this.focusRoomFor(currentRoom, rooms);
-		const fog = this.fogOfWarEnabled
-			? {
-					state: this.localUnit.state,
-					center: playerCoord,
-					turn: this.turnsTaken,
-				}
-			: null;
+
+		// Spectator mode is fog-off by definition. More importantly,
+		// never feed the LOCAL player's fog state into a different unit's
+		// perspective.
+		const fog =
+			!spectator && this.fogOfWarEnabled
+				? {
+						state: this.localUnit.state,
+						center: observerCoord,
+						turn: this.turnsTaken,
+					}
+				: null;
+
 		this.mapRenderer.build(
 			compiled,
 			focus,
@@ -483,8 +517,8 @@ export class MapScene implements Scene, TutorialPort {
 				canLocalPlayerSee: (floorIndex, coord) =>
 					this.canLocalPlayerSeeCoord(floorIndex, coord),
 				canSpectateCrossFloor: () => this.canSpectateCrossFloorEnemyTurns(),
-				viewFloorForSpectating: (floorIndex) =>
-					this.viewFloorForSpectating(floorIndex),
+				viewFloorForSpectating: (floorIndex, observerCoord) =>
+					this.viewFloorForSpectating(floorIndex, observerCoord),
 				getTurnsTaken: () => this.turnsTaken,
 				getFogOfWarEnabled: () => this.fogOfWarEnabled,
 				adjacentTiles: (coord) => this.adjacentTiles(coord),
@@ -940,6 +974,8 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	private async beginPlayerTurn(): Promise<void> {
+		this.spectatorObserver = null;
+
 		this.applyFloor(this.localUnit.state.floorIndex);
 		this.camera.unlock();
 

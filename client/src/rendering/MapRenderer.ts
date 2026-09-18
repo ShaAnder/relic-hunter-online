@@ -131,6 +131,10 @@ function styleFor(barrier: RH.EdgeBarrier): BarrierStyle {
 	return BARRIER_STYLES[barrier] ?? BARRIER_STYLES[RH.EdgeBarrier.FullWall];
 }
 
+function isStairConnectorElevation(elevation: number | undefined): boolean {
+	return elevation === 0.5 || elevation === -0.5;
+}
+
 /** What a piece of the map should draw as, combining room-focus and fog-of-war into one answer instead of two separately-applied effects. "hidden" wins over everything (fog unseen); otherwise "washed" if either fog marks it explored-but-not-visible OR room-focus says it's not the room you're in; otherwise "normal". */
 type VisualState = "hidden" | "washed" | "normal";
 
@@ -477,14 +481,26 @@ export class MapRenderer {
 		// broken. Falls back to "other"'s elevation, and to 0 (floor
 		// height) only if genuinely neither side has finite elevation.
 		const coordElevation = compiled.elevation.get(`${coord.x},${coord.y}`);
+
 		const otherElevation = compiled.elevation.get(`${other.x},${other.y}`);
-		const usableElevation =
-			coordElevation !== undefined && Number.isFinite(coordElevation)
+
+		const touchesStairConnector =
+			isStairConnectorElevation(coordElevation) ||
+			isStairConnectorElevation(otherElevation);
+
+		// StairConnector tiles themselves rise/sink so the staircase reads
+		// correctly, but a WALL bordering that connector still belongs to the
+		// ordinary room geometry. It must not ride up or down with the stair
+		// tile itself.
+		const usableElevation: number = touchesStairConnector
+			? 0
+			: coordElevation !== undefined && Number.isFinite(coordElevation)
 				? coordElevation
-				: Number.isFinite(otherElevation)
+				: otherElevation !== undefined && Number.isFinite(otherElevation)
 					? otherElevation
 					: 0;
-		const elevationPx = (usableElevation ?? 0) * TILE_HEIGHT;
+
+		const elevationPx = usableElevation * TILE_HEIGHT;
 		const corners = this.trueTileCorners(coord, elevationPx);
 		const [b1, b2] =
 			dir === "E"
