@@ -21,6 +21,10 @@ export interface AiTurnCallbacks {
 	getUnits(): PilotedMercenary[];
 	getLocalUnit(): PilotedMercenary;
 	getGrid(): RH.Grid;
+	getFloorMap(floorIndex: number): RH.CompiledEdgeMap | null;
+	canSpectateCrossFloor(): boolean;
+	viewFloorForSpectating(floorIndex: number): void;
+	canLocalPlayerSee(floorIndex: number, coord: RH.GridCoord): boolean;
 	getTurnsTaken(): number;
 	getFogOfWarEnabled(): boolean;
 	adjacentTiles(coord: RH.GridCoord): RH.GridCoord[];
@@ -34,6 +38,7 @@ export interface AiTurnCallbacks {
 	isTutorial(): boolean;
 	applyFloor(floorIndex: number): void;
 	trySwitchFloor(unit: PilotedMercenary, moveCamera: boolean): Promise<void>;
+	rebuildMapRender(): void;
 }
 
 /**
@@ -45,6 +50,7 @@ export class AiTurnController {
 	processingEnemyTurns = false;
 	activeAi: PilotedMercenary | null = null;
 	activeMonster: MonsterEntity | null = null;
+	crossFloorSpectating = false;
 
 	constructor(
 		private game: Game,
@@ -53,14 +59,14 @@ export class AiTurnController {
 		private cb: AiTurnCallbacks,
 	) {}
 
-	/** Edge-aware when session.mapEdges is set; otherwise classic cell movement. */
+	/** Edge-aware when this floor has edges; otherwise classic cell movement. */
 	private computeAiRange(
 		grid: RH.Grid,
+		edges: RH.EdgeGrid | null,
 		start: RH.GridCoord,
 		budget: number,
 		blocked: Set<string>,
 	): Map<string, RH.MovementRangeEntry> {
-		const edges = this.game.session.mapEdges;
 		if (edges) {
 			return RH.computeMovementRangeWithEdges(
 				grid,
@@ -70,6 +76,7 @@ export class AiTurnController {
 				blocked,
 			);
 		}
+
 		return RH.computeMovementRange(grid, start, budget, blocked);
 	}
 
@@ -85,10 +92,18 @@ export class AiTurnController {
 	}
 
 	/** Every living combatant except excludeId. */
-	private buildOtherCombatants(excludeId: string): RH.AiCombatant[] {
+	private buildOtherCombatants(
+		excludeId: string,
+		floorIndex: number,
+	): RH.AiCombatant[] {
 		return this.cb
 			.getUnits()
-			.filter((u) => u.state.id !== excludeId && u.state.currentHp > 0)
+			.filter(
+				(u) =>
+					u.state.id !== excludeId &&
+					u.state.currentHp > 0 &&
+					u.state.floorIndex === floorIndex,
+			)
 			.map((u) => this.toCombatant(u.state));
 	}
 
@@ -101,6 +116,9 @@ export class AiTurnController {
 
 	async processEnemyTurns(): Promise<void> {
 		this.processingEnemyTurns = true;
+
+		this.crossFloorSpectating = this.cb.canSpectateCrossFloor();
+
 		this.camera.setInputLocked(true);
 		this.cb.setPlayerControlsVisible(false);
 
@@ -117,6 +135,7 @@ export class AiTurnController {
 
 				if (unit.state.currentHp <= 0) {
 					await this.processRecoveryTurn(unit);
+					this.cb.rebuildMapRender();
 					continue;
 				}
 
@@ -127,6 +146,7 @@ export class AiTurnController {
 						`🪤 ${this.cb.getUnitLabel(unit)} is stunned and skips their turn`,
 					);
 					this.mapController.trySpawnMonster();
+					this.cb.rebuildMapRender();
 					continue;
 				}
 
@@ -134,6 +154,7 @@ export class AiTurnController {
 				unit.state.hand.push(...drawn);
 				await this.processOneEnemyTurn(unit);
 				this.mapController.trySpawnMonster();
+				this.cb.rebuildMapRender();
 			}
 
 			this.cb.syncDeckTracker();
@@ -151,6 +172,7 @@ export class AiTurnController {
 			}
 		} finally {
 			this.processingEnemyTurns = false;
+			this.crossFloorSpectating = false;
 			this.camera.setInputLocked(false);
 			this.cb.beginPlayerTurn();
 			this.cb.syncUI();
@@ -161,6 +183,24 @@ export class AiTurnController {
 		// AI units always have both — guard for the type
 		if (!unit.archetype || !unit.memory) return;
 		this.activeAi = unit;
+		const localUnit = this.cb.getLocalUnit();
+
+		const crossFloorPeek =
+			this.crossFloorSpectating &&
+			unit.state.floorIndex !== localUnit.state.floorIndex;
+
+		if (this.crossFloorSpectating) {
+			this.cb.viewFloorForSpectating(unit.state.floorIndex);
+		}
+		const floorMap = this.cb.getFloorMap(unit.state.floorIndex);
+
+		if (!floorMap) {
+			this.activeAi = null;
+			return;
+		}
+
+		const grid = floorMap.grid;
+		const edges = floorMap.edges;
 
 		// Re-stamp this unit's own fog for the current turn immediately —
 		// its sighting-recording logic below needs an accurate "visible"
@@ -172,27 +212,17 @@ export class AiTurnController {
 				unit.state,
 				unit.state.coord,
 				this.cb.getTurnsTaken(),
-				this.cb.getGrid(),
+				grid,
 				undefined,
-				this.game.session.mapEdges,
+				edges,
 			);
 		}
 
-		// Same fog rule the per-frame camera lock in MapScene follows —
-		// don't center on (and thereby reveal) a unit the local player
-		// can't currently see. At turn-start the unit hasn't moved yet,
-		// so its own coord is already its live position, no separate
-		// screen-position lookup needed here.
 		const fogEnabled = this.cb.getFogOfWarEnabled();
-		const localUnit = this.cb.getLocalUnit();
+
 		const canSeeUnit =
-			!fogEnabled ||
-			RH.getTileVisibility(
-				localUnit.state,
-				unit.state.coord,
-				localUnit.state.coord,
-				this.cb.getTurnsTaken(),
-			) === "visible";
+			crossFloorPeek ||
+			this.cb.canLocalPlayerSee(unit.state.floorIndex, unit.state.coord);
 		if (canSeeUnit) {
 			this.camera.centerOn(
 				{ x: unit.mercenary.view.x, y: unit.mercenary.view.y },
@@ -222,18 +252,23 @@ export class AiTurnController {
 
 		const self = this.toCombatant(unit.state);
 		const preMoveHp = self.currentHp;
-		const allOthers = this.buildOtherCombatants(unit.state.id);
+		const allOthers = this.buildOtherCombatants(
+			unit.state.id,
+			unit.state.floorIndex,
+		);
 
-		const allChestInfos: RH.ChestInfo[] =
-			this.mapController.chestSystem.all.map((c) => ({
+		const allChestInfos: RH.ChestInfo[] = this.mapController.chestSystem.all
+			.filter((c) => c.floorIndex === unit.state.floorIndex)
+			.map((c) => ({
 				coord: c.coord,
 				isOpen: c.entity.isOpen,
 			}));
 
-		const grid = this.cb.getGrid();
 		const exitCoord = RH.findExitTile(grid);
+
 		const allMonsterCoords = this.mapController.monsterSystem
 			.livingMonsters()
+			.filter((m) => m.state.floorIndex === unit.state.floorIndex)
 			.map((m) => m.state.coord);
 
 		// Fog-of-war: an AI can only target what it has actually seen —
@@ -345,10 +380,12 @@ export class AiTurnController {
 			// a card it doesn't actually need if the direct route is blocked.
 			const uncappedRange = this.computeAiRange(
 				grid,
+				edges,
 				unit.state.coord,
 				grid.width * grid.height,
 				blocked,
 			);
+
 			const distanceNeeded =
 				uncappedRange.get(RH.coordKey(target))?.distance ??
 				Math.abs(target.x - unit.state.coord.x) +
@@ -366,9 +403,15 @@ export class AiTurnController {
 			const threatOwners = this.mapController.buildThreatZoneOwners(
 				unit.state.id,
 			);
-			const edges = this.game.session.mapEdges;
+
 			const range = edges
-				? this.computeAiRange(grid, unit.state.coord, moveBudget, blocked)
+				? this.computeAiRange(
+						grid,
+						edges,
+						unit.state.coord,
+						moveBudget,
+						blocked,
+					)
 				: RH.computeMovementRangeWeighted(
 						grid,
 						unit.state.coord,
@@ -378,6 +421,7 @@ export class AiTurnController {
 						unit.state.stats,
 						unit.archetype,
 					);
+
 			const reachable =
 				RH.findNearestReachableTile(grid, range, target, blocked, edges) ??
 				unit.state.coord;
@@ -435,9 +479,9 @@ export class AiTurnController {
 						unit.state,
 						unit.state.coord,
 						this.cb.getTurnsTaken(),
-						this.cb.getGrid(),
+						grid,
 						undefined,
-						this.game.session.mapEdges,
+						edges,
 					);
 					unit.turnManager.commitMove(truncatedPath.length);
 					this.cb.showFeedback(
@@ -478,7 +522,10 @@ export class AiTurnController {
 		await this.mapController.checkWinCondition(unit);
 
 		const selfAfter = this.toCombatant(unit.state);
-		const othersAfter = this.buildOtherCombatants(unit.state.id);
+		const othersAfter = this.buildOtherCombatants(
+			unit.state.id,
+			unit.state.floorIndex,
+		);
 		const selfForEngagement = { ...selfAfter, currentHp: preMoveHp };
 		const inRangeKeys = new Set(
 			this.cb.adjacentTiles(unit.state.coord).map((c) => `${c.x},${c.y}`),
@@ -517,10 +564,16 @@ export class AiTurnController {
 					await this.mapController.resolveAiVsAi(unit, victimUnit);
 				}
 			} else {
-				await this.runFallbackBehavior(unit, selfAfter, othersAfter);
+				await this.runFallbackBehavior(
+					unit,
+					selfAfter,
+					othersAfter,
+					grid,
+					edges,
+				);
 			}
 		} else {
-			await this.runFallbackBehavior(unit, selfAfter, othersAfter);
+			await this.runFallbackBehavior(unit, selfAfter, othersAfter, grid, edges);
 		}
 
 		this.activeAi = null;
@@ -533,16 +586,10 @@ export class AiTurnController {
 	 */
 	private async processRecoveryTurn(unit: PilotedMercenary): Promise<void> {
 		this.activeAi = unit;
-		const fogEnabled = this.cb.getFogOfWarEnabled();
-		const localUnit = this.cb.getLocalUnit();
-		const canSeeUnit =
-			!fogEnabled ||
-			RH.getTileVisibility(
-				localUnit.state,
-				unit.state.coord,
-				localUnit.state.coord,
-				this.cb.getTurnsTaken(),
-			) === "visible";
+		const canSeeUnit = this.cb.canLocalPlayerSee(
+			unit.state.floorIndex,
+			unit.state.coord,
+		);
 		if (canSeeUnit) {
 			await this.camera.panTo(
 				{ x: unit.mercenary.view.x, y: unit.mercenary.view.y },
@@ -565,6 +612,8 @@ export class AiTurnController {
 		unit: PilotedMercenary,
 		selfAfter: RH.AiCombatant,
 		othersAfter: RH.AiCombatant[],
+		grid: RH.Grid,
+		edges: RH.EdgeGrid | null,
 	): Promise<void> {
 		if (!unit.archetype || !unit.memory) return;
 
@@ -589,9 +638,9 @@ export class AiTurnController {
 			const retreatBlocked = new Set(
 				othersAfter.map((o) => RH.coordKey(o.coord)),
 			);
-			const grid = this.cb.getGrid();
 			const retreatRange = this.computeAiRange(
 				grid,
+				edges,
 				unit.state.coord,
 				unit.state.stats.movement,
 				retreatBlocked,
@@ -678,6 +727,7 @@ export class AiTurnController {
 			if (!isFirst) await this.cb.delay(MONSTER_DELAY_MS);
 			isFirst = false;
 			await this.processOneMonsterTurn(monster);
+			this.cb.rebuildMapRender();
 		}
 	}
 
@@ -690,16 +740,19 @@ export class AiTurnController {
 			return;
 		}
 		this.activeMonster = monster;
-		const fogEnabled = this.cb.getFogOfWarEnabled();
-		const localUnit = this.cb.getLocalUnit();
-		const canSeeMonster =
-			!fogEnabled ||
-			RH.getTileVisibility(
-				localUnit.state,
-				monster.state.coord,
-				localUnit.state.coord,
-				this.cb.getTurnsTaken(),
-			) === "visible";
+		const floorMap = this.cb.getFloorMap(monster.state.floorIndex);
+
+		if (!floorMap) {
+			this.activeMonster = null;
+			return;
+		}
+
+		const grid = floorMap.grid;
+		const edges = floorMap.edges;
+		const canSeeMonster = this.cb.canLocalPlayerSee(
+			monster.state.floorIndex,
+			monster.state.coord,
+		);
 		if (canSeeMonster) {
 			this.camera.centerOn(
 				{ x: monster.token.view.x, y: monster.token.view.y },
@@ -711,7 +764,11 @@ export class AiTurnController {
 		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
 		const hunters: RH.MonsterTargetCandidate[] = this.cb
 			.getUnits()
-			.filter((u) => u.state.currentHp > 0)
+			.filter(
+				(u) =>
+					u.state.currentHp > 0 &&
+					u.state.floorIndex === monster.state.floorIndex,
+			)
 			.map((u) => ({
 				id: u.state.id,
 				coord: u.state.coord,
@@ -736,7 +793,6 @@ export class AiTurnController {
 			return;
 		}
 
-		const grid = this.cb.getGrid();
 		const isAdjacentNow = RH.isAdjacent(
 			monster.state.coord,
 			targetUnit.state.coord,
@@ -758,6 +814,7 @@ export class AiTurnController {
 			]);
 			const range = this.computeAiRange(
 				grid,
+				edges,
 				monster.state.coord,
 				monster.state.stats.movement,
 				blocked,
@@ -768,7 +825,7 @@ export class AiTurnController {
 					range,
 					targetUnit.state.coord,
 					blocked,
-					this.game.session.mapEdges,
+					edges,
 				) ?? monster.state.coord;
 			const path = RH.getPathTo(range, reachable) ?? [];
 

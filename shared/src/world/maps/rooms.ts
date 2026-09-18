@@ -114,3 +114,35 @@ export function findOutsideRoom(rooms: Room[]): Room | null {
 		r.cells.length > largest.cells.length ? r : largest,
 	);
 }
+
+/**
+ * Building privacy rule.
+ *
+ * Outside/public space is visible normally.
+ * A building interior is visible only while the observer is inside
+ * that same room.
+ *
+ * This rule is deliberately independent of fog of war.
+ */
+export function canSeeRoomContent(
+	rooms: Room[],
+	observer: GridCoord,
+	target: GridCoord,
+): boolean {
+	const observerRoom = findRoomAt(rooms, observer);
+	const targetRoom = findRoomAt(rooms, target);
+
+	if (!observerRoom || !targetRoom) {
+		return false;
+	}
+
+	// Entity visibility is room-local.
+	//
+	// Outside is itself one room, so:
+	// outside -> outside = visible
+	// outside -> building = hidden
+	// building -> outside = hidden
+	// building A -> building A = visible
+	// building A -> building B = hidden
+	return observerRoom.id === targetRoom.id;
+}
