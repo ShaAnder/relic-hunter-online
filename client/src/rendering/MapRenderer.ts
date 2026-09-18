@@ -198,6 +198,8 @@ export class MapRenderer {
 			turn: number;
 		} | null = null,
 		tileFills: Map<string, number> | null = null,
+		forceWashed = false,
+		wallHeightScale = 1,
 	): void {
 		this.container.removeChildren();
 		const drawables: Drawable[] = [];
@@ -224,8 +226,15 @@ export class MapRenderer {
 				);
 				if (visibility === "unseen") return "hidden";
 				if (visibility === "explored") return "washed";
-				// "visible": fall through to room-focus, same as fog disabled.
+				// "visible": fall through
 			}
+
+			// Used by the lower-floor underlay: render the whole floor with
+			// the same darkened "washed" treatment used elsewhere, rather
+			// than making the whole container highly transparent (which
+			// creates the x-ray / grid-visible-through look).
+			if (forceWashed) return "washed";
+
 			return roomFocused ? "washed" : "normal";
 		};
 
@@ -301,6 +310,7 @@ export class MapRenderer {
 						compiled,
 						focusBoundaryKeys,
 						visualStateAt,
+						wallHeightScale,
 						registerCorner,
 					),
 				);
@@ -321,6 +331,7 @@ export class MapRenderer {
 						compiled,
 						focusBoundaryKeys,
 						visualStateAt,
+						wallHeightScale,
 						registerCorner,
 					),
 				);
@@ -429,6 +440,7 @@ export class MapRenderer {
 		compiled: RH.CompiledEdgeMap,
 		focusBoundaryKeys: Set<string> | null,
 		visualStateAt: (coord: RH.GridCoord, roomFocused: boolean) => VisualState,
+		wallHeightScale: number,
 		registerCorner: (
 			b: ScreenPoint,
 			height: number,
@@ -466,7 +478,7 @@ export class MapRenderer {
 				? stateAtCoord
 				: stateAtOther;
 
-		const baseHeight = WALL_HEIGHT_PX * style.heightFraction;
+		const baseHeight = WALL_HEIGHT_PX * style.heightFraction * wallHeightScale;
 		const height = isFocusedBoundary
 			? baseHeight * FOCUSED_WALL_HEIGHT_FRACTION
 			: baseHeight;

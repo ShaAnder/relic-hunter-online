@@ -185,7 +185,7 @@ export class MapScene implements Scene, TutorialPort {
 	 * The floor directly below is shifted downward and faded, producing
 	 * the visual impression that the active floor is physically above it.
 	 */
-	private static readonly LOWER_FLOOR_ALPHA = 0.28;
+	private static readonly LOWER_FLOOR_ALPHA = 0.82;
 	private static readonly LOWER_FLOOR_Y_OFFSET = TILE_HEIGHT * 1.5;
 
 	private roomsForCurrentFloor(edges: RH.EdgeGrid): RH.Room[] {
@@ -346,6 +346,7 @@ export class MapScene implements Scene, TutorialPort {
 			null,
 			null,
 			this.tileFillsForFloor(lowerFloorIndex),
+			true,
 		);
 
 		this.lowerFloorTilesContainer.alpha = MapScene.LOWER_FLOOR_ALPHA;
