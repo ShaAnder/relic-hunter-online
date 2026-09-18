@@ -3,6 +3,8 @@ import {
 	coordKey,
 	findStaircaseClusterAt,
 	staircaseClimbProgress,
+	CONNECTOR_LOWER_ELEVATION,
+	CONNECTOR_UPPER_ELEVATION,
 } from "@relic-hunter/shared";
 
 /**
@@ -40,9 +42,33 @@ export function gridToScreenElevated(
 	elevation?: Map<string, number>,
 ): { x: number; y: number } {
 	const base = gridToScreen(coord);
+
 	const value = elevation?.get(coordKey(coord));
-	if (value === undefined || !Number.isFinite(value)) return base;
-	return { x: base.x, y: base.y - value * ELEVATION_PX_PER_UNIT };
+
+	if (value === undefined || !Number.isFinite(value)) {
+		return base;
+	}
+
+	/**
+	 * StairConnector elevation is a MAP-rendering effect.
+	 *
+	 * The same logical connector has opposite elevation values on the
+	 * two floors (+0.2 below, -0.2 above). Using those values for an
+	 * entity means switching floor at the exact same (x,y) position
+	 * suddenly moves the sprite vertically.
+	 *
+	 * Keep the stair TILE raised/sunken in MapRenderer, but keep an
+	 * entity standing on the connector at the neutral shared position.
+	 */
+	const entityElevation =
+		value === CONNECTOR_LOWER_ELEVATION || value === CONNECTOR_UPPER_ELEVATION
+			? 0
+			: value;
+
+	return {
+		x: base.x,
+		y: base.y - entityElevation * ELEVATION_PX_PER_UNIT,
+	};
 }
 
 /** How far an entity visually rises over the full length of a staircase, in the same px-per-elevation-unit terms as ELEVATION_PX_PER_UNIT. Deliberately larger than a single elevation unit: for a horizontal (left-to-right) staircase, each step right also moves the tile ~TILE_HEIGHT/2 px *down* on screen from the isometric projection itself, which very nearly cancels a same-sized climb rise and made the effect invisible in practice at ELEVATION_PX_PER_UNIT. Doubled so the net rise stays clearly visible on any orientation. */

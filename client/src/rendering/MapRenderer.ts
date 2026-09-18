@@ -383,9 +383,27 @@ export class MapRenderer {
 		fillOverride?: number,
 	): Drawable {
 		const elevationPx = elevation * TILE_HEIGHT;
+
 		const trueCorners = this.trueTileCorners(coord, elevationPx);
-		const hw = (TILE_WIDTH / 2) * TILE_OVERSIZE;
-		const hh = (TILE_HEIGHT / 2) * TILE_OVERSIZE;
+
+		/**
+		 * Normal tiles deliberately overlap their neighbours slightly to hide
+		 * ordinary floor seams.
+		 *
+		 * Stair connectors are vertically displaced, though. Applying that
+		 * same 9% oversize after moving the tile up/down can make its diamond
+		 * stick out past the wall beside the stair, producing the thin
+		 * diagonal "jitter" line.
+		 *
+		 * Keep connector tiles at their true footprint.
+		 */
+		const tileOversize = isStairConnectorElevation(elevation)
+			? 1
+			: TILE_OVERSIZE;
+
+		const hw = (TILE_WIDTH / 2) * tileOversize;
+
+		const hh = (TILE_HEIGHT / 2) * tileOversize;
 		const c = trueCorners.center;
 		const color =
 			fillOverride ?? (elevation > 0 ? PAVEMENT_COLOR : FLOOR_COLOR);
@@ -499,21 +517,40 @@ export class MapRenderer {
 
 		const otherElevation = compiled.elevation.get(`${other.x},${other.y}`);
 
-		const touchesStairConnector =
-			isStairConnectorElevation(coordElevation) ||
-			isStairConnectorElevation(otherElevation);
+		const coordIsConnector = isStairConnectorElevation(coordElevation);
 
-		// StairConnector tiles themselves rise/sink so the staircase reads
-		// correctly, but a WALL bordering that connector still belongs to the
-		// ordinary room geometry. It must not ride up or down with the stair
-		// tile itself.
-		const usableElevation: number = touchesStairConnector
-			? 0
-			: coordElevation !== undefined && Number.isFinite(coordElevation)
-				? coordElevation
-				: otherElevation !== undefined && Number.isFinite(otherElevation)
-					? otherElevation
-					: 0;
+		const otherIsConnector = isStairConnectorElevation(otherElevation);
+
+		const isFiniteElevation = (value: number | undefined): value is number =>
+			value !== undefined && Number.isFinite(value);
+
+		/**
+		 * A wall sits between TWO tiles.
+		 *
+		 * StairConnector elevation belongs to the stair surface itself,
+		 * not to the wall surrounding the stair opening.
+		 *
+		 * Therefore:
+		 *
+		 * stair + pavement -> wall uses pavement elevation
+		 * stair + floor    -> wall uses floor elevation
+		 * pavement + floor -> use the normal finite side
+		 *
+		 * This is important for textured walls later: every wall segment now
+		 * has a stable architectural base plane instead of inheriting a
+		 * temporary stair-surface offset or being hardcoded to elevation 0.
+		 */
+		let usableElevation = 0;
+
+		if (coordIsConnector && !otherIsConnector) {
+			usableElevation = isFiniteElevation(otherElevation) ? otherElevation : 0;
+		} else if (otherIsConnector && !coordIsConnector) {
+			usableElevation = isFiniteElevation(coordElevation) ? coordElevation : 0;
+		} else if (isFiniteElevation(coordElevation)) {
+			usableElevation = coordElevation;
+		} else if (isFiniteElevation(otherElevation)) {
+			usableElevation = otherElevation;
+		}
 
 		const elevationPx = usableElevation * TILE_HEIGHT;
 		const corners = this.trueTileCorners(coord, elevationPx);

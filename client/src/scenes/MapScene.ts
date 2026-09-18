@@ -176,17 +176,18 @@ export class MapScene implements Scene, TutorialPort {
 		coord: RH.GridCoord;
 	} | null = null;
 
-	/**
-	 * Upper-floor presentation:
-	 *
-	 * The active floor remains at its normal screen coordinates so none
-	 * of the existing movement/input maths changes.
-	 *
-	 * The floor directly below is shifted downward and faded, producing
-	 * the visual impression that the active floor is physically above it.
-	 */
 	private static readonly LOWER_FLOOR_ALPHA = 0.82;
-	private static readonly LOWER_FLOOR_Y_OFFSET = TILE_HEIGHT * 1.5;
+
+	/**
+	 * The muted floor's wall height and its downward displacement must
+	 * match. That makes the active upper floor sit directly on the top
+	 * of the lower floor's walls instead of leaving visible air between
+	 * the two layers.
+	 */
+	private static readonly LOWER_FLOOR_WALL_HEIGHT_SCALE = 1.5;
+
+	private static readonly LOWER_FLOOR_Y_OFFSET =
+		TILE_HEIGHT * MapScene.LOWER_FLOOR_WALL_HEIGHT_SCALE;
 
 	private roomsForCurrentFloor(edges: RH.EdgeGrid): RH.Room[] {
 		const viewedFloor = this.game.session.viewedFloor;
@@ -347,6 +348,7 @@ export class MapScene implements Scene, TutorialPort {
 			null,
 			this.tileFillsForFloor(lowerFloorIndex),
 			true,
+			MapScene.LOWER_FLOOR_WALL_HEIGHT_SCALE,
 		);
 
 		this.lowerFloorTilesContainer.alpha = MapScene.LOWER_FLOOR_ALPHA;
