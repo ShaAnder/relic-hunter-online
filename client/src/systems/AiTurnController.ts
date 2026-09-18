@@ -595,15 +595,48 @@ export class AiTurnController {
 			(o) => o.coord.x === target.x && o.coord.y === target.y,
 		);
 
+		// Choosing an opponent and deciding not to fight them must NOT
+		// cancel the AI's entire movement phase. Remove opponents this
+		// archetype currently refuses to engage and ask the normal target
+		// logic for its next-best objective instead.
+		//
+		// That can become:
+		// - another acceptable hunter,
+		// - a chest,
+		// - the exit,
+		// - an exploration tile,
+		// - or its own tile, which lets the cross-floor fallback below
+		//   choose another floor.
+		if (
+			targetCombatant &&
+			!RH.decideEngagement(unit.archetype, self, targetCombatant)
+		) {
+			this.cb.showFeedback(
+				`🤔 ${this.cb.getUnitLabel(unit)} avoids that fight and reassesses`,
+			);
+
+			const acceptableOthers = others.filter((other) =>
+				RH.decideEngagement(unit.archetype!, self, other),
+			);
+
+			target = RH.decideMovementTarget(
+				unit.archetype,
+				self,
+				acceptableOthers,
+				chestInfos,
+				targetItemId,
+				exitCoord,
+				monsterCoords,
+				unit.memory ?? null,
+				explorationTarget,
+			);
+		}
+
 		let transitionTowardFloor: number | null = null;
 
-		const wouldDeclineOnArrival =
-			targetCombatant !== undefined &&
-			!RH.decideEngagement(unit.archetype, self, targetCombatant);
-
-		if (wouldDeclineOnArrival) {
-			this.cb.showFeedback(`🤔 ${this.cb.getUnitLabel(unit)} avoids a fight`);
-		} else {
+		// Always run the movement phase. Refusing one opponent means
+		// "choose something else", not "forfeit the turn".
+		{
 			const visibleTraps = this.mapController.trapSystem.visibleTo(
 				unit.state.id,
 				unit.state.coord,

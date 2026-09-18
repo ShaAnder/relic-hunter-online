@@ -70,11 +70,21 @@ export class MapScene implements Scene, TutorialPort {
 	// Board layers
 	private grid: RH.Grid;
 	private boardContainer = new Container();
+
+	/**
+	 * When viewing an upper floor, the immediately-lower floor is rendered
+	 * here as a muted visual underlay.
+	 *
+	 * Gameplay, hit-testing and entities still belong exclusively to the
+	 * active floor.
+	 */
+	private lowerFloorTilesContainer = new Container();
 	private tilesContainer = new Container();
 	private mercenaryContainer = new Container();
 
 	// Systems
 	private camera: CameraController;
+	private lowerFloorMapRenderer!: MapRenderer;
 	private mapRenderer!: MapRenderer;
 	private moveController: MoveController;
 
@@ -166,8 +176,18 @@ export class MapScene implements Scene, TutorialPort {
 		coord: RH.GridCoord;
 	} | null = null;
 
+	/**
+	 * Upper-floor presentation:
+	 *
+	 * The active floor remains at its normal screen coordinates so none
+	 * of the existing movement/input maths changes.
+	 *
+	 * The floor directly below is shifted downward and faded, producing
+	 * the visual impression that the active floor is physically above it.
+	 */
+	private static readonly LOWER_FLOOR_ALPHA = 0.28;
+	private static readonly LOWER_FLOOR_Y_OFFSET = TILE_HEIGHT * 1.5;
 
-	
 	private roomsForCurrentFloor(edges: RH.EdgeGrid): RH.Room[] {
 		const viewedFloor = this.game.session.viewedFloor;
 		if (this.cachedRooms?.floorIndex === viewedFloor) {
@@ -284,6 +304,54 @@ export class MapScene implements Scene, TutorialPort {
 		this.rebuildMapRenderWithFog();
 	}
 
+	private rebuildLowerFloorUnderlay(viewedFloor: number): void {
+		const floors = this.game.session.mapFloors;
+
+		const groundFloorIndex =
+			this.game.session.mapGroundFloorIndex ??
+			this.game.session.mapBundle?.groundFloorIndex ??
+			0;
+
+		/**
+		 * Only show an underlay when we're ABOVE ground.
+		 *
+		 * Ground floor does not suddenly display a basement underneath it.
+		 * Floor 2 shows Floor 1.
+		 * Floor 3 shows Floor 2.
+		 */
+		if (!floors || viewedFloor <= groundFloorIndex) {
+			this.lowerFloorTilesContainer.removeChildren();
+			this.lowerFloorTilesContainer.alpha = 1;
+			this.lowerFloorTilesContainer.y = 0;
+			return;
+		}
+
+		const lowerFloorIndex = viewedFloor - 1;
+		const lowerFloor = floors[lowerFloorIndex];
+
+		if (!lowerFloor) {
+			this.lowerFloorTilesContainer.removeChildren();
+			return;
+		}
+
+		/**
+		 * This layer is presentation only.
+		 *
+		 * Do NOT apply the active hunter's room focus or fog to it:
+		 * we're not pretending the player is physically looking through
+		 * the lower floor. It's simply muted structural context.
+		 */
+		this.lowerFloorMapRenderer.build(
+			lowerFloor,
+			null,
+			null,
+			this.tileFillsForFloor(lowerFloorIndex),
+		);
+
+		this.lowerFloorTilesContainer.alpha = MapScene.LOWER_FLOOR_ALPHA;
+		this.lowerFloorTilesContainer.y = MapScene.LOWER_FLOOR_Y_OFFSET;
+	}
+
 	private rebuildMapRenderWithFog(liveCoordOverride?: RH.GridCoord): void {
 		const compiled: RH.CompiledEdgeMap = {
 			grid: this.grid,
@@ -294,6 +362,10 @@ export class MapScene implements Scene, TutorialPort {
 		};
 
 		const viewedFloor = this.game.session.viewedFloor;
+
+		// Keep the floor immediately beneath an upper floor visible as
+		// muted structural context.
+		this.rebuildLowerFloorUnderlay(viewedFloor);
 
 		const spectator =
 			this.aiTurnController.crossFloorSpectating &&
@@ -335,9 +407,8 @@ export class MapScene implements Scene, TutorialPort {
 		fills: Map<string, number>;
 	} | null = null;
 
-	private tileFillsForCurrentFloor(): Map<string, number> {
-		const viewedFloor = this.game.session.viewedFloor;
-		if (this.cachedTileFills?.floorIndex === viewedFloor) {
+	private tileFillsForFloor(floorIndex: number): Map<string, number> {
+		if (this.cachedTileFills?.floorIndex === floorIndex) {
 			return this.cachedTileFills.fills;
 		}
 
@@ -345,7 +416,7 @@ export class MapScene implements Scene, TutorialPort {
 		const bundle = this.game.session.mapBundle;
 		if (!bundle) return fills;
 
-		const floor = bundle.floors[viewedFloor];
+		const floor = bundle.floors[floorIndex];
 		if (!floor) return fills;
 
 		const height = (floor.length + 1) / 2;
@@ -357,8 +428,13 @@ export class MapScene implements Scene, TutorialPort {
 				if (color !== undefined) fills.set(`${x},${y}`, color);
 			}
 		}
-		this.cachedTileFills = { floorIndex: viewedFloor, fills };
+
+		this.cachedTileFills = { floorIndex, fills };
 		return fills;
+	}
+
+	private tileFillsForCurrentFloor(): Map<string, number> {
+		return this.tileFillsForFloor(this.game.session.viewedFloor);
 	}
 
 	/**
@@ -374,8 +450,33 @@ export class MapScene implements Scene, TutorialPort {
 	 */
 	private focusRoomFor(room: RH.Room | null, rooms: RH.Room[]): RH.Room | null {
 		if (!room) return null;
-		const outside = RH.findOutsideRoom(rooms);
-		if (outside && room.id === outside.id) return null;
+
+		const viewedFloor = this.game.session.viewedFloor;
+
+		const groundFloorIndex =
+			this.game.session.mapGroundFloorIndex ??
+			this.game.session.mapBundle?.groundFloorIndex ??
+			0;
+
+		/**
+		 * findOutsideRoom() works by assuming the largest connected room
+		 * is the street/outside.
+		 *
+		 * That assumption is valid on the ground floor, where the street
+		 * surrounds the buildings.
+		 *
+		 * It is NOT valid upstairs: the largest room on Floor 2 is commonly
+		 * just the main building interior. Treating that room as "outside"
+		 * is why upper-floor walls never shrink when a hunter enters it.
+		 */
+		if (viewedFloor === groundFloorIndex) {
+			const outside = RH.findOutsideRoom(rooms);
+
+			if (outside && room.id === outside.id) {
+				return null;
+			}
+		}
+
 		return room;
 	}
 
@@ -457,6 +558,10 @@ export class MapScene implements Scene, TutorialPort {
 		// the real map, not the pre-generation assumption.
 		this.mapWidth = this.grid.width;
 		this.mapHeight = this.grid.height;
+
+		// Lower-floor geometry must render first so the active floor always
+		// paints cleanly over it.
+		this.boardContainer.addChild(this.lowerFloorTilesContainer);
 
 		this.boardContainer.addChild(this.tilesContainer);
 		this.view.addChild(this.boardContainer);
@@ -547,6 +652,7 @@ export class MapScene implements Scene, TutorialPort {
 			},
 		);
 
+		this.lowerFloorMapRenderer = new MapRenderer(this.lowerFloorTilesContainer);
 		this.mapRenderer = new MapRenderer(this.tilesContainer);
 
 		this.applyCameraBounds();

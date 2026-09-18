@@ -13,8 +13,25 @@ import { ALLEYWAYS_EDGE_BLUEPRINT } from "./alleywaysEdgeBlueprint";
  * floor-switch. See StairConnector's own doc comment in
  * EdgeMapTileCode for the full rationale.
  */
-const CONNECTOR_LOWER_ELEVATION = 0.5;
-const CONNECTOR_UPPER_ELEVATION = -0.5;
+/**
+ * Elevation a StairConnector renders at once we know which side of a
+ * matched pair it's on - the lower floor's copy rises up out of its
+ * own ground level, the upper floor's copy sits sunken into its own,
+ * so the two read as one continuous rise across the instant
+ * floor-switch. See StairConnector's own doc comment in
+ * EdgeMapTileCode for the full rationale.
+ *
+ * Deliberately modest (0.2, not the original 0.5) - a wall bordering
+ * this tile is intentionally kept level rather than tilting with it
+ * (see MapRenderer's touchesStairConnector handling), so too large an
+ * offset here creates a real, visible gap between the tile's own
+ * sunken/raised edge and the wall's level base right next to it.
+ * Roughly double Pavement's own 0.1 offset, which is known to read
+ * cleanly without a seam - enough to visually register as a step,
+ * not enough to separate from the geometry around it.
+ */
+export const CONNECTOR_LOWER_ELEVATION = 0.2;
+export const CONNECTOR_UPPER_ELEVATION = -0.2;
 
 /**
  * All floors of one map, bundled together. Every map is this shape

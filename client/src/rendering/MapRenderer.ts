@@ -132,7 +132,10 @@ function styleFor(barrier: RH.EdgeBarrier): BarrierStyle {
 }
 
 function isStairConnectorElevation(elevation: number | undefined): boolean {
-	return elevation === 0.5 || elevation === -0.5;
+	return (
+		elevation === RH.CONNECTOR_LOWER_ELEVATION ||
+		elevation === RH.CONNECTOR_UPPER_ELEVATION
+	);
 }
 
 /** What a piece of the map should draw as, combining room-focus and fog-of-war into one answer instead of two separately-applied effects. "hidden" wins over everything (fog unseen); otherwise "washed" if either fog marks it explored-but-not-visible OR room-focus says it's not the room you're in; otherwise "normal". */
