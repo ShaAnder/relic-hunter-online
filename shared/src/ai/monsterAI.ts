@@ -18,7 +18,9 @@ export function decideMonsterTarget(
 ): MonsterTargetCandidate | null {
 	if (hunters.length === 0) return null;
 
-	const adjacent = hunters.find((h) => isAdjacent(self.coord, h.coord));
+	const adjacent = hunters.find(
+		(h) => h.floorIndex === self.floorIndex && isAdjacent(self.coord, h.coord),
+	);
 	if (adjacent) return adjacent;
 
 	const carrier = hunters.find((h) => h.isCarryingTarget);

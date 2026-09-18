@@ -501,9 +501,11 @@ export class MapScene implements Scene, TutorialPort {
 				playBossAudio: () => this.game.audio.playMusic("boss"),
 				isTutorial: () => !!this.tutorialConfig,
 				applyFloor: (floorIndex) => this.applyFloor(floorIndex),
-				trySwitchFloor: (unit, moveCamera) =>
-					this.trySwitchFloor(unit, moveCamera),
-				tryMonsterSwitchFloor: (monster) => this.tryMonsterSwitchFloor(monster),
+				trySwitchFloor: (unit, moveCamera, towardFloor) =>
+					this.trySwitchFloor(unit, moveCamera, towardFloor),
+
+				tryMonsterSwitchFloor: (monster, towardFloor) =>
+					this.tryMonsterSwitchFloor(monster, towardFloor),
 				rebuildMapRender: () => {
 					this.syncFloorVisibility();
 					this.rebuildMapRenderWithFog();
@@ -2101,17 +2103,27 @@ export class MapScene implements Scene, TutorialPort {
 	private async trySwitchFloor(
 		unit: PilotedMercenary,
 		moveCamera: boolean,
+		towardFloor?: number,
 	): Promise<void> {
 		const bundle = this.game.session.mapBundle;
 		const floors = this.game.session.mapFloors;
 		if (!bundle || !floors) return;
 
-		const next = RH.resolveFloorTransition(
-			bundle,
-			unit.state.floorIndex,
-			unit.state.coord.x,
-			unit.state.coord.y,
-		);
+		const next =
+			towardFloor === undefined
+				? RH.resolveFloorTransition(
+						bundle,
+						unit.state.floorIndex,
+						unit.state.coord.x,
+						unit.state.coord.y,
+					)
+				: RH.resolveFloorTransitionToward(
+						bundle,
+						unit.state.floorIndex,
+						unit.state.coord.x,
+						unit.state.coord.y,
+						towardFloor,
+					);
 		if (next === null || next === unit.state.floorIndex) return;
 		if (!floors[next]) return;
 
@@ -2146,17 +2158,29 @@ export class MapScene implements Scene, TutorialPort {
 	 * Mercenary (.mercenary), since monsters aren't PilotedMercenary
 	 * and don't share that type.
 	 */
-	private tryMonsterSwitchFloor(monster: MonsterEntity): void {
+	private tryMonsterSwitchFloor(
+		monster: MonsterEntity,
+		towardFloor?: number,
+	): void {
 		const bundle = this.game.session.mapBundle;
 		const floors = this.game.session.mapFloors;
 		if (!bundle || !floors) return;
 
-		const next = RH.resolveFloorTransition(
-			bundle,
-			monster.state.floorIndex,
-			monster.state.coord.x,
-			monster.state.coord.y,
-		);
+		const next =
+			towardFloor === undefined
+				? RH.resolveFloorTransition(
+						bundle,
+						monster.state.floorIndex,
+						monster.state.coord.x,
+						monster.state.coord.y,
+					)
+				: RH.resolveFloorTransitionToward(
+						bundle,
+						monster.state.floorIndex,
+						monster.state.coord.x,
+						monster.state.coord.y,
+						towardFloor,
+					);
 		if (next === null || next === monster.state.floorIndex) return;
 		if (!floors[next]) return;
 
@@ -2533,28 +2557,90 @@ export class MapScene implements Scene, TutorialPort {
 		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
 
-	/** Pick a random walkable (Floor) tile on the grid, excluding one coord. */
-	private randomWalkableTile(
-		exclude: RH.GridCoord,
-		alsoExclude: RH.GridCoord[] = [],
-	): RH.GridCoord | null {
-		const candidates: RH.GridCoord[] = [];
+	/**
+	 * Pick a teleport destination by choosing an eligible floor FIRST,
+	 * then choosing a free walkable tile on that floor.
+	 *
+	 * Choosing the floor first gives each floor equal probability instead
+	 * of larger floors being more likely simply because they contain more
+	 * walkable tiles.
+	 */
+	private randomTeleportDestination(state: RH.MercenaryState): {
+		floorIndex: number;
+		coord: RH.GridCoord;
+	} | null {
+		const floors = this.game.session.mapFloors;
+		if (!floors?.length) return null;
 
-		for (let x = 0; x < this.grid.width; x++) {
-			for (let y = 0; y < this.grid.height; y++) {
-				const tile = this.grid.getTile({ x, y });
-				if (!tile || tile.type !== RH.TileType.Floor) continue;
-				if (tile.coord.x === exclude.x && tile.coord.y === exclude.y) continue;
-				if (
-					alsoExclude.some((c) => c.x === tile.coord.x && c.y === tile.coord.y)
-				)
-					continue;
-				candidates.push(tile.coord);
+		const rng = this.game.session.rng;
+
+		const occupied = new Set<string>();
+
+		for (const unit of this.units) {
+			if (unit.state.id === state.id || unit.state.currentHp <= 0) {
+				continue;
 			}
+
+			occupied.add(`${unit.state.floorIndex}:${RH.coordKey(unit.state.coord)}`);
 		}
 
-		if (candidates.length === 0) return null;
-		return candidates[Math.floor(Math.random() * candidates.length)];
+		for (const monster of this.mapController.monsterSystem.all) {
+			if (monster.state.currentHp <= 0) continue;
+
+			occupied.add(
+				`${monster.state.floorIndex}:${RH.coordKey(monster.state.coord)}`,
+			);
+		}
+
+		const candidatesByFloor = floors
+			.map((floor, floorIndex) => {
+				const coords: RH.GridCoord[] = [];
+
+				for (let y = 0; y < floor.grid.height; y++) {
+					for (let x = 0; x < floor.grid.width; x++) {
+						const coord = { x, y };
+
+						if (!floor.grid.isWalkable(coord)) {
+							continue;
+						}
+
+						if (
+							floorIndex === state.floorIndex &&
+							x === state.coord.x &&
+							y === state.coord.y
+						) {
+							continue;
+						}
+
+						if (occupied.has(`${floorIndex}:${RH.coordKey(coord)}`)) {
+							continue;
+						}
+
+						coords.push(coord);
+					}
+				}
+
+				return {
+					floorIndex,
+					coords,
+				};
+			})
+			.filter((entry) => entry.coords.length > 0);
+
+		if (candidatesByFloor.length === 0) {
+			return null;
+		}
+
+		const selectedFloor =
+			candidatesByFloor[Math.floor(rng() * candidatesByFloor.length)];
+
+		const coord =
+			selectedFloor.coords[Math.floor(rng() * selectedFloor.coords.length)];
+
+		return {
+			floorIndex: selectedFloor.floorIndex,
+			coord,
+		};
 	}
 
 	/**
@@ -2567,37 +2653,53 @@ export class MapScene implements Scene, TutorialPort {
 		state: RH.MercenaryState,
 		mercenary: Mercenary,
 	): Promise<void> {
-		const occupied: RH.GridCoord[] = this.units
-			.filter((u) => u.state.id !== state.id && u.state.currentHp > 0)
-			.map((u) => u.state.coord);
+		const destination = this.randomTeleportDestination(state);
 
-		const destination = this.randomWalkableTile(state.coord, occupied);
 		if (!destination) return;
-		state.coord = destination;
-		const screenPos = gridToScreenElevatedWithClimb(
-			destination,
-			this.game.session.mapElevation ?? undefined,
-			this.game.session.mapStaircaseClusters,
-		);
-		mercenary.setPositionInstant(screenPos);
 
-		if (state === this.localUnit.state) {
-			this.refreshVisibility(state, destination);
-		}
+		const floor = this.game.session.mapFloors?.[destination.floorIndex];
+
+		if (!floor) return;
 
 		const isLocal = state === this.localUnit.state;
+
+		state.floorIndex = destination.floorIndex;
+		state.coord = destination.coord;
+
+		if (isLocal) {
+			this.game.session.localPlayerFloor = destination.floorIndex;
+
+			this.applyFloor(destination.floorIndex);
+		} else {
+			this.syncFloorVisibility();
+		}
+
+		const screenPos = gridToScreenElevatedWithClimb(
+			destination.coord,
+			floor.elevation,
+			this.game.session.mapStaircaseClusters,
+		);
+
+		mercenary.setPositionInstant(screenPos);
+
+		if (isLocal) {
+			this.refreshVisibility(state, destination.coord);
+		}
 
 		const canSeeDestination =
 			isLocal ||
 			this.canLocalPlayerSeeCoord(
 				state.floorIndex,
-				destination,
+				destination.coord,
 				this.localUnit.state.coord,
 			);
 
 		if (canSeeDestination) {
 			await this.camera.panTo(
-				{ x: screenPos.x, y: screenPos.y },
+				{
+					x: screenPos.x,
+					y: screenPos.y,
+				},
 				500,
 				this.game.app.screen.width,
 				this.game.app.screen.height,

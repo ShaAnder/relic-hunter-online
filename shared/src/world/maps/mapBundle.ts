@@ -336,62 +336,92 @@ export function officialAlleywaysBundle(): MapBundle {
 	};
 }
 
-const CONNECTOR_CODES: readonly EdgeMapTileCode[] = [
-	EdgeMapTileCode.StairConnector,
-	EdgeMapTileCode.LadderBottom,
-	EdgeMapTileCode.LadderTop,
-];
-
 /**
- * The nearest connector tile on fromFloor that leads one step closer
- * to towardFloor - up if towardFloor is above fromFloor, down if
- * below. Single-hop only: if the nearest working connector on this
- * floor leads the wrong direction (or none exists at all), this
- * returns null rather than searching further floors - reaching a
- * target more than one floor away needs this called again once the
- * unit has actually crossed the first connector and arrived on the
- * next floor, not solved as one multi-floor path up front.
+ * Resolve a connector specifically in the direction of towardFloor.
  *
- * Distance is straight Manhattan, not a real wall-aware path length -
- * good enough to pick a reasonable connector to walk toward; the
- * caller's own pathfinding handles the actual route there.
+ * This differs from resolveFloorTransition(), which has no intended
+ * direction and therefore defaults a bidirectional StairConnector upward.
+ * AI pathing knows which floor it is trying to reach, so it must use
+ * this direction-aware version.
  */
-export function findNearestConnectorTowardFloor(
+export function resolveFloorTransitionToward(
 	bundle: MapBundle,
 	fromFloor: number,
-	fromCoord: { x: number; y: number },
+	x: number,
+	y: number,
 	towardFloor: number,
-): { x: number; y: number } | null {
+): number | null {
 	if (towardFloor === fromFloor) return null;
+
 	const floor = bundle.floors[fromFloor];
 	if (!floor) return null;
 
+	const code = tileCodeAt(floor, x, y);
+	if (code === null) return null;
+
 	const goingUp = towardFloor > fromFloor;
+	const nextFloor = goingUp ? fromFloor + 1 : fromFloor - 1;
+
+	const neighbor = bundle.floors[nextFloor];
+	if (!neighbor) return null;
+
+	if (code === EdgeMapTileCode.StairConnector) {
+		return tileCodeAt(neighbor, x, y) === EdgeMapTileCode.StairConnector
+			? nextFloor
+			: null;
+	}
+
+	if (
+		goingUp &&
+		code === EdgeMapTileCode.LadderBottom &&
+		tileCodeAt(neighbor, x, y) === EdgeMapTileCode.LadderTop
+	) {
+		return nextFloor;
+	}
+
+	if (
+		!goingUp &&
+		code === EdgeMapTileCode.LadderTop &&
+		tileCodeAt(neighbor, x, y) === EdgeMapTileCode.LadderBottom
+	) {
+		return nextFloor;
+	}
+
+	return null;
+}
+
+/**
+ * Every connector on fromFloor that moves one floor in the direction
+ * of towardFloor.
+ *
+ * This deliberately does NOT choose the nearest connector. The caller
+ * has the real wall-aware movement range and is therefore in a much
+ * better position to choose the nearest REACHABLE connector.
+ */
+export function findConnectorsTowardFloor(
+	bundle: MapBundle,
+	fromFloor: number,
+	towardFloor: number,
+): { x: number; y: number }[] {
+	if (towardFloor === fromFloor) return [];
+
+	const floor = bundle.floors[fromFloor];
+	if (!floor) return [];
+
 	const width = logicalWidth(floor);
 	const height = logicalHeight(floor);
-
-	let best: { x: number; y: number } | null = null;
-	let bestDist = Infinity;
+	const connectors: { x: number; y: number }[] = [];
 
 	for (let y = 0; y < height; y++) {
 		for (let x = 0; x < width; x++) {
-			const code = tileCodeAt(floor, x, y);
-			if (code === null || !CONNECTOR_CODES.includes(code)) continue;
-
-			const destination = resolveFloorTransition(bundle, fromFloor, x, y);
-			if (destination === null) continue;
-			const leadsRightWay = goingUp
-				? destination > fromFloor
-				: destination < fromFloor;
-			if (!leadsRightWay) continue;
-
-			const dist = Math.abs(x - fromCoord.x) + Math.abs(y - fromCoord.y);
-			if (dist < bestDist) {
-				bestDist = dist;
-				best = { x, y };
+			if (
+				resolveFloorTransitionToward(bundle, fromFloor, x, y, towardFloor) !==
+				null
+			) {
+				connectors.push({ x, y });
 			}
 		}
 	}
 
-	return best;
+	return connectors;
 }

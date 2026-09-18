@@ -37,8 +37,13 @@ export interface AiTurnCallbacks {
 	playBossAudio(): void;
 	isTutorial(): boolean;
 	applyFloor(floorIndex: number): void;
-	trySwitchFloor(unit: PilotedMercenary, moveCamera: boolean): Promise<void>;
-	tryMonsterSwitchFloor(monster: MonsterEntity): void;
+	trySwitchFloor(
+		unit: PilotedMercenary,
+		moveCamera: boolean,
+		towardFloor?: number,
+	): Promise<void>;
+
+	tryMonsterSwitchFloor(monster: MonsterEntity, towardFloor?: number): void;
 	rebuildMapRender(): void;
 }
 
@@ -92,20 +97,210 @@ export class AiTurnController {
 		};
 	}
 
-	/** Every living combatant except excludeId. */
+	/** Every living combatant except excludeId, regardless of floor. */
+	private buildAllOtherCombatants(excludeId: string): RH.AiCombatant[] {
+		return this.cb
+			.getUnits()
+			.filter((u) => u.state.id !== excludeId && u.state.currentHp > 0)
+			.map((u) => this.toCombatant(u.state));
+	}
+
+	/**
+	 * Same-floor combatants only.
+	 *
+	 * Immediate movement blockers, engagement and retreat stay floor-local.
+	 * Strategic cross-floor decisions use buildAllOtherCombatants instead.
+	 */
 	private buildOtherCombatants(
 		excludeId: string,
 		floorIndex: number,
 	): RH.AiCombatant[] {
-		return this.cb
+		return this.buildAllOtherCombatants(excludeId).filter(
+			(other) => other.floorIndex === floorIndex,
+		);
+	}
+
+	private nearestDifferentFloor(
+		currentFloor: number,
+		candidates: number[],
+	): number | null {
+		const unique = [...new Set(candidates)].filter(
+			(floorIndex) => floorIndex !== currentFloor,
+		);
+
+		if (unique.length === 0) return null;
+
+		const nearestDistance = Math.min(
+			...unique.map((floorIndex) => Math.abs(floorIndex - currentFloor)),
+		);
+
+		const nearest = unique.filter(
+			(floorIndex) => Math.abs(floorIndex - currentFloor) === nearestDistance,
+		);
+
+		return nearest[Math.floor(this.game.session.rng() * nearest.length)];
+	}
+
+	/**
+	 * When the AI's ordinary same-floor decision has nothing useful to do,
+	 * choose another floor worth travelling toward.
+	 *
+	 * A discovered relic carrier is higher priority for the pursuit-oriented
+	 * archetypes even if something else exists locally.
+	 */
+	private pickCrossFloorObjectiveFloor(
+		unit: PilotedMercenary,
+		targetItemId: string | null,
+		allowGeneralFallback: boolean,
+	): number | null {
+		const floors = this.game.session.mapFloors;
+		if (!floors || floors.length <= 1) return null;
+
+		const currentFloor = unit.state.floorIndex;
+
+		const livingOthers = this.cb
 			.getUnits()
 			.filter(
-				(u) =>
-					u.state.id !== excludeId &&
-					u.state.currentHp > 0 &&
-					u.state.floorIndex === floorIndex,
+				(other) =>
+					other.state.id !== unit.state.id && other.state.currentHp > 0,
+			);
+
+		const unopenedChests = this.mapController.chestSystem.all.filter(
+			(chest) => !chest.entity.isOpen,
+		);
+
+		const unopenedChestFloors = unopenedChests
+			.filter((chest) => chest.floorIndex !== currentFloor)
+			.map((chest) => chest.floorIndex);
+
+		const rivalFloors = livingOthers
+			.filter((other) => other.state.floorIndex !== currentFloor)
+			.map((other) => other.state.floorIndex);
+
+		const exitFloors = floors
+			.map((floor, floorIndex) =>
+				RH.findExitTile(floor.grid) ? floorIndex : null,
 			)
-			.map((u) => this.toCombatant(u.state));
+			.filter(
+				(floorIndex): floorIndex is number =>
+					floorIndex !== null && floorIndex !== currentFloor,
+			);
+
+		const anyOtherFloors = floors
+			.map((_, floorIndex) => floorIndex)
+			.filter((floorIndex) => floorIndex !== currentFloor);
+
+		const carryingTarget =
+			targetItemId !== null &&
+			unit.state.items.some((item) => item?.id === targetItemId);
+
+		if (carryingTarget) {
+			return this.nearestDifferentFloor(currentFloor, exitFloors);
+		}
+
+		const carrier =
+			targetItemId === null
+				? null
+				: (livingOthers.find((other) =>
+						other.state.items.some((item) => item?.id === targetItemId),
+					) ?? null);
+
+		if (carrier && carrier.state.floorIndex !== currentFloor) {
+			switch (unit.archetype) {
+				case "aggressive":
+				case "balanced":
+				case "clever":
+					return carrier.state.floorIndex;
+
+				case "treasure": {
+					const localChestExists = unopenedChests.some(
+						(chest) => chest.floorIndex === currentFloor,
+					);
+
+					if (!localChestExists) {
+						return carrier.state.floorIndex;
+					}
+					break;
+				}
+
+				case "passive":
+					break;
+			}
+		}
+
+		if (!allowGeneralFallback) {
+			return null;
+		}
+
+		// Fogged AI should not magically know where unseen loot/rivals are.
+		// Once its current floor gives it nothing to do, simply explore
+		// another floor.
+		if (this.cb.getFogOfWarEnabled()) {
+			return this.nearestDifferentFloor(currentFloor, anyOtherFloors);
+		}
+
+		let preferredFloors: number[] = [];
+
+		switch (unit.archetype) {
+			case "aggressive":
+				preferredFloors = [...rivalFloors, ...unopenedChestFloors];
+				break;
+
+			case "treasure":
+			case "clever":
+				preferredFloors = [...unopenedChestFloors, ...rivalFloors];
+				break;
+
+			case "passive":
+				preferredFloors = [...unopenedChestFloors, ...exitFloors];
+				break;
+
+			case "balanced":
+			default:
+				preferredFloors = [...unopenedChestFloors, ...rivalFloors];
+				break;
+		}
+
+		return (
+			this.nearestDifferentFloor(currentFloor, preferredFloors) ??
+			this.nearestDifferentFloor(currentFloor, anyOtherFloors)
+		);
+	}
+
+	/**
+	 * Pick the closest connector that is genuinely reachable through the
+	 * current floor's walls/doors, rather than whichever connector happens
+	 * to be closest by straight-line distance.
+	 */
+	private findBestReachableConnector(
+		fromFloor: number,
+		towardFloor: number,
+		range: Map<string, RH.MovementRangeEntry>,
+	): RH.GridCoord | null {
+		const bundle = this.game.session.mapBundle;
+		if (!bundle) return null;
+
+		const connectors = RH.findConnectorsTowardFloor(
+			bundle,
+			fromFloor,
+			towardFloor,
+		);
+
+		let best: RH.GridCoord | null = null;
+		let bestDistance = Infinity;
+
+		for (const connector of connectors) {
+			const entry = range.get(RH.coordKey(connector));
+
+			if (!entry) continue;
+
+			if (entry.distance < bestDistance) {
+				bestDistance = entry.distance;
+				best = connector;
+			}
+		}
+
+		return best;
 	}
 
 	private get screenSize(): { width: number; height: number } {
@@ -200,8 +395,8 @@ export class AiTurnController {
 			return;
 		}
 
-		const grid = floorMap.grid;
-		const edges = floorMap.edges;
+		let grid = floorMap.grid;
+		let edges = floorMap.edges;
 
 		// Re-stamp this unit's own fog for the current turn immediately —
 		// its sighting-recording logic below needs an accurate "visible"
@@ -357,25 +552,7 @@ export class AiTurnController {
 			(o) => o.coord.x === target.x && o.coord.y === target.y,
 		);
 
-		// The chosen target is on a different floor - the AI knows
-		// about it (others isn't floor-filtered), but walking toward
-		// its raw x,y on THIS floor accomplishes nothing. Redirect
-		// toward the nearest connector that actually leads that way.
-		if (
-			targetCombatant &&
-			targetCombatant.floorIndex !== unit.state.floorIndex
-		) {
-			const bundle = this.game.session.mapBundle;
-			const connector = bundle
-				? RH.findNearestConnectorTowardFloor(
-						bundle,
-						unit.state.floorIndex,
-						unit.state.coord,
-						targetCombatant.floorIndex,
-					)
-				: null;
-			if (connector) target = connector;
-		}
+		let transitionTowardFloor: number | null = null;
 
 		const wouldDeclineOnArrival =
 			targetCombatant !== undefined &&
@@ -392,14 +569,14 @@ export class AiTurnController {
 			const blocked = new Set([
 				...allOthers.map((o) => RH.coordKey(o.coord)),
 				...this.mapController.monsterSystem
-					.livingMonsterCoords()
-					.map(RH.coordKey),
+					.livingMonsters()
+					.filter(
+						(monster) => monster.state.floorIndex === unit.state.floorIndex,
+					)
+					.map((monster) => RH.coordKey(monster.state.coord)),
 				...visibleTraps.map((t) => RH.coordKey(t.coord)),
 			]);
 
-			// Uncapped range purely to read the real, wall-aware path distance to
-			// the target — not a straight-line guess, which could send AI toward
-			// a card it doesn't actually need if the direct route is blocked.
 			const uncappedRange = this.computeAiRange(
 				grid,
 				edges,
@@ -407,6 +584,30 @@ export class AiTurnController {
 				grid.width * grid.height,
 				blocked,
 			);
+
+			const targetIsCurrentTile =
+				target.x === unit.state.coord.x && target.y === unit.state.coord.y;
+
+			const targetReachableOnThisFloor = uncappedRange.has(RH.coordKey(target));
+
+			const crossFloorObjective = this.pickCrossFloorObjectiveFloor(
+				unit,
+				targetItemId,
+				targetIsCurrentTile || !targetReachableOnThisFloor,
+			);
+
+			if (crossFloorObjective !== null) {
+				const connector = this.findBestReachableConnector(
+					unit.state.floorIndex,
+					crossFloorObjective,
+					uncappedRange,
+				);
+
+				if (connector) {
+					target = connector;
+					transitionTowardFloor = crossFloorObjective;
+				}
+			}
 
 			const distanceNeeded =
 				uncappedRange.get(RH.coordKey(target))?.distance ??
@@ -517,19 +718,26 @@ export class AiTurnController {
 
 					const floorBeforeTransition = unit.state.floorIndex;
 
-					await this.cb.trySwitchFloor(unit, false);
+					await this.cb.trySwitchFloor(
+						unit,
+						false,
+						transitionTowardFloor ?? undefined,
+					);
 
 					if (unit.state.floorIndex !== floorBeforeTransition) {
 						const newFloorMap = this.cb.getFloorMap(unit.state.floorIndex);
 
 						if (newFloorMap) {
+							grid = newFloorMap.grid;
+							edges = newFloorMap.edges;
+
 							RH.updateFogOfWar(
 								unit.state,
 								unit.state.coord,
 								this.cb.getTurnsTaken(),
-								newFloorMap.grid,
+								grid,
 								undefined,
-								newFloorMap.edges,
+								edges,
 							);
 						}
 
@@ -836,37 +1044,60 @@ export class AiTurnController {
 			return;
 		}
 
-		const isAdjacentNow = RH.isAdjacent(
-			monster.state.coord,
-			targetUnit.state.coord,
-		);
+		const isAdjacentNow =
+			monster.state.floorIndex === targetUnit.state.floorIndex &&
+			RH.isAdjacent(monster.state.coord, targetUnit.state.coord);
 
 		if (!isAdjacentNow) {
-			const effectiveTargetCoord =
-				targetCandidate.floorIndex !== monster.state.floorIndex
-					? ((this.game.session.mapBundle
-							? RH.findNearestConnectorTowardFloor(
-									this.game.session.mapBundle,
-									monster.state.floorIndex,
-									monster.state.coord,
-									targetCandidate.floorIndex,
-								)
-							: null) ?? targetUnit.state.coord)
-					: targetUnit.state.coord;
-
 			const blocked = new Set([
 				...this.cb
 					.getUnits()
-					.filter((u) => u.state.currentHp > 0)
-					.map((u) => RH.coordKey(u.state.coord)),
-				...this.mapController.monsterSystem
-					.livingMonsterCoords()
 					.filter(
-						(c) =>
-							!(c.x === monster.state.coord.x && c.y === monster.state.coord.y),
+						(u) =>
+							u.state.currentHp > 0 &&
+							u.state.floorIndex === monster.state.floorIndex,
 					)
-					.map(RH.coordKey),
+					.map((u) => RH.coordKey(u.state.coord)),
+
+				...this.mapController.monsterSystem
+					.livingMonsters()
+					.filter(
+						(otherMonster) =>
+							otherMonster !== monster &&
+							otherMonster.state.currentHp > 0 &&
+							otherMonster.state.floorIndex === monster.state.floorIndex,
+					)
+					.map((otherMonster) => RH.coordKey(otherMonster.state.coord)),
 			]);
+
+			const fullRange = this.computeAiRange(
+				grid,
+				edges,
+				monster.state.coord,
+				grid.width * grid.height,
+				blocked,
+			);
+
+			let effectiveTargetCoord = targetUnit.state.coord;
+
+			let transitionTowardFloor: number | null = null;
+
+			if (targetCandidate.floorIndex !== monster.state.floorIndex) {
+				const connector = this.findBestReachableConnector(
+					monster.state.floorIndex,
+					targetCandidate.floorIndex,
+					fullRange,
+				);
+
+				if (!connector) {
+					this.activeMonster = null;
+					return;
+				}
+
+				effectiveTargetCoord = connector;
+				transitionTowardFloor = targetCandidate.floorIndex;
+			}
+
 			const range = this.computeAiRange(
 				grid,
 				edges,
@@ -874,6 +1105,7 @@ export class AiTurnController {
 				monster.state.stats.movement,
 				blocked,
 			);
+
 			const reachable =
 				RH.findNearestReachableTile(
 					grid,
@@ -882,20 +1114,29 @@ export class AiTurnController {
 					blocked,
 					edges,
 				) ?? monster.state.coord;
+
 			const path = RH.getPathTo(range, reachable) ?? [];
 
 			if (path.length > 0) {
 				monster.state.coord = reachable;
+
 				await this.mapController.moveEntityWithZoneStrikes(
 					monster,
 					path,
 					`A ${monster.state.tier} monster`,
 				);
-				this.cb.tryMonsterSwitchFloor(monster);
+
+				this.cb.tryMonsterSwitchFloor(
+					monster,
+					transitionTowardFloor ?? undefined,
+				);
 			}
 		}
 
-		if (RH.isAdjacent(monster.state.coord, targetUnit.state.coord)) {
+		if (
+			monster.state.floorIndex === targetUnit.state.floorIndex &&
+			RH.isAdjacent(monster.state.coord, targetUnit.state.coord)
+		) {
 			await this.mapController.monsterAttack(monster, targetUnit);
 		}
 
