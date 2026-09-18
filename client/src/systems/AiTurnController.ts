@@ -492,6 +492,30 @@ export class AiTurnController {
 						truncatedPath,
 						this.cb.getUnitLabel(unit),
 					);
+
+					const floorBeforeTransition = unit.state.floorIndex;
+
+					await this.cb.trySwitchFloor(unit, false);
+
+					if (unit.state.floorIndex !== floorBeforeTransition) {
+						const newFloorMap = this.cb.getFloorMap(unit.state.floorIndex);
+
+						if (newFloorMap) {
+							RH.updateFogOfWar(
+								unit.state,
+								unit.state.coord,
+								this.cb.getTurnsTaken(),
+								newFloorMap.grid,
+								undefined,
+								newFloorMap.edges,
+							);
+						}
+
+						if (this.crossFloorSpectating) {
+							this.cb.viewFloorForSpectating(unit.state.floorIndex);
+						}
+					}
+
 					if (hazardHit) {
 						unit.state.matchScore.tacticalScore = Math.max(
 							0,

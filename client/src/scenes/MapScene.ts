@@ -2122,7 +2122,7 @@ export class MapScene implements Scene, TutorialPort {
 		unit.mercenary.setPositionInstant(
 			gridToScreenElevatedWithClimb(
 				unit.state.coord,
-				this.game.session.mapElevation ?? undefined,
+				floors[next].elevation,
 				this.game.session.mapStaircaseClusters,
 			),
 		);
