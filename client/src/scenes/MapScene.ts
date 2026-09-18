@@ -177,6 +177,16 @@ export class MapScene implements Scene, TutorialPort {
 	): boolean {
 		const local = this.localUnit.state;
 
+		// Currently spectating this exact floor (cross-floor AI/monster
+		// turn playback, fog-of-war off) - see it all, same exception
+		// already granted to the one active AI/monster unit itself.
+		if (
+			this.aiTurnController.crossFloorSpectating &&
+			floorIndex === this.game.session.viewedFloor
+		) {
+			return true;
+		}
+
 		// Another floor is never visible to the local player.
 		if (floorIndex !== local.floorIndex) {
 			return false;

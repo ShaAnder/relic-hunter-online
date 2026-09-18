@@ -340,7 +340,7 @@ export class AiTurnController {
 					currentTurn,
 				)
 			: null;
-		const target = RH.decideMovementTarget(
+		let target = RH.decideMovementTarget(
 			unit.archetype,
 			self,
 			others,
@@ -355,6 +355,27 @@ export class AiTurnController {
 		const targetCombatant = allOthers.find(
 			(o) => o.coord.x === target.x && o.coord.y === target.y,
 		);
+
+		// The chosen target is on a different floor - the AI knows
+		// about it (others isn't floor-filtered), but walking toward
+		// its raw x,y on THIS floor accomplishes nothing. Redirect
+		// toward the nearest connector that actually leads that way.
+		if (
+			targetCombatant &&
+			targetCombatant.floorIndex !== unit.state.floorIndex
+		) {
+			const bundle = this.game.session.mapBundle;
+			const connector = bundle
+				? RH.findNearestConnectorTowardFloor(
+						bundle,
+						unit.state.floorIndex,
+						unit.state.coord,
+						targetCombatant.floorIndex,
+					)
+				: null;
+			if (connector) target = connector;
+		}
+
 		const wouldDeclineOnArrival =
 			targetCombatant !== undefined &&
 			!RH.decideEngagement(unit.archetype, self, targetCombatant);
@@ -788,11 +809,7 @@ export class AiTurnController {
 		const targetItemId = this.game.session.chestPlan?.targetItem?.id ?? null;
 		const hunters: RH.MonsterTargetCandidate[] = this.cb
 			.getUnits()
-			.filter(
-				(u) =>
-					u.state.currentHp > 0 &&
-					u.state.floorIndex === monster.state.floorIndex,
-			)
+			.filter((u) => u.state.currentHp > 0)
 			.map((u) => ({
 				id: u.state.id,
 				coord: u.state.coord,
@@ -823,6 +840,18 @@ export class AiTurnController {
 		);
 
 		if (!isAdjacentNow) {
+			const effectiveTargetCoord =
+				targetCandidate.floorIndex !== monster.state.floorIndex
+					? ((this.game.session.mapBundle
+							? RH.findNearestConnectorTowardFloor(
+									this.game.session.mapBundle,
+									monster.state.floorIndex,
+									monster.state.coord,
+									targetCandidate.floorIndex,
+								)
+							: null) ?? targetUnit.state.coord)
+					: targetUnit.state.coord;
+
 			const blocked = new Set([
 				...this.cb
 					.getUnits()
@@ -847,7 +876,7 @@ export class AiTurnController {
 				RH.findNearestReachableTile(
 					grid,
 					range,
-					targetUnit.state.coord,
+					effectiveTargetCoord,
 					blocked,
 					edges,
 				) ?? monster.state.coord;
