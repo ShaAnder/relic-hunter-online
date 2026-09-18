@@ -38,6 +38,7 @@ export interface AiTurnCallbacks {
 	isTutorial(): boolean;
 	applyFloor(floorIndex: number): void;
 	trySwitchFloor(unit: PilotedMercenary, moveCamera: boolean): Promise<void>;
+	tryMonsterSwitchFloor(monster: MonsterEntity): void;
 	rebuildMapRender(): void;
 }
 
@@ -707,6 +708,7 @@ export class AiTurnController {
 					RH.recordFlee(unit.memory, retreatFrom, retreatTile);
 					// No applyZoneStrikes — Disengage is ZoC-immune, that's its whole point.
 					await unit.mercenary.moveAlongPath(retreatPath);
+					await this.cb.trySwitchFloor(unit, false);
 				}
 			}
 		}
@@ -889,6 +891,7 @@ export class AiTurnController {
 					path,
 					`A ${monster.state.tier} monster`,
 				);
+				this.cb.tryMonsterSwitchFloor(monster);
 			}
 		}
 

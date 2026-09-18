@@ -5,6 +5,7 @@ import { CameraController } from "@/core/cameras/CameraController";
 import { MapRenderer } from "@/rendering/MapRenderer";
 import {
 	gridToScreen,
+	gridToScreenElevated,
 	gridToScreenElevatedWithClimb,
 	screenToGrid,
 	TILE_WIDTH,
@@ -502,6 +503,7 @@ export class MapScene implements Scene, TutorialPort {
 				applyFloor: (floorIndex) => this.applyFloor(floorIndex),
 				trySwitchFloor: (unit, moveCamera) =>
 					this.trySwitchFloor(unit, moveCamera),
+				tryMonsterSwitchFloor: (monster) => this.tryMonsterSwitchFloor(monster),
 				rebuildMapRender: () => {
 					this.syncFloorVisibility();
 					this.rebuildMapRenderWithFog();
@@ -2135,6 +2137,34 @@ export class MapScene implements Scene, TutorialPort {
 				floors[next].elevation,
 				this.game.session.mapStaircaseClusters,
 			),
+		);
+	}
+
+	/**
+	 * Monster equivalent of trySwitchFloor - same floor-transition
+	 * logic, just repositioning a MonsterToken (.token) instead of a
+	 * Mercenary (.mercenary), since monsters aren't PilotedMercenary
+	 * and don't share that type.
+	 */
+	private tryMonsterSwitchFloor(monster: MonsterEntity): void {
+		const bundle = this.game.session.mapBundle;
+		const floors = this.game.session.mapFloors;
+		if (!bundle || !floors) return;
+
+		const next = RH.resolveFloorTransition(
+			bundle,
+			monster.state.floorIndex,
+			monster.state.coord.x,
+			monster.state.coord.y,
+		);
+		if (next === null || next === monster.state.floorIndex) return;
+		if (!floors[next]) return;
+
+		monster.state.floorIndex = next;
+		this.syncFloorVisibility();
+
+		monster.token.setPositionInstant(
+			gridToScreenElevated(monster.state.coord, floors[next].elevation),
 		);
 	}
 

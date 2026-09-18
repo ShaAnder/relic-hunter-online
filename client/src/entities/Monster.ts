@@ -106,6 +106,12 @@ export class MonsterToken {
 		this.view.y = this.currentScreenPos.y;
 	}
 
+	/** Teleports to screenPos with no animation - used for floor switches, where the monster's screen position needs to jump straight to the new floor's elevation at the same tile, not walk there. */
+	setPositionInstant(screenPos: { x: number; y: number }): void {
+		this.currentScreenPos = { ...screenPos };
+		this.syncPosition();
+	}
+
 	/** Upright standing diamond — taller than wide, distinct from a flat floor tile. */
 	private drawDiamond(tier: MonsterTier): Graphics {
 		const { w, h } = TIER_SIZE[tier];
