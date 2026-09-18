@@ -211,7 +211,11 @@ export class MapController {
 		const coord = this.cb.pickEnemySpawnTile(used);
 		if (!coord) return;
 
-		const tier = this.monsterSystem.trySpawn(coord, rng);
+		const tier = this.monsterSystem.trySpawn(
+			coord,
+			rng,
+			this.cb.getLocalUnit().state.floorIndex,
+		);
 		if (tier) {
 			this.cb.showFeedback(`👹 A ${tier} monster appears!`);
 		}

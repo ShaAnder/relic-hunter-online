@@ -1222,7 +1222,14 @@ export class MapScene implements Scene, TutorialPort {
 		if (this.tutorialConfig?.playerMovement !== undefined) {
 			state.stats.movement = this.tutorialConfig.playerMovement;
 		}
-		RH.updateFogOfWar(state, state.coord, this.turnsTaken, this.grid);
+		RH.updateFogOfWar(
+			state,
+			state.coord,
+			this.turnsTaken,
+			this.grid,
+			undefined,
+			this.game.session.mapEdges,
+		);
 		const mercenary = new Mercenary(
 			state.coord,
 			state.characterClass,
@@ -1279,7 +1286,14 @@ export class MapScene implements Scene, TutorialPort {
 				aiName,
 				this.localUnit.state.floorIndex,
 			);
-			RH.updateFogOfWar(state, state.coord, this.turnsTaken, this.grid);
+			RH.updateFogOfWar(
+				state,
+				state.coord,
+				this.turnsTaken,
+				this.grid,
+				undefined,
+				this.game.session.mapEdges,
+			);
 			const mercenary = new Mercenary(
 				coord,
 				state.characterClass,
