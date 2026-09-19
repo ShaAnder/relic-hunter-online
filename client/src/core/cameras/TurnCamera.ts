@@ -1,5 +1,5 @@
 import type { GameSession } from "@/core/game/GameSession";
-import { gridToScreen } from "@/math/isoGridMath";
+import { gridToScreenElevated } from "@/math/isoGridMath";
 
 /**
  * World position of whoever currently has the turn.
@@ -12,16 +12,30 @@ export function getActiveHunterWorldPos(session: GameSession): {
 } {
 	const order = session.turnOrder;
 	const roster = session.participants;
+	const elevation =
+		session.mapFloors?.[session.viewedFloor]?.elevation ??
+		session.mapElevation ??
+		undefined;
 
 	if (order && order.length > 0 && roster && roster.length > 0) {
 		const activeId = order[0].id;
 		const match = roster.find((p) => p.id === activeId);
-		if (match) return gridToScreen(match.coord);
+
+		if (match) {
+			return gridToScreenElevated(match.coord, elevation);
+		}
 	}
 
-	// Fallbacks
-	if (session.playerSpawn) return gridToScreen(session.playerSpawn);
-	if (roster && roster.length > 0) return gridToScreen(roster[0].coord);
+	if (session.playerSpawn) {
+		return gridToScreenElevated(session.playerSpawn, elevation);
+	}
 
-	return { x: 0, y: 0 };
+	if (roster && roster.length > 0) {
+		return gridToScreenElevated(roster[0].coord, elevation);
+	}
+
+	return {
+		x: 0,
+		y: 0,
+	};
 }

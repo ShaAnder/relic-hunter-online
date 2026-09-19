@@ -1,5 +1,9 @@
-import type { MapBundle } from "@relic-hunter/shared";
-import { CUSTOM_MAPS } from "@relic-hunter/shared";
+import {
+	CUSTOM_MAPS,
+	normalizeMapBundle,
+	type MapBundle,
+	type MapFloorDefinition,
+} from "@relic-hunter/shared";
 
 const STORAGE_PREFIX = "relic-hunter-custom-map:";
 
@@ -26,18 +30,6 @@ export interface CustomMapRepo {
 	list(): string[];
 	load(name: string): MapBundle | null;
 	delete(name: string): Promise<void>;
-}
-
-/** True only for something that could plausibly be a MapBundle — used to reject corrupted/foreign localStorage content rather than handing it to the rest of the app and failing somewhere less obvious. Doesn't check each floor's actual dimensions; callers that care about exact shape (Map Creator's own load) still do that themselves. */
-function looksLikeMapBundle(value: unknown): value is MapBundle {
-	if (typeof value !== "object" || value === null) return false;
-	const candidate = value as Record<string, unknown>;
-	return (
-		typeof candidate.name === "string" &&
-		Array.isArray(candidate.floors) &&
-		candidate.floors.length > 0 &&
-		typeof candidate.groundFloorIndex === "number"
-	);
 }
 
 /**
@@ -70,9 +62,12 @@ export class LocalCustomMapRepo implements CustomMapRepo {
 	load(name: string): MapBundle | null {
 		try {
 			const raw = localStorage.getItem(STORAGE_PREFIX + name);
+
 			if (!raw) return null;
+
 			const parsed: unknown = JSON.parse(raw);
-			return looksLikeMapBundle(parsed) ? parsed : null;
+
+			return normalizeMapBundle(parsed);
 		} catch {
 			return null;
 		}
@@ -181,12 +176,16 @@ export class DevFileCustomMapRepo implements CustomMapRepo {
 
 	load(name: string): MapBundle | null {
 		const entry = registryEntries().find((e) => e.name === name);
+
 		if (!entry) return null;
-		return {
+
+		return normalizeMapBundle({
 			name: entry.name,
+
 			floors: entry.floors,
+
 			groundFloorIndex: entry.groundFloorIndex,
-		};
+		});
 	}
 
 	async delete(name: string): Promise<void> {
@@ -210,7 +209,7 @@ export class DevFileCustomMapRepo implements CustomMapRepo {
 
 function registryEntries(): {
 	name: string;
-	floors: number[][][];
+	floors: MapFloorDefinition[];
 	groundFloorIndex: number;
 }[] {
 	return CUSTOM_MAPS;

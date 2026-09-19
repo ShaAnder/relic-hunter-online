@@ -114,19 +114,27 @@ export class MapController {
 	/** Rebuilds chests from the session's saved layout, or a fresh plan — MapScene decides which source, this just constructs. */
 	spawnChests(reserved: Set<string>): void {
 		const sessionPlacements = this.game.session.chestPlacements;
+
 		if (sessionPlacements && sessionPlacements.length > 0) {
-			this.chestSystem.spawnFromPlacements(sessionPlacements);
+			this.chestSystem.spawnFromPlacements(
+				sessionPlacements,
+				this.game.session.mapFloors ?? undefined,
+			);
 			return;
 		}
-
 		const plan = this.game.session.chestPlan;
-		if (!plan) return;
-
+		if (!plan) {
+			return;
+		}
+		const local = this.cb.getLocalUnit().state;
+		const floor = this.game.session.mapFloors?.[local.floorIndex];
 		this.chestSystem.spawnFromPlan(
 			plan,
 			this.cb.getGrid(),
 			reserved,
 			this.game.session.rng,
+			local.floorIndex,
+			floor?.elevation ?? this.game.session.mapElevation ?? undefined,
 		);
 	}
 
@@ -573,10 +581,17 @@ export class MapController {
 
 	refreshTrapMarkers(): void {
 		const local = this.cb.getLocalUnit().state;
+
+		const elevation =
+			this.game.session.mapFloors?.[local.floorIndex]?.elevation ??
+			this.game.session.mapElevation ??
+			undefined;
+
 		this.trapSystem.renderMarkersFor(
 			local.id,
 			local.coord,
 			local.characterClass === "hunter",
+			elevation,
 		);
 	}
 

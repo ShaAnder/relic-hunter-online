@@ -8,9 +8,14 @@ const CUSTOM_MAPS_DIR = path.resolve(
 );
 const REGISTRY_PATH = path.join(CUSTOM_MAPS_DIR, "index.ts");
 
+interface SaveFloorBody {
+	blueprint: number[][];
+	elevationSteps: Record<string, number>;
+}
+
 interface SaveRequestBody {
 	name: string;
-	floors: number[][][];
+	floors: SaveFloorBody[];
 	groundFloorIndex: number;
 }
 
@@ -80,11 +85,13 @@ async function regenerateRegistry(): Promise<void> {
  * client/vite-plugins/saveCustomMap.ts) every time a map is saved or
  * deleted. Never edit this file by hand; it will be overwritten.
  */
+import type { MapFloorDefinition } from "../mapBundle";
+
 ${imports}
 
 export interface CustomMapEntry {
 	name: string;
-	floors: number[][][];
+	floors: MapFloorDefinition[];
 	groundFloorIndex: number;
 }
 
@@ -106,25 +113,29 @@ ${listEntries}
 function toMapBundleFileContent(
 	safeId: string,
 	displayName: string,
-	floors: number[][][],
+	floors: SaveFloorBody[],
 	groundFloorIndex: number,
 ): string {
 	const floorsSource = floors
 		.map((floor) => {
-			const rows = floor.map((row) => `\t\t[${row.join(", ")}],`).join("\n");
-			return `\t[\n${rows}\n\t]`;
+			const rows = floor.blueprint
+				.map((row) => `\t\t\t[${row.join(", ")}],`)
+				.join("\n");
+			const steps = JSON.stringify(floor.elevationSteps ?? {});
+			return `\t{
+		blueprint: [
+${rows}
+		],
+		elevationSteps: ${steps},
+	}`;
 		})
 		.join(",\n");
-
 	return `/**
  * Custom map saved from the in-game Map Creator.
- * Double-resolution format — compiles directly with compileEdgeMap()
- * from this package, one floor at a time. See MapCreatorScene.ts for
- * the code scheme, and mapBundle.ts for the floors/groundFloorIndex
- * shape this mirrors.
  */
+import type { MapFloorDefinition } from "../mapBundle";
 export const ${safeId}_NAME = ${JSON.stringify(displayName)};
-export const ${safeId}_FLOORS: number[][][] = [
+export const ${safeId}_FLOORS: MapFloorDefinition[] = [
 ${floorsSource}
 ];
 export const ${safeId}_GROUND_FLOOR_INDEX = ${groundFloorIndex};
@@ -156,18 +167,32 @@ export function saveCustomMapPlugin(): Plugin {
 				if (req.url === "/api/save-custom-map" && req.method === "POST") {
 					try {
 						const body = (await readJsonBody(req)) as SaveRequestBody;
+						const validFloors =
+							Array.isArray(body.floors) &&
+							body.floors.length > 0 &&
+							body.floors.every(
+								(floor) =>
+									typeof floor === "object" &&
+									floor !== null &&
+									Array.isArray(floor.blueprint) &&
+									typeof floor.elevationSteps === "object" &&
+									floor.elevationSteps !== null &&
+									!Array.isArray(floor.elevationSteps),
+							);
+
 						if (
 							!body.name ||
-							!Array.isArray(body.floors) ||
-							body.floors.length === 0 ||
+							!validFloors ||
 							typeof body.groundFloorIndex !== "number"
 						) {
 							res.statusCode = 400;
+
 							res.end(
 								JSON.stringify({
 									error: "name, floors, and groundFloorIndex are required",
 								}),
 							);
+
 							return;
 						}
 

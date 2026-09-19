@@ -32,13 +32,20 @@ export class ChestSystem {
 
 	/** Rebuilds from session's already-decided placements — a returning player, not a fresh match. */
 	spawnFromPlacements(
-		records: { coord: RH.GridCoord; plan: RH.ChestPlan; floorIndex: number }[],
+		records: {
+			coord: RH.GridCoord;
+			plan: RH.ChestPlan;
+			floorIndex: number;
+		}[],
+		floors?: readonly RH.CompiledEdgeMap[],
 	): void {
 		this.container.removeChildren();
 		this.placedChests = [];
-
 		for (const record of records) {
-			const entity = new Chest(record.coord);
+			const entity = new Chest(
+				record.coord,
+				floors?.[record.floorIndex]?.elevation,
+			);
 			this.container.addChild(entity.view);
 			this.placedChests.push({
 				coord: record.coord,
@@ -51,10 +58,14 @@ export class ChestSystem {
 
 	/** Fresh match — spreads chests across walkable tiles, avoiding every coord in reserved. */
 	spawnFromPlan(
-		plan: { chests: RH.ChestPlan[] },
+		plan: {
+			chests: RH.ChestPlan[];
+		},
 		grid: RH.Grid,
 		reserved: Set<string>,
 		rng: RH.RandomFn,
+		floorIndex = 0,
+		elevation?: Map<string, number>,
 	): void {
 		this.container.removeChildren();
 		this.placedChests = [];
@@ -64,9 +75,9 @@ export class ChestSystem {
 			const coord = RH.pickSpreadWalkableTile(grid, used, rng);
 			if (!coord) break;
 			used.add(RH.coordKey(coord));
-			const entity = new Chest(coord);
+			const entity = new Chest(coord, elevation);
 			this.container.addChild(entity.view);
-			this.placedChests.push({ coord, plan: chestPlan, entity, floorIndex: 0 });
+			this.placedChests.push({ coord, plan: chestPlan, entity, floorIndex });
 		}
 	}
 

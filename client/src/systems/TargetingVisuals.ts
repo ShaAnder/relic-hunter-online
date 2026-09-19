@@ -1,6 +1,10 @@
 import { Container, Graphics } from "pixi.js";
 import type * as RH from "@relic-hunter/shared";
-import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
+import {
+	gridToScreenElevated,
+	TILE_WIDTH,
+	TILE_HEIGHT,
+} from "@/math/isoGridMath";
 
 /**
  * Purely visual attack-targeting elements — the adjacency-highlight
@@ -19,10 +23,13 @@ export class TargetingVisuals {
 	}
 
 	/** Highlights every tile in adjacentCoords as a valid attack target. */
-	showRange(adjacentCoords: RH.GridCoord[]): void {
+	showRange(
+		adjacentCoords: RH.GridCoord[],
+		elevation?: Map<string, number>,
+	): void {
 		this.attackRangeView.removeChildren();
 		for (const coord of adjacentCoords) {
-			const pos = gridToScreen(coord);
+			const pos = gridToScreenElevated(coord, elevation);
 			const g = new Graphics();
 			g.poly([
 				0,
@@ -34,7 +41,10 @@ export class TargetingVisuals {
 				-TILE_WIDTH / 2,
 				0,
 			]);
-			g.fill({ color: 0xffd700, alpha: 0.35 });
+			g.fill({
+				color: 0xffd700,
+				alpha: 0.35,
+			});
 			g.x = pos.x;
 			g.y = pos.y;
 			this.attackRangeView.addChild(g);

@@ -1,6 +1,10 @@
 import { Container, Graphics } from "pixi.js";
 import * as RH from "@relic-hunter/shared";
-import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
+import {
+	gridToScreenElevated,
+	TILE_WIDTH,
+	TILE_HEIGHT,
+} from "@/math/isoGridMath";
 
 export type TrapHazardHit = {
 	kind: RH.TrapKind;
@@ -49,6 +53,7 @@ export class TrapSystem {
 		viewerId: string,
 		viewerCoord: RH.GridCoord,
 		viewerIsHunterClass: boolean,
+		elevation?: Map<string, number>,
 	): void {
 		this.markerContainer.removeChildren();
 		for (const trap of this.visibleTo(
@@ -56,7 +61,7 @@ export class TrapSystem {
 			viewerCoord,
 			viewerIsHunterClass,
 		)) {
-			const pos = gridToScreen(trap.coord);
+			const pos = gridToScreenElevated(trap.coord, elevation);
 			const g = new Graphics();
 			g.poly([
 				0,

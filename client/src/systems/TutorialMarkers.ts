@@ -1,6 +1,10 @@
 import { Container, Graphics, Text } from "pixi.js";
 import * as RH from "@relic-hunter/shared";
-import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
+import {
+	gridToScreenElevated,
+	TILE_WIDTH,
+	TILE_HEIGHT,
+} from "@/math/isoGridMath";
 import { interpolatePolyline } from "@/entities/Mercenary";
 import type {
 	StaticActorSpec,
@@ -40,8 +44,8 @@ export class TutorialMarkers {
 	 * generic "move here" pointer any tutorial segment can request,
 	 * not something built one-off for this scene.
 	 */
-	showTarget(coord: RH.GridCoord): void {
-		const pos = gridToScreen(coord);
+	showTarget(coord: RH.GridCoord, elevation?: Map<string, number>): void {
+		const pos = gridToScreenElevated(coord, elevation);
 		this.targetMarkerView.removeChildren();
 		this.targetMarkerView.x = pos.x;
 		this.targetMarkerView.y = pos.y;
@@ -200,9 +204,13 @@ export class TutorialMarkers {
 	 * "enemy" prop staged for tension. No PilotedMercenary, no
 	 * TurnManager, no combat stats.
 	 */
-	spawnStaticActors(actors: StaticActorSpec[], layer: Container): void {
+	spawnStaticActors(
+		actors: StaticActorSpec[],
+		layer: Container,
+		elevation?: Map<string, number>,
+	): void {
 		for (const actor of actors) {
-			const pos = gridToScreen(actor.coord);
+			const pos = gridToScreenElevated(actor.coord, elevation);
 			const token = new Container();
 			token.x = pos.x;
 			token.y = pos.y;
@@ -241,6 +249,7 @@ export class TutorialMarkers {
 		destination: RH.GridCoord,
 		grid: RH.Grid,
 		durationMs = 900,
+		elevation?: Map<string, number>,
 	): Promise<void> {
 		const token = this.actorTokens.get(label);
 		const currentCoord = this.actorCoords.get(label);
@@ -261,7 +270,11 @@ export class TutorialMarkers {
 		// SINGLE eased t across the entire route, so there's exactly one
 		// ease-in at the start and one ease-out at the end, not a
 		// stop-start-stop-start jitter at every intermediate tile.
-		const points = [gridToScreen(currentCoord), ...tilePath.map(gridToScreen)];
+		const points = [
+			gridToScreenElevated(currentCoord, elevation),
+
+			...tilePath.map((coord) => gridToScreenElevated(coord, elevation)),
+		];
 
 		return new Promise((resolve) => {
 			const start = performance.now();

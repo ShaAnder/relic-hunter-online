@@ -1,6 +1,6 @@
 import { Container, Graphics } from "pixi.js";
 import type { GridCoord } from "@relic-hunter/shared";
-import { gridToScreen } from "@/math/isoGridMath";
+import { gridToScreenElevated } from "@/math/isoGridMath";
 
 /**
  * Placeholder visual for a chest sitting on the map — a closed box shape
@@ -14,8 +14,8 @@ export class Chest {
 	private box = new Graphics();
 	private _isOpen = false;
 
-	constructor(coord: GridCoord) {
-		const pos = gridToScreen(coord);
+	constructor(coord: GridCoord, elevation?: Map<string, number>) {
+		const pos = gridToScreenElevated(coord, elevation);
 		this.view.x = pos.x;
 		this.view.y = pos.y;
 		this.view.addChild(this.box);

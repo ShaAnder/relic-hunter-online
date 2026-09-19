@@ -12,7 +12,10 @@ import { MainMenuScene } from "./MainMenuScene";
 import {
 	EdgeBarrier,
 	EdgeMapTileCode,
+	clampElevationStep,
+	defaultElevationStepForTileCode,
 	type MapBundle,
+	type MapFloorDefinition,
 } from "@relic-hunter/shared";
 import {
 	DevFileCustomMapRepo,
@@ -47,12 +50,16 @@ const FLOOR_LIST_MARGIN = 20;
 const MAX_FLOORS_ABOVE_GROUND = 5;
 const MAX_BASEMENTS = 2;
 
+type PaletteKind = "tile" | "edge" | "elevation";
+
 interface PaletteEntry {
 	label: string;
 	color: number;
-	/** Which array this code belongs to — a tile position only ever accepts an EdgeMapTileCode, an edge position only ever accepts an EdgeBarrier. Keeps the picker from letting you paint a door onto a tile center or a floor color onto an edge slot. */
-	kind: "tile" | "edge";
-	code: number;
+	kind: PaletteKind;
+	code?: number;
+	elevationDelta?: -1 | 1;
+	setElevationStep?: number;
+	clearElevationOverride?: boolean;
 }
 
 const TILE_PALETTE: PaletteEntry[] = [
@@ -68,6 +75,12 @@ const TILE_PALETTE: PaletteEntry[] = [
 		color: 0xaaaac8,
 		kind: "tile",
 		code: EdgeMapTileCode.Pavement,
+	},
+	{
+		label: "Road",
+		color: 0x66666f,
+		kind: "tile",
+		code: EdgeMapTileCode.Road,
 	},
 	{
 		label: "Nature",
@@ -144,7 +157,38 @@ const EDGE_PALETTE: PaletteEntry[] = [
 	{ label: "Door", color: 0xffe61e, kind: "edge", code: EdgeBarrier.Door },
 ];
 
-const PALETTE: PaletteEntry[] = [...TILE_PALETTE, ...EDGE_PALETTE];
+const ELEVATION_PALETTE: PaletteEntry[] = [
+	{
+		label: "Raise +1",
+		color: 0x4a9eff,
+		kind: "elevation",
+		elevationDelta: 1,
+	},
+	{
+		label: "Lower -1",
+		color: 0xe67e22,
+		kind: "elevation",
+		elevationDelta: -1,
+	},
+	{
+		label: "Set 0",
+		color: 0x777777,
+		kind: "elevation",
+		setElevationStep: 0,
+	},
+	{
+		label: "Material Default",
+		color: 0x4a4a4a,
+		kind: "elevation",
+		clearElevationOverride: true,
+	},
+];
+
+const PALETTE: PaletteEntry[] = [
+	...TILE_PALETTE,
+	...EDGE_PALETTE,
+	...ELEVATION_PALETTE,
+];
 
 const BOUNDARY_LINE_COLOR = 0x707070;
 const BG_COLOR = 0x1e1e28;
@@ -216,7 +260,7 @@ export class MapCreatorScene implements Scene {
 	 * so the later wiring phase can hand this array to a MapBundle
 	 * as-is, with no reshaping.
 	 */
-	private floors: number[][][] = [];
+	private floors: MapFloorDefinition[] = [];
 	/** Which index into `floors` is shown to the player as "0" / Ground Floor — indices below it are basements, indices above it are regular floors. */
 	private groundFloorIndex = 0;
 	/** Which index into `floors` is currently being painted/viewed. */
@@ -229,6 +273,9 @@ export class MapCreatorScene implements Scene {
 	private isPanning = false;
 	private panStart = { x: 0, y: 0 };
 	private panStartContainer = { x: 0, y: 0 };
+
+	private elevationLabelContainer = new Container();
+	private elevationPaintedThisStroke = new Set<string>();
 
 	constructor(private game: Game) {
 		this.resetToSingleFloor(this.makeBlankGrid());
@@ -244,10 +291,23 @@ export class MapCreatorScene implements Scene {
 	 * touching or re-testing for this phase.
 	 */
 	private get grid(): number[][] {
-		return this.floors[this.currentFloorIndex];
+		return this.floors[this.currentFloorIndex].blueprint;
 	}
+
 	private set grid(value: number[][]) {
-		this.floors[this.currentFloorIndex] = value;
+		this.floors[this.currentFloorIndex].blueprint = value;
+	}
+
+	private get elevationSteps(): Record<string, number> {
+		return this.floors[this.currentFloorIndex].elevationSteps;
+	}
+
+	private makeBlankFloor(): MapFloorDefinition {
+		return {
+			blueprint: this.makeBlankGrid(),
+
+			elevationSteps: {},
+		};
 	}
 
 	/** A brand-new, fully empty GRID_SIZE x GRID_SIZE floor blueprint — used for the very first floor and every floor added afterward. */
@@ -269,7 +329,13 @@ export class MapCreatorScene implements Scene {
 	 * afterward — this only touches the floors/index state, not the UI.
 	 */
 	private resetToSingleFloor(blueprint: number[][]): void {
-		this.floors = [blueprint];
+		this.floors = [
+			{
+				blueprint,
+				elevationSteps: {},
+			},
+		];
+
 		this.groundFloorIndex = 0;
 		this.currentFloorIndex = 0;
 	}
@@ -282,7 +348,12 @@ export class MapCreatorScene implements Scene {
 	 * array entry.
 	 */
 	private loadBundleIntoState(bundle: MapBundle): void {
-		this.floors = bundle.floors.map((floor) => floor.map((row) => [...row]));
+		this.floors = bundle.floors.map((floor) => ({
+			blueprint: floor.blueprint.map((row) => [...row]),
+			elevationSteps: {
+				...floor.elevationSteps,
+			},
+		}));
 		this.groundFloorIndex = bundle.groundFloorIndex;
 		this.currentFloorIndex = bundle.groundFloorIndex;
 	}
@@ -295,6 +366,7 @@ export class MapCreatorScene implements Scene {
 		this.gridPanel.addChild(this.gridViewport);
 		this.gridViewport.addChild(this.gridContainer);
 		this.gridContainer.addChild(this.gridGraphics);
+		this.gridContainer.addChild(this.elevationLabelContainer);
 
 		this.buildPalette();
 		this.rebuildFloorList();
@@ -415,6 +487,8 @@ export class MapCreatorScene implements Scene {
 		cursorY = this.buildPaletteSection("Tiles", TILE_PALETTE, cursorY);
 		cursorY += 20;
 		cursorY = this.buildPaletteSection("Edges (walls)", EDGE_PALETTE, cursorY);
+		cursorY += 20;
+		cursorY = this.buildPaletteSection("Elevation", ELEVATION_PALETTE, cursorY);
 
 		cursorY += 20;
 		this.mapListContainer.x = 0;
@@ -513,10 +587,19 @@ export class MapCreatorScene implements Scene {
 
 	private updateStatus(): void {
 		const entry = PALETTE[this.selectedIndex];
+
 		const mapLabel = this.currentMapName
 			? ` — editing "${this.currentMapName}"`
 			: " — unsaved";
-		this.statusText.text = `Painting: ${entry.label} (${entry.kind === "tile" ? "tile" : "edge/wall"})${mapLabel}`;
+
+		const kindLabel =
+			entry.kind === "tile"
+				? "tile"
+				: entry.kind === "edge"
+					? "edge/wall"
+					: "elevation";
+
+		this.statusText.text = `Painting: ${entry.label} (${kindLabel})${mapLabel}`;
 	}
 
 	private updateZoomText(): void {
@@ -632,7 +715,7 @@ export class MapCreatorScene implements Scene {
 		const floorsAboveGround = this.floors.length - 1 - this.groundFloorIndex;
 		if (floorsAboveGround >= MAX_FLOORS_ABOVE_GROUND) return;
 
-		this.floors.push(this.makeBlankGrid());
+		this.floors.push(this.makeBlankFloor());
 		this.currentFloorIndex = this.floors.length - 1; // switch straight to editing it
 		this.redrawGrid();
 		this.updateStatus();
@@ -650,7 +733,7 @@ export class MapCreatorScene implements Scene {
 	private addBasement(): void {
 		if (this.groundFloorIndex >= MAX_BASEMENTS) return;
 
-		this.floors.unshift(this.makeBlankGrid());
+		this.floors.push(this.makeBlankFloor());
 		this.groundFloorIndex += 1;
 		this.currentFloorIndex = 0;
 		this.redrawGrid();
@@ -703,7 +786,7 @@ export class MapCreatorScene implements Scene {
 			};
 			return;
 		}
-
+		this.elevationPaintedThisStroke.clear();
 		this.isPainting = true;
 		this.paintAtEvent(event);
 	};
@@ -723,38 +806,102 @@ export class MapCreatorScene implements Scene {
 	private onPointerUp = (): void => {
 		this.isPainting = false;
 		this.isPanning = false;
+
+		this.elevationPaintedThisStroke.clear();
 	};
 
 	private paintAtEvent(event: FederatedPointerEvent): void {
 		const local = this.gridContainer.toLocal(event.global);
+
 		const bx = Math.floor(local.x / SUB_CELL_PX);
+
 		const by = Math.floor(local.y / SUB_CELL_PX);
-		if (bx < 0 || by < 0 || bx >= GRID_SIZE || by >= GRID_SIZE) return;
+
+		if (bx < 0 || by < 0 || bx >= GRID_SIZE || by >= GRID_SIZE) {
+			return;
+		}
 
 		const isEvenX = bx % 2 === 0;
+
 		const isEvenY = by % 2 === 0;
 
-		let value: number | null = null;
-		if (isEvenX && isEvenY) {
-			const entry = PALETTE[this.selectedIndex];
-			if (entry.kind === "tile") value = entry.code;
-		} else if (isEvenX !== isEvenY) {
-			const entry = PALETTE[this.selectedIndex];
-			if (entry.kind === "edge") value = entry.code;
-		}
-		// odd,odd corner positions never accept paint directly — they're
-		// derived automatically from whichever edges around them are painted.
+		const entry = PALETTE[this.selectedIndex];
 
-		if (value === null) return;
-		if (this.grid[by][bx] === value) return;
+		if (isEvenX && isEvenY && entry.kind === "elevation") {
+			const logicalX = bx / 2;
+
+			const logicalY = by / 2;
+
+			const key = `${logicalX},${logicalY}`;
+
+			if (this.elevationPaintedThisStroke.has(key)) {
+				return;
+			}
+
+			this.elevationPaintedThisStroke.add(key);
+
+			const tileCode = this.grid[by][bx] as EdgeMapTileCode;
+
+			if (
+				tileCode === EdgeMapTileCode.Void ||
+				tileCode === EdgeMapTileCode.River
+			) {
+				return;
+			}
+
+			if (entry.clearElevationOverride) {
+				delete this.elevationSteps[key];
+
+				this.redrawGrid();
+
+				return;
+			}
+
+			const current =
+				this.elevationSteps[key] ?? defaultElevationStepForTileCode(tileCode);
+
+			const next =
+				entry.setElevationStep !== undefined
+					? clampElevationStep(entry.setElevationStep)
+					: clampElevationStep(current + (entry.elevationDelta ?? 0));
+
+			this.elevationSteps[key] = next;
+
+			this.redrawGrid();
+
+			return;
+		}
+
+		let value: number | null = null;
+
+		if (
+			isEvenX &&
+			isEvenY &&
+			entry.kind === "tile" &&
+			entry.code !== undefined
+		) {
+			value = entry.code;
+		} else if (
+			isEvenX !== isEvenY &&
+			entry.kind === "edge" &&
+			entry.code !== undefined
+		) {
+			value = entry.code;
+		}
+
+		if (value === null || this.grid[by][bx] === value) {
+			return;
+		}
 
 		this.grid[by][bx] = value;
+
 		this.redrawGrid();
 	}
 
 	// ---------- Rendering ----------
 
 	private redrawGrid(): void {
+		this.elevationLabelContainer.removeChildren();
 		this.gridGraphics.clear();
 		this.gridGraphics
 			.rect(0, 0, GRID_SIZE * SUB_CELL_PX, GRID_SIZE * SUB_CELL_PX)
@@ -785,6 +932,12 @@ export class MapCreatorScene implements Scene {
 		for (let y = 1; y < GRID_SIZE; y += 2) {
 			for (let x = 1; x < GRID_SIZE; x += 2) {
 				this.drawCornerIfNeeded(x, y);
+			}
+		}
+		// elevation label
+		for (let y = 0; y < GRID_SIZE; y += 2) {
+			for (let x = 0; x < GRID_SIZE; x += 2) {
+				this.drawElevationLabel(x, y);
 			}
 		}
 	}
@@ -848,6 +1001,33 @@ export class MapCreatorScene implements Scene {
 				)
 				.fill(color);
 		}
+	}
+
+	private drawElevationLabel(x: number, y: number): void {
+		const code = this.grid[y][x] as EdgeMapTileCode;
+		if (code === EdgeMapTileCode.Void || code === EdgeMapTileCode.River) {
+			return;
+		}
+		const logicalX = x / 2;
+		const logicalY = y / 2;
+		const key = `${logicalX},${logicalY}`;
+		const step =
+			this.elevationSteps[key] ?? defaultElevationStepForTileCode(code);
+		if (step === 0) {
+			return;
+		}
+		const label = new Text({
+			text: step > 0 ? `+${step}` : `${step}`,
+			style: {
+				fill: 0xffffff,
+				fontSize: 8,
+				fontWeight: "bold",
+			},
+		});
+		label.anchor.set(0.5);
+		label.x = x * SUB_CELL_PX + SUB_CELL_PX / 2;
+		label.y = y * SUB_CELL_PX + SUB_CELL_PX / 2;
+		this.elevationLabelContainer.addChild(label);
 	}
 
 	private drawCornerIfNeeded(x: number, y: number): void {
@@ -1008,7 +1188,15 @@ export class MapCreatorScene implements Scene {
 		// floor — a MapBundle is what a saved map actually is now.
 		const bundle: MapBundle = {
 			name,
-			floors: this.floors,
+
+			floors: this.floors.map((floor) => ({
+				blueprint: floor.blueprint.map((row) => [...row]),
+
+				elevationSteps: {
+					...floor.elevationSteps,
+				},
+			})),
+
 			groundFloorIndex: this.groundFloorIndex,
 		};
 
@@ -1037,8 +1225,8 @@ export class MapCreatorScene implements Scene {
 		// to load it.
 		const hasMalformedFloor = bundle.floors.some(
 			(floor) =>
-				floor.length !== GRID_SIZE ||
-				floor.some((row) => row.length !== GRID_SIZE),
+				floor.blueprint.length !== GRID_SIZE ||
+				floor.blueprint.some((row) => row.length !== GRID_SIZE),
 		);
 		if (
 			bundle.floors.length === 0 ||
@@ -1133,14 +1321,25 @@ export class MapCreatorScene implements Scene {
 	// ---------- Export ----------
 
 	private exportBlueprint(): void {
-		const rows = this.grid.map((row) => `\t[${row.join(", ")}],`).join("\n");
-		const content = `/**\n * Map drawn with the in-game Map Creator.\n * Double-resolution format: tiles on even,even positions (see\n * EdgeMapTileCode in edgeMapCompiler.ts), edges on odd,even and\n * even,odd positions (see EdgeBarrier in edgeGrid.ts). Odd,odd\n * positions are always 0 — no diagonal walls.\n *\n * Compiles directly with compileEdgeMap() from this package, no\n * separate conversion step needed.\n */\nexport const CUSTOM_MAP_BLUEPRINT: number[][] = [\n${rows}\n];\n`;
-
-		const blob = new Blob([content], { type: "text/typescript" });
+		const rows = this.grid.map((row) => `\t\t[${row.join(", ")}],`).join("\n");
+		const elevationSource = JSON.stringify(this.elevationSteps, null, "\t");
+		const content = `/**
+ 				* Map floor drawn with the in-game Map Creator.
+ 				*/
+				export const CUSTOM_MAP_FLOOR = {
+					blueprint: [
+						${rows}
+					],
+					elevationSteps: ${elevationSource},
+				};
+			`;
+		const blob = new Blob([content], {
+			type: "text/typescript",
+		});
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement("a");
 		a.href = url;
-		a.download = "customMapBlueprint.ts";
+		a.download = "customMapFloor.ts";
 		document.body.appendChild(a);
 		a.click();
 		document.body.removeChild(a);
