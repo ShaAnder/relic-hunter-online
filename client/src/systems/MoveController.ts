@@ -1,16 +1,16 @@
 import { Container, Graphics } from "pixi.js";
 import type {
-	Grid,
+	CompiledEdgeMap,
 	GridCoord,
 	MovementRangeEntry,
-	EdgeGrid,
+	TerrainTraversalContext,
 } from "@relic-hunter/shared";
 import {
-	computeMovementRange,
 	computeMovementRangeWithEdges,
+	computePathMovementCost,
 	coordKey,
 	getEdgeBetween,
-	edgeIsPassable,
+	getTraversalStepCost,
 } from "@relic-hunter/shared";
 import {
 	gridToScreenElevated,
@@ -21,21 +21,20 @@ import type { CameraController } from "@/core/cameras/CameraController";
 import type { Mercenary } from "@/entities/Mercenary";
 
 interface MoveControllerOptions {
-	grid: Grid;
 	camera: CameraController;
 	mercenary: Mercenary;
+
 	getMercenaryCoord: () => GridCoord;
 	getMovementRemaining: () => number;
 	getBlockedCoords: () => GridCoord[];
+
+	getFloorMap: () => CompiledEdgeMap;
+
 	onMoveCommitted: (
 		target: GridCoord,
 		path: GridCoord[],
 		ignoresZoc: boolean,
 	) => void;
-	/** Per-tile elevation (session.mapElevation) — when present, the range highlight, path line, and destination glow all snap to each tile's own raised top rather than flat ground, matching how the tile itself renders. */
-	elevation?: Map<string, number>;
-	/** When set, movement uses edge barriers instead of cell walls. */
-	edges?: EdgeGrid | null;
 }
 
 /**
@@ -222,11 +221,19 @@ export class MoveController {
 		if (!this.isCardinalAdjacent(last, tile)) return;
 		if (!this.canStep(last, tile)) return;
 		if (this.blocked.has(coordKey(tile))) return;
-		if (this.path.length >= this.budget) return;
-		// Allow step if reachable from tip with remaining budget
-		if (this.movementRange && !this.movementRange.has(coordKey(tile))) {
-			// Still allow if within original full budget footprint
-			if (!this.isInFullRange(tile)) return;
+
+		/**
+		 * Stage D:
+		 * validate the cost of THIS dragged route.
+		 *
+		 * The destination being reachable by some cheaper route is not enough.
+		 */
+		const candidatePath = [...this.path, tile];
+
+		const candidateCost = this.computeExactPathCost(candidatePath);
+
+		if (candidateCost === null || candidateCost > this.budget) {
+			return;
 		}
 
 		this.path.push(tile);
@@ -290,39 +297,81 @@ export class MoveController {
 
 	// ---------- internals ----------
 
+	private getFloor(): CompiledEdgeMap {
+		return this.options.getFloorMap();
+	}
+
+	private getTerrainContext(): TerrainTraversalContext {
+		const floor = this.getFloor();
+
+		return {
+			elevationSteps: floor.elevationSteps,
+			tileCodes: floor.tileCodes,
+		};
+	}
+
+	/**
+	 * Cost of THIS exact authored route from the unit's current tile.
+	 */
+	private computeExactPathCost(path: GridCoord[]): number | null {
+		const floor = this.getFloor();
+
+		return computePathMovementCost(
+			this.options.getMercenaryCoord(),
+			path,
+			floor.edges,
+			this.getTerrainContext(),
+		);
+	}
+
 	private computeRange(
 		from: GridCoord,
 		budget: number,
 	): Map<string, MovementRangeEntry> {
-		const edges = this.options.edges;
-		if (edges) {
-			return computeMovementRangeWithEdges(
-				this.options.grid,
-				edges,
-				from,
-				budget,
-				this.blocked,
-			);
-		}
-		return computeMovementRange(this.options.grid, from, budget, this.blocked);
+		const floor = this.getFloor();
+
+		return computeMovementRangeWithEdges(
+			floor.grid,
+			floor.edges,
+			from,
+			budget,
+			this.blocked,
+			this.getTerrainContext(),
+		);
 	}
 
-	/** Walkable cell + passable edge (when edge map). */
+	/** Authoritative terrain + edge legality for one step. */
 	private canStep(from: GridCoord, to: GridCoord): boolean {
-		if (this.options.edges) {
-			if (!edgeIsPassable(getEdgeBetween(this.options.edges, from, to))) {
-				return false;
-			}
-			// Edge maps: cells are ground; void/river already non-walkable via elevation/grid
-			return this.options.grid.isWalkable(to);
+		const floor = this.getFloor();
+
+		if (!floor.grid.isWalkable(to)) {
+			return false;
 		}
-		return this.options.grid.isWalkable(to);
+
+		return (
+			getTraversalStepCost(
+				from,
+				to,
+				getEdgeBetween(floor.edges, from, to),
+				this.getTerrainContext(),
+			) !== null
+		);
 	}
 
 	private commitPending(): boolean {
-		if (this.phase !== "previewLocked" || this.path.length === 0) return false;
-		if (this.options.mercenary.isAnimating) return false;
-
+		if (this.phase !== "previewLocked" || this.path.length === 0) {
+			return false;
+		}
+		if (this.options.mercenary.isAnimating) {
+			return false;
+		}
+		/**
+		 * Defensive final validation of the exact authored route.
+		 */
+		const actualCost = this.computeExactPathCost(this.path);
+		if (actualCost === null || actualCost > this.budget) {
+			return false;
+		}
 		const path = [...this.path];
 		const target = path[path.length - 1];
 		this.options.onMoveCommitted(target, path, this.currentIgnoresZoc);
@@ -358,7 +407,8 @@ export class MoveController {
 	private refreshRangeFromTip(): void {
 		const start = this.options.getMercenaryCoord();
 		const tip = this.path.length > 0 ? this.path[this.path.length - 1] : start;
-		const remaining = Math.max(0, this.budget - this.path.length);
+		const spent = this.computeExactPathCost(this.path);
+		const remaining = spent === null ? 0 : Math.max(0, this.budget - spent);
 		this.movementRange = this.computeRange(tip, remaining);
 		this.renderRange();
 	}
@@ -388,7 +438,7 @@ export class MoveController {
 
 		for (const entry of this.movementRange.values()) {
 			if (entry.distance === 0) continue;
-			const pos = gridToScreenElevated(entry.coord, this.options.elevation);
+			const pos = gridToScreenElevated(entry.coord, this.getFloor().elevation);
 			const g = new Graphics();
 			g.poly([
 				0,
@@ -414,8 +464,10 @@ export class MoveController {
 		const from = this.options.getMercenaryCoord();
 		if (this.path.length === 0) return;
 
-		const points = [from, ...this.path].map((c) =>
-			gridToScreenElevated(c, this.options.elevation),
+		const elevation = this.getFloor().elevation;
+
+		const points = [from, ...this.path].map((coord) =>
+			gridToScreenElevated(coord, elevation),
 		);
 		const locked = this.phase === "previewLocked";
 

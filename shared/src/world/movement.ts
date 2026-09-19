@@ -41,7 +41,7 @@ export interface TraversalProfile {
 export const DEFAULT_TRAVERSAL_PROFILE: Readonly<Required<TraversalProfile>> = {
 	ignoreElevationPenalty: false,
 	ignoreLowWallPenalty: false,
-	maxDirectElevationDeltaSteps: 2,
+	maxDirectElevationDeltaSteps: 3,
 };
 
 /**
@@ -67,14 +67,13 @@ export type StepCostProvider = (
 	to: GridCoord,
 ) => number | null;
 
-/**
- * Central movement tuning.
- *
- * A normal cardinal tile step costs 1.
- * A legal rough elevation transition (delta >= 2) adds one point.
- */
 export const BASE_TRAVERSAL_STEP_COST = 1;
-export const ROUGH_ELEVATION_DELTA_STEPS = 2;
+/**
+ * Terrain elevation up through 0.3 is ordinary traversal.
+ * Each elevation step represents 0.1 render elevation, so a delta of
+ * three steps corresponds to roughly 0.3.
+ */
+export const ROUGH_ELEVATION_DELTA_STEPS = 4;
 export const ROUGH_ELEVATION_SURCHARGE = 1;
 
 function resolveTraversalProfile(
@@ -423,7 +422,7 @@ export function findNearestReachableTile(
 	const targetRange = computeMapMovementRange(
 		grid,
 		target,
-		grid.width * grid.height,
+		Number.POSITIVE_INFINITY,
 		blockedTiles,
 		edges,
 		terrain,

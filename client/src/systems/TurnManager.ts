@@ -150,8 +150,11 @@ export class TurnManager<T extends ManagedEntity = MercenaryState> {
 		return true;
 	}
 
-	commitMove(tilesSpent: number): void {
-		this._movementRemaining = Math.max(0, this.movementRemaining - tilesSpent);
+	commitMove(movementCost: number): void {
+		this._movementRemaining = Math.max(
+			0,
+			this.movementRemaining - movementCost,
+		);
 		this.onChanged();
 	}
 

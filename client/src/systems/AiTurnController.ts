@@ -65,25 +65,47 @@ export class AiTurnController {
 		private cb: AiTurnCallbacks,
 	) {}
 
-	/** Edge-aware when this floor has edges; otherwise classic cell movement. */
+	/**
+	 * Shared weighted traversal for AI-controlled actors.
+	 *
+	 * `terrain` supplies authoritative base gameplay traversal.
+	 * `extraStepPenalty` is additive AI policy, such as ZoC threat.
+	 */
 	private computeAiRange(
 		grid: RH.Grid,
 		edges: RH.EdgeGrid | null,
 		start: RH.GridCoord,
 		budget: number,
 		blocked: Set<string>,
+		terrain?: RH.TerrainTraversalContext,
+		extraStepPenalty?: (from: RH.GridCoord, to: RH.GridCoord) => number,
 	): Map<string, RH.MovementRangeEntry> {
-		if (edges) {
-			return RH.computeMovementRangeWithEdges(
-				grid,
-				edges,
-				start,
-				budget,
-				blocked,
-			);
-		}
-
-		return RH.computeMovementRange(grid, start, budget, blocked);
+		const baseStepCost: RH.StepCostProvider = edges
+			? (from, to) =>
+					RH.getTraversalStepCost(
+						from,
+						to,
+						RH.getEdgeBetween(edges, from, to),
+						terrain,
+					)
+			: () => RH.BASE_TRAVERSAL_STEP_COST;
+		return RH.computeWeightedMovementRange(
+			grid,
+			start,
+			budget,
+			blocked,
+			(from, to) => {
+				const base = baseStepCost(from, to);
+				if (base === null) {
+					return null;
+				}
+				const rawPenalty = extraStepPenalty?.(from, to) ?? 0;
+				const penalty = Number.isFinite(rawPenalty)
+					? Math.max(0, rawPenalty)
+					: 0;
+				return base + penalty;
+			},
+		);
 	}
 
 	private canEngageAdjacent(
@@ -414,6 +436,12 @@ export class AiTurnController {
 		let grid = floorMap.grid;
 		let edges = floorMap.edges;
 
+		const terrain: RH.TerrainTraversalContext = {
+			elevationSteps: floorMap.elevationSteps,
+
+			tileCodes: floorMap.tileCodes,
+		};
+
 		// Re-stamp this unit's own fog for the current turn immediately —
 		// its sighting-recording logic below needs an accurate "visible"
 		// read for its own surroundings, which would otherwise lag if
@@ -661,8 +689,9 @@ export class AiTurnController {
 				grid,
 				edges,
 				unit.state.coord,
-				grid.width * grid.height,
+				Number.POSITIVE_INFINITY,
 				blocked,
+				terrain,
 			);
 
 			const targetIsCurrentTile =
@@ -707,27 +736,33 @@ export class AiTurnController {
 				unit.state.id,
 			);
 
-			const range = edges
-				? this.computeAiRange(
+			const range = this.computeAiRange(
+				grid,
+				edges,
+				unit.state.coord,
+				moveBudget,
+				blocked,
+				terrain,
+				(_from, to) =>
+					RH.getZocStepPenalty(
 						grid,
-						edges,
-						unit.state.coord,
-						moveBudget,
-						blocked,
-					)
-				: RH.computeMovementRangeWeighted(
-						grid,
-						unit.state.coord,
-						moveBudget,
-						blocked,
 						threatOwners,
+						to,
 						unit.state.stats,
-						unit.archetype,
-					);
+						unit.archetype!,
+					),
+			);
 
 			const reachable =
-				RH.findNearestReachableTile(grid, range, target, blocked, edges) ??
-				unit.state.coord;
+				RH.findNearestReachableTile(
+					grid,
+					range,
+					target,
+					blocked,
+					edges,
+					terrain,
+				) ?? unit.state.coord;
+
 			const path = RH.getPathTo(range, reachable) ?? [];
 
 			const threatFraction = RH.computePathThreatFraction(
@@ -761,6 +796,10 @@ export class AiTurnController {
 						unit.state.temporaryStatBonus.movement = cardBonus;
 					}
 
+					const moveStart = {
+						...unit.state.coord,
+					};
+
 					const { truncatedPath, hazardHit, resists } =
 						this.mapController.trapSystem.resolveAlongPath(
 							path,
@@ -771,6 +810,19 @@ export class AiTurnController {
 					for (const r of resists) {
 						this.cb.showFeedback(
 							`🪤 ${this.cb.getUnitLabel(unit)} resisted a hazard (${r.hazardRoll} vs ${r.victimRoll})`,
+						);
+					}
+
+					const actualMovementCost = RH.computePathMovementCost(
+						moveStart,
+						truncatedPath,
+						edges,
+						terrain,
+					);
+
+					if (actualMovementCost === null) {
+						throw new Error(
+							"AiTurnController: generated hunter path became illegal before commit",
 						);
 					}
 
@@ -786,7 +838,7 @@ export class AiTurnController {
 						undefined,
 						edges,
 					);
-					unit.turnManager.commitMove(truncatedPath.length);
+					unit.turnManager.commitMove(actualMovementCost);
 					this.cb.showFeedback(
 						`🏃 ${this.cb.getUnitLabel(unit)} moves toward its target`,
 					);
@@ -1028,13 +1080,26 @@ export class AiTurnController {
 			const retreatBlocked = new Set(
 				othersAfter.map((o) => RH.coordKey(o.coord)),
 			);
+
+			const retreatFloor = this.cb.getFloorMap(unit.state.floorIndex);
+
+			const retreatTerrain: RH.TerrainTraversalContext | undefined =
+				retreatFloor
+					? {
+							elevationSteps: retreatFloor.elevationSteps,
+							tileCodes: retreatFloor.tileCodes,
+						}
+					: undefined;
+
 			const retreatRange = this.computeAiRange(
 				grid,
 				edges,
 				unit.state.coord,
 				unit.state.stats.movement,
 				retreatBlocked,
+				retreatTerrain,
 			);
+
 			const retreatFrom = unit.state.coord;
 			const retreatTile = RH.pickRetreatTile(
 				retreatRange,

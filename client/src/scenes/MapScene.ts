@@ -615,8 +615,7 @@ export class MapScene implements Scene, TutorialPort {
 				getUnits: () => this.units,
 				getLocalUnit: () => this.localUnit,
 				getGrid: () => this.grid,
-				getFloorMap: (floorIndex) =>
-					this.game.session.mapFloors?.[floorIndex] ?? null,
+				getFloorMap: (floorIndex) => this.getTraversalFloorMap(floorIndex),
 				canLocalPlayerSee: (floorIndex, coord) =>
 					this.canLocalPlayerSeeCoord(floorIndex, coord),
 				canSpectateCrossFloor: () => this.canSpectateCrossFloorEnemyTurns(),
@@ -1339,6 +1338,14 @@ export class MapScene implements Scene, TutorialPort {
 		ignoresZoc: boolean,
 	): Promise<void> {
 		const local = this.localUnit;
+		const moveStart = {
+			...local.state.coord,
+		};
+		const moveFloor = this.getTraversalFloorMap(local.state.floorIndex);
+		const moveTerrain: RH.TerrainTraversalContext = {
+			elevationSteps: moveFloor.elevationSteps,
+			tileCodes: moveFloor.tileCodes,
+		};
 
 		const { truncatedPath, hazardHit, resists } =
 			this.mapController.trapSystem.resolveAlongPath(
@@ -1352,12 +1359,22 @@ export class MapScene implements Scene, TutorialPort {
 				`🪤 ${this.getUnitLabel(local)} resisted a hazard (${r.hazardRoll} vs ${r.victimRoll})`,
 			);
 		}
-
+		const actualMovementCost = RH.computePathMovementCost(
+			moveStart,
+			truncatedPath,
+			moveFloor.edges,
+			moveTerrain,
+		);
+		if (actualMovementCost === null) {
+			throw new Error(
+				"MapScene.onMoveCommitted: committed path is no longer traversable",
+			);
+		}
 		local.state.coord =
 			truncatedPath.length > 0
 				? truncatedPath[truncatedPath.length - 1]
 				: local.state.coord;
-		local.turnManager.commitMove(truncatedPath.length);
+		local.turnManager.commitMove(actualMovementCost);
 		this.hud.setMoveActive(false);
 		this.moveController.exit();
 
@@ -2864,22 +2881,56 @@ export class MapScene implements Scene, TutorialPort {
 
 	// ---------- Helpers ----------
 
+	/**
+	 * Gameplay traversal always resolves from the actor's floor,
+	 * independently of the currently spectated/viewed floor.
+	 *
+	 * The fallback preserves synthetic/tutorial single-floor maps.
+	 */
+	private getTraversalFloorMap(floorIndex: number): RH.CompiledEdgeMap {
+		const compiled = this.game.session.mapFloors?.[floorIndex];
+
+		if (compiled) {
+			return compiled;
+		}
+
+		return {
+			grid: this.grid,
+
+			edges:
+				this.game.session.mapEdges ??
+				RH.createEmptyEdgeGrid(this.grid.width, this.grid.height),
+
+			tileCodes: new Map(),
+
+			elevationSteps: new Map(),
+
+			elevation: this.game.session.mapElevation ?? new Map(),
+		};
+	}
+
 	/** Single construction point for MoveController wiring. */
 	private createMoveController(): MoveController {
 		return new MoveController({
-			grid: this.grid,
 			camera: this.camera,
+
 			mercenary: this.localUnit.mercenary,
+
 			getMercenaryCoord: () => this.localUnit.state.coord,
+
 			getMovementRemaining: () => this.localUnit.turnManager.movementRemaining,
+
+			getFloorMap: () =>
+				this.getTraversalFloorMap(this.localUnit.state.floorIndex),
+
 			getBlockedCoords: () => [
 				...this.aiUnits
 					.filter(
-						(u) =>
-							u.state.currentHp > 0 &&
-							u.state.floorIndex === this.localUnit.state.floorIndex,
+						(unit) =>
+							unit.state.currentHp > 0 &&
+							unit.state.floorIndex === this.localUnit.state.floorIndex,
 					)
-					.map((u) => u.state.coord),
+					.map((unit) => unit.state.coord),
 
 				...this.mapController.monsterSystem
 					.livingMonsters()
@@ -2891,13 +2942,12 @@ export class MapScene implements Scene, TutorialPort {
 
 				...this.tutorialMarkers.actorCoordsList,
 			],
+
 			onMoveCommitted: (
 				target: RH.GridCoord,
 				path: RH.GridCoord[],
 				ignoresZoc: boolean,
 			) => this.onMoveCommitted(target, path, ignoresZoc),
-			elevation: this.game.session.mapElevation ?? undefined,
-			edges: this.game.session.mapEdges ?? null,
 		});
 	}
 
