@@ -525,34 +525,65 @@ export class MapRenderer {
 			value !== undefined && Number.isFinite(value);
 
 		/**
-		 * A wall sits between TWO tiles.
+		 * A wall has TWO related vertical measurements:
 		 *
-		 * StairConnector elevation belongs to the stair surface itself,
-		 * not to the wall surrounding the stair opening.
+		 * 1. wallBaseElevation
+		 *    The architectural level the wall belongs to - always the
+		 *    HIGHEST real architectural surface touching it. This is
+		 *    what fixes the 0/0.1 (Floor/Pavement) inconsistency: the
+		 *    wall now always uses 0.1, not whichever side happened to
+		 *    be "coord" for this particular loop iteration.
 		 *
-		 * Therefore:
+		 * 2. lowestAdjacentElevation
+		 *    The lowest actual surface touching that edge, StairConnector
+		 *    included. Used only to decide how far the wall's visible
+		 *    FACE extends downward, never to move the wall's own top -
+		 *    a whole run of walls stays level even next to a sunken
+		 *    stair tile.
 		 *
-		 * stair + pavement -> wall uses pavement elevation
-		 * stair + floor    -> wall uses floor elevation
-		 * pavement + floor -> use the normal finite side
-		 *
-		 * This is important for textured walls later: every wall segment now
-		 * has a stable architectural base plane instead of inheriting a
-		 * temporary stair-surface offset or being hardcoded to elevation 0.
+		 * StairConnector elevation is deliberately excluded when
+		 * choosing the architectural base - it's a stair-surface
+		 * effect, not a different level for the surrounding wall.
 		 */
-		let usableElevation = 0;
+		const finiteElevations = [coordElevation, otherElevation].filter(
+			(value): value is number => isFiniteElevation(value),
+		);
 
-		if (coordIsConnector && !otherIsConnector) {
-			usableElevation = isFiniteElevation(otherElevation) ? otherElevation : 0;
-		} else if (otherIsConnector && !coordIsConnector) {
-			usableElevation = isFiniteElevation(coordElevation) ? coordElevation : 0;
-		} else if (isFiniteElevation(coordElevation)) {
-			usableElevation = coordElevation;
-		} else if (isFiniteElevation(otherElevation)) {
-			usableElevation = otherElevation;
-		}
+		const architecturalElevations = [
+			!coordIsConnector && isFiniteElevation(coordElevation)
+				? coordElevation
+				: null,
+			!otherIsConnector && isFiniteElevation(otherElevation)
+				? otherElevation
+				: null,
+		].filter((value): value is number => value !== null);
 
-		const elevationPx = usableElevation * TILE_HEIGHT;
+		const wallBaseElevation =
+			architecturalElevations.length > 0
+				? Math.max(...architecturalElevations)
+				: finiteElevations.length > 0
+					? Math.max(...finiteElevations)
+					: 0;
+
+		const lowestAdjacentElevation =
+			finiteElevations.length > 0
+				? Math.min(...finiteElevations)
+				: wallBaseElevation;
+
+		/**
+		 * Extra face below the architectural wall base - e.g. wall base
+		 * 0.1 (pavement) next to a stair connector at -0.2: the wall
+		 * still starts architecturally at 0.1 (keeping its top level
+		 * with every neighboring wall), but its visible side face
+		 * extends downward by 0.3 elevation units so the sunken stair
+		 * tile's edge can never poke out underneath it.
+		 */
+		const foundationDropPx = Math.max(
+			0,
+			(wallBaseElevation - lowestAdjacentElevation) * TILE_HEIGHT,
+		);
+
+		const elevationPx = wallBaseElevation * TILE_HEIGHT;
 		const corners = this.trueTileCorners(coord, elevationPx);
 		const [b1, b2] =
 			dir === "E"
@@ -572,31 +603,39 @@ export class MapRenderer {
 		const far1 = { x: b1.x - off.x, y: b1.y - off.y };
 		const far2 = { x: b2.x - off.x, y: b2.y - off.y };
 		const up = (p: ScreenPoint) => ({ x: p.x, y: p.y - height });
+		const downToFoundation = (p: ScreenPoint) => ({
+			x: p.x,
+			y: p.y + foundationDropPx,
+		});
 		const depth = Math.max(b1.y, b2.y);
 
 		return {
 			depth,
 			draw: () => {
 				const g = new Graphics();
-				const n1u = up(near1),
-					n2u = up(near2),
-					f1u = up(far1),
-					f2u = up(far2);
+				const n1u = up(near1);
+				const n2u = up(near2);
+				const f1u = up(far1);
+				const f2u = up(far2);
+				const n1b = downToFoundation(near1);
+				const n2b = downToFoundation(near2);
+				const f1b = downToFoundation(far1);
+				const f2b = downToFoundation(far2);
 				const leftFace = [
-					near1.x,
-					near1.y,
-					near2.x,
-					near2.y,
+					n1b.x,
+					n1b.y,
+					n2b.x,
+					n2b.y,
 					n2u.x,
 					n2u.y,
 					n1u.x,
 					n1u.y,
 				];
 				const rightFace = [
-					far1.x,
-					far1.y,
-					far2.x,
-					far2.y,
+					f1b.x,
+					f1b.y,
+					f2b.x,
+					f2b.y,
 					f2u.x,
 					f2u.y,
 					f1u.x,

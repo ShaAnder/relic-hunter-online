@@ -436,6 +436,10 @@ export class AiTurnController {
 			crossFloorPeek ||
 			this.cb.canLocalPlayerSee(unit.state.floorIndex, unit.state.coord);
 		if (canSeeUnit) {
+			// activeAi is already set, so rebuilding now makes room-focus
+			// follow the same hunter the camera is about to follow.
+			this.cb.rebuildMapRender();
+
 			this.camera.centerOn(
 				{ x: unit.mercenary.view.x, y: unit.mercenary.view.y },
 				this.screenSize.width,
@@ -825,6 +829,14 @@ export class AiTurnController {
 						}
 					}
 
+					const canSeeUnitAfterMove =
+						(this.crossFloorSpectating &&
+							unit.state.floorIndex !== localUnit.state.floorIndex) ||
+						this.cb.canLocalPlayerSee(unit.state.floorIndex, unit.state.coord);
+					if (canSeeUnitAfterMove) {
+						this.cb.rebuildMapRender();
+					}
+
 					if (hazardHit) {
 						unit.state.matchScore.tacticalScore = Math.max(
 							0,
@@ -1134,11 +1146,19 @@ export class AiTurnController {
 
 		const grid = floorMap.grid;
 		const edges = floorMap.edges;
-		const canSeeMonster = this.cb.canLocalPlayerSee(
-			monster.state.floorIndex,
-			monster.state.coord,
-		);
+		const localUnit = this.cb.getLocalUnit();
+		const crossFloorPeek =
+			this.crossFloorSpectating &&
+			monster.state.floorIndex !== localUnit.state.floorIndex;
+		const canSeeMonster =
+			crossFloorPeek ||
+			this.cb.canLocalPlayerSee(monster.state.floorIndex, monster.state.coord);
 		if (canSeeMonster) {
+			// activeMonster is already set. Rebuilding here means room
+			// focus follows this monster exactly as it does an active AI
+			// hunter.
+			this.cb.rebuildMapRender();
+
 			this.camera.centerOn(
 				{ x: monster.token.view.x, y: monster.token.view.y },
 				this.screenSize.width,
@@ -1269,6 +1289,17 @@ export class AiTurnController {
 						monster.state.floorIndex,
 						monster.state.coord,
 					);
+				}
+
+				const canSeeMonsterAfterMove =
+					(this.crossFloorSpectating &&
+						monster.state.floorIndex !== localUnit.state.floorIndex) ||
+					this.cb.canLocalPlayerSee(
+						monster.state.floorIndex,
+						monster.state.coord,
+					);
+				if (canSeeMonsterAfterMove) {
+					this.cb.rebuildMapRender();
 				}
 			}
 		}

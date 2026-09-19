@@ -59,20 +59,53 @@ export function detectRooms(grid: Grid, edges: EdgeGrid): Room[] {
 					[0, 1],
 					[0, -1],
 				]) {
-					const next = { x: current.x + dx, y: current.y + dy };
-					if (next.x < 0 || next.y < 0 || next.x >= width || next.y >= height)
+					const next = {
+						x: current.x + dx,
+						y: current.y + dy,
+					};
+
+					if (next.x < 0 || next.y < 0 || next.x >= width || next.y >= height) {
 						continue;
-					if (!grid.isWalkable(next)) continue;
+					}
 
 					const barrier = getEdgeBetween(edges, current, next);
+
+					/**
+					 * A room boundary can border VOID.
+					 *
+					 * This matters especially on upper floors:
+					 *
+					 *     interior | wall | void
+					 *
+					 * Previously we discarded the void neighbour before recording the
+					 * barrier, which meant upper-floor perimeter walls never appeared in
+					 * room.boundaryEdges and therefore could never be visually lowered.
+					 */
+					if (!grid.isWalkable(next)) {
+						if (barrier !== EdgeBarrier.None) {
+							boundaryEdges.push({
+								a: current,
+								b: next,
+								barrier,
+							});
+						}
+
+						continue;
+					}
+
 					if (barrier === EdgeBarrier.None) {
 						const nextKey = `${next.x},${next.y}`;
+
 						if (!visited.has(nextKey)) {
 							visited.add(nextKey);
 							queue.push(next);
 						}
 					} else {
-						boundaryEdges.push({ a: current, b: next, barrier });
+						boundaryEdges.push({
+							a: current,
+							b: next,
+							barrier,
+						});
 					}
 				}
 			}

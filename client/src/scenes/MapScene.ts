@@ -370,14 +370,42 @@ export class MapScene implements Scene, TutorialPort {
 		// muted structural context.
 		this.rebuildLowerFloorUnderlay(viewedFloor);
 
+		/**
+		 * If the camera is currently following an AI hunter or monster on
+		 * this floor, THAT entity owns room focus - independent of fog.
+		 *
+		 * local player's camera -> local player's room
+		 * AI hunter camera      -> AI hunter's room
+		 * monster camera        -> monster's room
+		 *
+		 * So whenever the actual camera subject is inside a building,
+		 * its surrounding walls lower - regardless of who it is.
+		 */
+		const trackedObserver =
+			this.aiTurnController.activeMonster &&
+			this.aiTurnController.activeMonster.state.floorIndex === viewedFloor
+				? {
+						floorIndex: this.aiTurnController.activeMonster.state.floorIndex,
+						coord: this.aiTurnController.activeMonster.state.coord,
+					}
+				: this.aiTurnController.activeAi &&
+					  this.aiTurnController.activeAi.state.floorIndex === viewedFloor
+					? {
+							floorIndex: this.aiTurnController.activeAi.state.floorIndex,
+							coord: this.aiTurnController.activeAi.state.coord,
+						}
+					: null;
+
 		const spectator =
 			this.aiTurnController.crossFloorSpectating &&
 			this.spectatorObserver?.floorIndex === viewedFloor
 				? this.spectatorObserver
 				: null;
 
+		const focusObserver = trackedObserver ?? spectator;
+
 		const observerCoord =
-			spectator?.coord ?? liveCoordOverride ?? this.localUnit.state.coord;
+			focusObserver?.coord ?? liveCoordOverride ?? this.localUnit.state.coord;
 
 		const rooms = this.roomsForCurrentFloor(compiled.edges);
 
@@ -385,14 +413,19 @@ export class MapScene implements Scene, TutorialPort {
 
 		const focus = this.focusRoomFor(currentRoom, rooms);
 
-		// Spectator mode is fog-off by definition. More importantly,
-		// never feed the LOCAL player's fog state into a different unit's
-		// perspective.
+		/**
+		 * Room focus may follow another camera subject, but the local
+		 * player's fog must STILL belong to the local player - never
+		 * accidentally use the AI/monster's position as the center of
+		 * the local player's own fog.
+		 */
+		const localFogCenter = liveCoordOverride ?? this.localUnit.state.coord;
+
 		const fog =
 			!spectator && this.fogOfWarEnabled
 				? {
 						state: this.localUnit.state,
-						center: observerCoord,
+						center: localFogCenter,
 						turn: this.turnsTaken,
 					}
 				: null;
@@ -961,14 +994,23 @@ export class MapScene implements Scene, TutorialPort {
 				)
 			: null;
 
+		const activeMonsterCrossFloorPeek =
+			!!this.aiTurnController.activeMonster &&
+			this.aiTurnController.crossFloorSpectating &&
+			this.aiTurnController.activeMonster.state.floorIndex !==
+				this.localUnit.state.floorIndex &&
+			this.game.session.viewedFloor ===
+				this.aiTurnController.activeMonster.state.floorIndex;
+
 		const activeMonsterVisible =
 			!!this.aiTurnController.activeMonster &&
 			!!activeMonsterLiveCoord &&
-			this.canLocalPlayerSeeCoord(
-				this.aiTurnController.activeMonster.state.floorIndex,
-				activeMonsterLiveCoord,
-				localVisionCoord,
-			);
+			(activeMonsterCrossFloorPeek ||
+				this.canLocalPlayerSeeCoord(
+					this.aiTurnController.activeMonster.state.floorIndex,
+					activeMonsterLiveCoord,
+					localVisionCoord,
+				));
 
 		if (
 			this.aiTurnController.processingEnemyTurns &&
