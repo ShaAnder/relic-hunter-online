@@ -2463,30 +2463,46 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	/**
-	 * Animates the tutorial monster along a real, tile-based path to a
-	 * tile adjacent to the player — never onto the player's own tile,
-	 * since that coord is explicitly in the blocked set here (the
-	 * earlier version left it out, which meant the pathfinder had no
-	 * reason not to path the monster directly onto the player). Uses
-	 * the same computeMovementRange/getPathTo real AI monster movement
-	 * already uses, then MonsterToken's own moveAlongPath — same
-	 * genuine tile-based animation the token already has.
+	 * Animates the real tutorial monster through the same authoritative
+	 * edge/elevation traversal rules used by player, AI hunters and normal
+	 * monsters. The player's tile stays blocked so the dash lands adjacent.
 	 */
 	async dashMonsterToPlayer(): Promise<void> {
 		const monster = this.tutorialMonster;
 		if (!monster) return;
 
+		if (monster.state.floorIndex !== this.localUnit.state.floorIndex) {
+			return;
+		}
+
+		const floor = this.getTraversalFloorMap(monster.state.floorIndex);
+		const terrain: RH.TerrainTraversalContext = {
+			elevationSteps: floor.elevationSteps,
+			tileCodes: floor.tileCodes,
+		};
+
 		const target = this.localUnit.state.coord;
 		const blocked = new Set<string>([RH.coordKey(target)]);
-		const range = RH.computeMovementRange(
-			this.grid,
+
+		const range = RH.computeMovementRangeWithEdges(
+			floor.grid,
+			floor.edges,
 			monster.state.coord,
-			this.grid.width + this.grid.height,
+			Number.POSITIVE_INFINITY,
 			blocked,
+			terrain,
 		);
+
 		const landing =
-			RH.findNearestReachableTile(this.grid, range, target, blocked) ??
-			monster.state.coord;
+			RH.findNearestReachableTile(
+				floor.grid,
+				range,
+				target,
+				blocked,
+				floor.edges,
+				terrain,
+			) ?? monster.state.coord;
+
 		const path = RH.getPathTo(range, landing) ?? [];
 		if (path.length === 0) return;
 

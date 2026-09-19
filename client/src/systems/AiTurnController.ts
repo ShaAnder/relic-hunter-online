@@ -1211,6 +1211,10 @@ export class AiTurnController {
 
 		const grid = floorMap.grid;
 		const edges = floorMap.edges;
+		const terrain: RH.TerrainTraversalContext = {
+			elevationSteps: floorMap.elevationSteps,
+			tileCodes: floorMap.tileCodes,
+		};
 		const localUnit = this.cb.getLocalUnit();
 		const crossFloorPeek =
 			this.crossFloorSpectating &&
@@ -1293,8 +1297,9 @@ export class AiTurnController {
 				grid,
 				edges,
 				monster.state.coord,
-				grid.width * grid.height,
+				Number.POSITIVE_INFINITY,
 				blocked,
+				terrain,
 			);
 
 			let effectiveTargetCoord = targetUnit.state.coord;
@@ -1323,6 +1328,7 @@ export class AiTurnController {
 				monster.state.coord,
 				monster.state.stats.movement,
 				blocked,
+				terrain,
 			);
 
 			const reachable =
@@ -1332,6 +1338,7 @@ export class AiTurnController {
 					effectiveTargetCoord,
 					blocked,
 					edges,
+					terrain,
 				) ?? monster.state.coord;
 
 			const path = RH.getPathTo(range, reachable) ?? [];

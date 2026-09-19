@@ -41,7 +41,7 @@ export interface TraversalProfile {
 export const DEFAULT_TRAVERSAL_PROFILE: Readonly<Required<TraversalProfile>> = {
 	ignoreElevationPenalty: false,
 	ignoreLowWallPenalty: false,
-	maxDirectElevationDeltaSteps: 3,
+	maxDirectElevationDeltaSteps: 4,
 };
 
 /**
@@ -68,10 +68,15 @@ export type StepCostProvider = (
 ) => number | null;
 
 export const BASE_TRAVERSAL_STEP_COST = 1;
+
 /**
- * Terrain elevation up through 0.3 is ordinary traversal.
- * Each elevation step represents 0.1 render elevation, so a delta of
- * three steps corresponds to roughly 0.3.
+ * Elevation grading:
+ *
+ * delta 0-3 (0.0-0.3 render height) = ordinary movement
+ * delta 4   (~0.4 render height)     = +1 rough-elevation movement
+ * delta 5+                           = illegal direct traversal by default
+ *
+ * Low walls are a separate edge barrier and add their own movement cost.
  */
 export const ROUGH_ELEVATION_DELTA_STEPS = 4;
 export const ROUGH_ELEVATION_SURCHARGE = 1;
