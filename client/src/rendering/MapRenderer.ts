@@ -1,6 +1,7 @@
 import { Container, Graphics } from "pixi.js";
 import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
 import * as RH from "@relic-hunter/shared";
+import { fillForTileCode } from "./tileFills";
 
 /** Pixels of visual gap a wall piece sits within — this is the "tile, wall, gap, tile" spacing described in prototyping: a small logical gap between what would otherwise be two directly-touching tiles, which the wall piece fills exactly when present, and which the oversized tiles below fill seamlessly when it isn't. */
 const GAP_PX = 7;
@@ -42,7 +43,8 @@ const WASH_COLOR = 0x14141e;
 const WASH_ALPHA = 0.72;
 
 const FLOOR_COLOR = 0xc8c8c8;
-const PAVEMENT_COLOR = 0xaaaac8;
+
+const TERRAIN_SIDE_COLOR = 0x4a4652;
 
 const WALL_TOP_COLOR = 0x463c6e;
 const WALL_LEFT_FACE_COLOR = 0x2d2648;
@@ -131,15 +133,43 @@ function styleFor(barrier: RH.EdgeBarrier): BarrierStyle {
 	return BARRIER_STYLES[barrier] ?? BARRIER_STYLES[RH.EdgeBarrier.FullWall];
 }
 
-function isStairConnectorElevation(elevation: number | undefined): boolean {
-	return (
-		elevation === RH.CONNECTOR_LOWER_ELEVATION ||
-		elevation === RH.CONNECTOR_UPPER_ELEVATION
-	);
-}
-
 /** What a piece of the map should draw as, combining room-focus and fog-of-war into one answer instead of two separately-applied effects. "hidden" wins over everything (fog unseen); otherwise "washed" if either fog marks it explored-but-not-visible OR room-focus says it's not the room you're in; otherwise "normal". */
 type VisualState = "hidden" | "washed" | "normal";
+
+/**
+ * A wall's full resolved geometry, computed once via the topology
+ * resolver and reused for every face (body, foundation, top). Kept as
+ * its own object rather than recomputed inline so a future texture
+ * pass has real geometry to consume instead of recalculating it.
+ */
+interface WallSkeleton {
+	startVertex: RH.GridVertex;
+	endVertex: RH.GridVertex;
+
+	centerBase1: ScreenPoint;
+	centerBase2: ScreenPoint;
+
+	foundationCenter1: ScreenPoint;
+	foundationCenter2: ScreenPoint;
+
+	nearBase1: ScreenPoint;
+	nearBase2: ScreenPoint;
+	farBase1: ScreenPoint;
+	farBase2: ScreenPoint;
+
+	nearTop1: ScreenPoint;
+	nearTop2: ScreenPoint;
+	farTop1: ScreenPoint;
+	farTop2: ScreenPoint;
+
+	foundationNear1: ScreenPoint;
+	foundationNear2: ScreenPoint;
+	foundationFar1: ScreenPoint;
+	foundationFar2: ScreenPoint;
+
+	hasFoundation: boolean;
+	depth: number;
+}
 
 /**
  * Renders an edge-based map (Grid + EdgeGrid, from compileEdgeMap).
@@ -159,9 +189,13 @@ type VisualState = "hidden" | "washed" | "normal";
  * critically, keeps both effects going through the exact same code
  * path instead of one being a real rebuild and the other a bolted-on
  * incremental patch that's easy to forget to wire up everywhere the
- * first one already is. That's exactly what happened before this: fog
- * had its own separate updateFogVisibility method that nothing ever
- * actually called, so it silently did nothing on every real map.
+ * first one already is.
+ *
+ * Wall/corner geometry goes through the canonical wall-topology
+ * resolver (shared/src/world/maps/wallTopology.ts): every wall
+ * junction asks that one function for its height, so four wall
+ * segments meeting at one physical corner can never disagree with
+ * each other about where that corner actually is.
  */
 export class MapRenderer {
 	constructor(private container: Container) {}
@@ -182,12 +216,12 @@ export class MapRenderer {
 	 * whatever room-focus alone would already give it. Pass null to
 	 * disable fog-of-war entirely (matching the mission's own
 	 * fogOfWarEnabled toggle).
-	 * @param tileFills When set, overrides a specific tile's fill color
-	 * by coordinate - used for stair/ladder/connector tiles so they
-	 * read as distinct from plain floor or pavement rather than
-	 * looking like ordinary ground. Elevation-based fog/wash treatment
-	 * still applies on top exactly as normal; this only changes the
-	 * base color underneath it.
+	 * @param forceWashed When true, renders the whole floor with the
+	 * dark washed treatment regardless of fog/room-focus - used for
+	 * the lower-floor underlay, so it reads as muted structural
+	 * context rather than relying on heavy container transparency.
+	 * @param wallHeightScale Scales every wall's height - 1 for the
+	 * active floor, smaller for a decorative underlay.
 	 */
 	build(
 		compiled: RH.CompiledEdgeMap,
@@ -197,7 +231,6 @@ export class MapRenderer {
 			center: RH.GridCoord;
 			turn: number;
 		} | null = null,
-		tileFills: Map<string, number> | null = null,
 		forceWashed = false,
 		wallHeightScale = 1,
 	): void {
@@ -241,10 +274,10 @@ export class MapRenderer {
 		for (let y = 0; y < compiled.grid.height; y++) {
 			for (let x = 0; x < compiled.grid.width; x++) {
 				const coord = { x, y };
-				const elevation = compiled.elevation.get(`${x},${y}`) ?? 0;
+				const key = `${x},${y}`;
+				const elevation = compiled.elevation.get(key) ?? 0;
 				if (!Number.isFinite(elevation)) continue; // void — nothing to draw
-				const roomFocused =
-					focusCellKeys !== null && !focusCellKeys.has(`${x},${y}`);
+				const roomFocused = focusCellKeys !== null && !focusCellKeys.has(key);
 				const state = visualStateAt(coord, roomFocused);
 				if (state === "hidden") continue;
 				drawables.push(
@@ -252,18 +285,71 @@ export class MapRenderer {
 						coord,
 						elevation,
 						state === "washed",
-						tileFills?.get(`${x},${y}`),
+						fillForTileCode(compiled.tileCodes.get(key)),
+						this.tileTouchesElevationBoundary(compiled, coord, elevation),
 					),
 				);
 			}
 		}
 
-		// rounded screen point -> tallest (state, height) touching it.
-		// A corner matches whichever connecting wall needs it most, so
-		// it never looks more visible/taller than a wall piece it's
-		// directly bridging, and never more hidden than the least
-		// hidden of the walls meeting it (a corner between a visible
-		// wall and a hidden one still needs to draw).
+		// Vertical terrain faces between two horizontally/vertically
+		// adjacent tiles with different elevation - the actual
+		// curb/cliff skeleton for a raised or sunken tile.
+		const pushTerrainFace = (
+			a: RH.GridCoord,
+			b: RH.GridCoord,
+			dir: "E" | "S",
+		): void => {
+			const aElevation = this.elevationAt(compiled, a);
+			const bElevation = this.elevationAt(compiled, b);
+
+			if (
+				aElevation === undefined ||
+				bElevation === undefined ||
+				!Number.isFinite(aElevation) ||
+				!Number.isFinite(bElevation) ||
+				Math.abs(aElevation - bElevation) < 0.000001
+			) {
+				return;
+			}
+
+			const aOutsideFocus =
+				focusCellKeys !== null && !focusCellKeys.has(RH.coordKey(a));
+			const bOutsideFocus =
+				focusCellKeys !== null && !focusCellKeys.has(RH.coordKey(b));
+
+			const aState = visualStateAt(a, aOutsideFocus);
+			const bState = visualStateAt(b, bOutsideFocus);
+
+			if (aState === "hidden" && bState === "hidden") return;
+
+			drawables.push(
+				this.terrainFaceDrawable(
+					a,
+					b,
+					dir,
+					aElevation,
+					bElevation,
+					aState !== "normal" && bState !== "normal",
+				),
+			);
+		};
+
+		for (let y = 0; y < compiled.grid.height; y++) {
+			for (let x = 0; x < compiled.grid.width - 1; x++) {
+				pushTerrainFace({ x, y }, { x: x + 1, y }, "E");
+			}
+		}
+		for (let y = 0; y < compiled.grid.height - 1; y++) {
+			for (let x = 0; x < compiled.grid.width; x++) {
+				pushTerrainFace({ x, y }, { x, y: y + 1 }, "S");
+			}
+		}
+
+		// corners keyed by real topology (vertex), not rounded screen
+		// position - every wall touching the same logical vertex agrees
+		// exactly, since they all resolve through the same topology
+		// function.
 		const STATE_RANK: Record<VisualState, number> = {
 			hidden: 0,
 			washed: 1,
@@ -271,27 +357,45 @@ export class MapRenderer {
 		};
 		const cornerTouches = new Map<
 			string,
-			{ height: number; state: VisualState; barrier: RH.EdgeBarrier }
+			{
+				base: ScreenPoint;
+				foundationBottomY: number;
+				height: number;
+				state: VisualState;
+				barrier: RH.EdgeBarrier;
+			}
 		>();
 
 		const registerCorner = (
-			b: ScreenPoint,
+			vertex: RH.GridVertex,
+			base: ScreenPoint,
 			height: number,
+			foundationBottomY: number,
 			state: VisualState,
 			barrier: RH.EdgeBarrier,
-		) => {
-			const key = this.cornerKey(b);
+		): void => {
+			const key = `${vertex.x},${vertex.y}`;
 			const existing = cornerTouches.get(key);
 			const nextHeight = Math.max(existing?.height ?? 0, height);
+			const nextFoundationBottomY = Math.max(
+				existing?.foundationBottomY ?? base.y,
+				foundationBottomY,
+			);
 			const nextState: VisualState =
 				!existing || STATE_RANK[state] > STATE_RANK[existing.state]
 					? state
 					: existing.state;
+
 			cornerTouches.set(key, {
+				// Every connected wall resolves this vertex through the
+				// same topology function, so these bases should agree
+				// exactly.
+				base: existing?.base ?? base,
+				foundationBottomY: nextFoundationBottomY,
 				height: nextHeight,
 				state: nextState,
 				barrier:
-					nextHeight === height ? barrier : (existing?.barrier ?? barrier),
+					!existing || height > existing.height ? barrier : existing.barrier,
 			});
 		};
 
@@ -305,7 +409,6 @@ export class MapRenderer {
 					this.wallDrawable(
 						a,
 						b,
-						"E",
 						barrier,
 						compiled,
 						focusBoundaryKeys,
@@ -326,7 +429,6 @@ export class MapRenderer {
 					this.wallDrawable(
 						a,
 						b,
-						"S",
 						barrier,
 						compiled,
 						focusBoundaryKeys,
@@ -338,13 +440,19 @@ export class MapRenderer {
 			}
 		}
 
-		for (const [key, { height, state, barrier }] of cornerTouches) {
+		for (const {
+			base,
+			foundationBottomY,
+			height,
+			state,
+			barrier,
+		} of cornerTouches.values()) {
 			if (state === "hidden") continue;
-			const [cx, cy] = key.split(",").map(Number);
 			drawables.push(
 				this.cornerDrawable(
-					{ x: cx, y: cy },
+					base,
 					height,
+					foundationBottomY,
 					state === "washed",
 					barrier,
 				),
@@ -376,37 +484,98 @@ export class MapRenderer {
 		};
 	}
 
+	private elevationAt(
+		compiled: RH.CompiledEdgeMap,
+		coord: RH.GridCoord,
+	): number | undefined {
+		return compiled.elevation.get(RH.coordKey(coord));
+	}
+
+	/**
+	 * Screen position of a grid VERTEX (a corner point shared by up to
+	 * four tiles), at a given world elevation. Grid vertices map onto
+	 * tile corners as:
+	 *
+	 *     tile(x,y).top    = vertex(x,   y)
+	 *     tile(x,y).right  = vertex(x+1, y)
+	 *     tile(x,y).bottom = vertex(x+1, y+1)
+	 *     tile(x,y).left   = vertex(x,   y+1)
+	 */
+	private vertexScreenPoint(
+		vertex: RH.GridVertex,
+		elevation: number,
+	): ScreenPoint {
+		const projected = gridToScreen({ x: vertex.x, y: vertex.y });
+		return {
+			x: projected.x,
+			y: projected.y - TILE_HEIGHT / 2 - elevation * TILE_HEIGHT,
+		};
+	}
+
+	/**
+	 * Oversized coplanar tiles hide ordinary seams.
+	 *
+	 * At a genuine elevation boundary, however, oversizing makes the
+	 * raised/lowered tile poke through the vertical side/wall.
+	 * Therefore every tile touching a height change uses its TRUE
+	 * footprint.
+	 */
+	private tileTouchesElevationBoundary(
+		compiled: RH.CompiledEdgeMap,
+		coord: RH.GridCoord,
+		elevation: number,
+	): boolean {
+		const neighbours: RH.GridCoord[] = [
+			{ x: coord.x + 1, y: coord.y },
+			{ x: coord.x - 1, y: coord.y },
+			{ x: coord.x, y: coord.y + 1 },
+			{ x: coord.x, y: coord.y - 1 },
+		];
+
+		for (const neighbour of neighbours) {
+			if (
+				neighbour.x < 0 ||
+				neighbour.y < 0 ||
+				neighbour.x >= compiled.grid.width ||
+				neighbour.y >= compiled.grid.height
+			) {
+				continue;
+			}
+
+			const other = this.elevationAt(compiled, neighbour);
+
+			// Only a REAL finite height difference disables oversizing.
+			// Void/out-of-bounds does not automatically create a terrain
+			// face and should not introduce a new gap.
+			if (
+				other !== undefined &&
+				Number.isFinite(other) &&
+				Math.abs(other - elevation) > 0.000001
+			) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	private tileDrawable(
 		coord: RH.GridCoord,
 		elevation: number,
 		washed: boolean,
 		fillOverride?: number,
+		trueFootprint = false,
 	): Drawable {
 		const elevationPx = elevation * TILE_HEIGHT;
 
 		const trueCorners = this.trueTileCorners(coord, elevationPx);
 
-		/**
-		 * Normal tiles deliberately overlap their neighbours slightly to hide
-		 * ordinary floor seams.
-		 *
-		 * Stair connectors are vertically displaced, though. Applying that
-		 * same 9% oversize after moving the tile up/down can make its diamond
-		 * stick out past the wall beside the stair, producing the thin
-		 * diagonal "jitter" line.
-		 *
-		 * Keep connector tiles at their true footprint.
-		 */
-		const tileOversize = isStairConnectorElevation(elevation)
-			? 0.985
-			: TILE_OVERSIZE;
+		const tileOversize = trueFootprint ? 1 : TILE_OVERSIZE;
 
 		const hw = (TILE_WIDTH / 2) * tileOversize;
-
 		const hh = (TILE_HEIGHT / 2) * tileOversize;
 		const c = trueCorners.center;
-		const color =
-			fillOverride ?? (elevation > 0 ? PAVEMENT_COLOR : FLOOR_COLOR);
+		const color = fillOverride ?? FLOOR_COLOR;
 		const depth = trueCorners.bottom.y - 100_000; // tiles always sort behind anything standing on their own edge
 
 		return {
@@ -434,6 +603,47 @@ export class MapRenderer {
 		};
 	}
 
+	/**
+	 * Vertical terrain face between two adjacent tiles at different
+	 * elevations - the visible "curb" or "cliff" side of a raised or
+	 * sunken tile, distinct from a wall (which is an authored barrier,
+	 * not a terrain height difference).
+	 */
+	private terrainFaceDrawable(
+		a: RH.GridCoord,
+		b: RH.GridCoord,
+		dir: "E" | "S",
+		aElevation: number,
+		bElevation: number,
+		washed: boolean,
+	): Drawable {
+		const aCorners = this.trueTileCorners(a, aElevation * TILE_HEIGHT);
+		const bCorners = this.trueTileCorners(b, bElevation * TILE_HEIGHT);
+
+		const [a1, a2, b1, b2] =
+			dir === "E"
+				? [aCorners.right, aCorners.bottom, bCorners.top, bCorners.left]
+				: [aCorners.bottom, aCorners.left, bCorners.right, bCorners.top];
+
+		const face = [a1.x, a1.y, a2.x, a2.y, b2.x, b2.y, b1.x, b1.y];
+
+		return {
+			// Tiles = -100000. Terrain skirts = -50000. Structural walls
+			// retain their normal screen-depth values.
+			depth: Math.max(a1.y, a2.y, b1.y, b2.y) - 50_000,
+			draw: () => {
+				const g = new Graphics();
+				g.poly(face);
+				g.fill(TERRAIN_SIDE_COLOR);
+				if (washed) {
+					g.poly(face);
+					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
+				}
+				return g;
+			},
+		};
+	}
+
 	private perpOffset(
 		p1: ScreenPoint,
 		p2: ScreenPoint,
@@ -446,22 +656,126 @@ export class MapRenderer {
 		return { x: (-dy / length) * dist, y: (dx / length) * dist };
 	}
 
-	private cornerKey(p: ScreenPoint): string {
-		return `${Math.round(p.x * 10) / 10},${Math.round(p.y * 10) / 10}`;
+	/**
+	 * Full resolved geometry for one wall edge, via the canonical
+	 * wall-topology resolver - every wall touching the same physical
+	 * vertex asks the same function for that vertex's height, so
+	 * connected walls can never disagree about where a shared corner
+	 * sits.
+	 */
+	private buildWallSkeleton(
+		edge: RH.StructuralEdgeRef,
+		compiled: RH.CompiledEdgeMap,
+		height: number,
+	): WallSkeleton {
+		const [startVertex, endVertex] = RH.structuralEdgeVertices(edge);
+
+		const startElevation = RH.resolveWallJunctionHeight(
+			compiled,
+			edge,
+			startVertex,
+		);
+		const endElevation = RH.resolveWallJunctionHeight(
+			compiled,
+			edge,
+			endVertex,
+		);
+
+		const foundationElevation =
+			RH.edgeFoundationHeight(compiled, edge) ??
+			Math.min(startElevation, endElevation);
+
+		const centerBase1 = this.vertexScreenPoint(startVertex, startElevation);
+		const centerBase2 = this.vertexScreenPoint(endVertex, endElevation);
+
+		const foundationCenter1 = this.vertexScreenPoint(
+			startVertex,
+			foundationElevation,
+		);
+		const foundationCenter2 = this.vertexScreenPoint(
+			endVertex,
+			foundationElevation,
+		);
+
+		// Wall thickness is based on the plan-view (elevation 0) edge,
+		// not the visually sloped edge - otherwise changing terrain
+		// height would change apparent wall thickness.
+		const raw1 = this.vertexScreenPoint(startVertex, 0);
+		const raw2 = this.vertexScreenPoint(endVertex, 0);
+
+		const off = this.perpOffset(raw1, raw2, WALL_THICKNESS_PX);
+
+		const nearBase1 = { x: centerBase1.x + off.x, y: centerBase1.y + off.y };
+		const nearBase2 = { x: centerBase2.x + off.x, y: centerBase2.y + off.y };
+		const farBase1 = { x: centerBase1.x - off.x, y: centerBase1.y - off.y };
+		const farBase2 = { x: centerBase2.x - off.x, y: centerBase2.y - off.y };
+
+		const foundationNear1 = {
+			x: foundationCenter1.x + off.x,
+			y: foundationCenter1.y + off.y,
+		};
+		const foundationNear2 = {
+			x: foundationCenter2.x + off.x,
+			y: foundationCenter2.y + off.y,
+		};
+		const foundationFar1 = {
+			x: foundationCenter1.x - off.x,
+			y: foundationCenter1.y - off.y,
+		};
+		const foundationFar2 = {
+			x: foundationCenter2.x - off.x,
+			y: foundationCenter2.y - off.y,
+		};
+
+		const up = (point: ScreenPoint): ScreenPoint => ({
+			x: point.x,
+			y: point.y - height,
+		});
+
+		return {
+			startVertex,
+			endVertex,
+			centerBase1,
+			centerBase2,
+			foundationCenter1,
+			foundationCenter2,
+			nearBase1,
+			nearBase2,
+			farBase1,
+			farBase2,
+			nearTop1: up(nearBase1),
+			nearTop2: up(nearBase2),
+			farTop1: up(farBase1),
+			farTop2: up(farBase2),
+			foundationNear1,
+			foundationNear2,
+			foundationFar1,
+			foundationFar2,
+			hasFoundation:
+				Math.abs(foundationCenter1.y - centerBase1.y) > 0.000001 ||
+				Math.abs(foundationCenter2.y - centerBase2.y) > 0.000001,
+			depth: Math.max(
+				centerBase1.y,
+				centerBase2.y,
+				foundationCenter1.y,
+				foundationCenter2.y,
+			),
+		};
 	}
 
 	private wallDrawable(
 		coord: RH.GridCoord,
 		other: RH.GridCoord,
-		dir: "E" | "S",
 		barrier: RH.EdgeBarrier,
 		compiled: RH.CompiledEdgeMap,
 		focusBoundaryKeys: Set<string> | null,
 		visualStateAt: (coord: RH.GridCoord, roomFocused: boolean) => VisualState,
 		wallHeightScale: number,
 		registerCorner: (
-			b: ScreenPoint,
+			vertex: RH.GridVertex,
+			base: ScreenPoint,
 			height: number,
+			foundationBottomY: number,
 			state: VisualState,
 			barrier: RH.EdgeBarrier,
 		) => void,
@@ -469,21 +783,8 @@ export class MapRenderer {
 		const style = styleFor(barrier);
 		const isFocusedBoundary =
 			focusBoundaryKeys?.has(this.edgeDedupeKey(coord, other)) ?? false;
-		// Not part of the focused room's own boundary at all (and a
-		// focus room IS set) means this wall belongs to some other
-		// room or the open street — wash it rather than shrink it.
 		const roomFocused = focusBoundaryKeys !== null && !isFocusedBoundary;
 
-		// A wall sits BETWEEN two cells — it should render at whichever
-		// of them is more visible, not whichever one happened to be
-		// "coord" for this loop iteration. coord/other is purely an
-		// artifact of iterating x/y in increasing order (coord is
-		// always the west or north cell of the pair); it says nothing
-		// about which side the player is actually standing on. Using
-		// coord alone meant a wall would incorrectly vanish whenever
-		// its OTHER side (the one nobody was checking) happened to be
-		// unexplored — you can clearly see a wall from the side you're
-		// standing next to, even if you've never seen what's past it.
 		const STATE_RANK: Record<VisualState, number> = {
 			hidden: 0,
 			washed: 1,
@@ -501,90 +802,96 @@ export class MapRenderer {
 			? baseHeight * FOCUSED_WALL_HEIGHT_FRACTION
 			: baseHeight;
 
-		const { wallBaseElevation, lowestAdjacentElevation } =
-			this.wallElevationsForEdge(coord, other, dir, compiled);
+		const edge = RH.structuralEdgeForTilePair(coord, other, barrier);
+		if (!edge) {
+			return { depth: -Infinity, draw: () => new Graphics() };
+		}
 
-		/**
-		 * Extra face below the architectural wall base - e.g. wall base
-		 * 0.1 (pavement) next to a stair connector at -0.2: the wall
-		 * still starts architecturally at 0.1 (keeping its top level
-		 * with every neighboring wall), but its visible side face
-		 * extends downward by 0.3 elevation units so the sunken stair
-		 * tile's edge can never poke out underneath it.
-		 */
-		const foundationDropPx = Math.max(
-			0,
-			(wallBaseElevation - lowestAdjacentElevation) * TILE_HEIGHT,
+		const skeleton = this.buildWallSkeleton(edge, compiled, height);
+
+		registerCorner(
+			skeleton.startVertex,
+			skeleton.centerBase1,
+			height,
+			skeleton.foundationCenter1.y,
+			state,
+			barrier,
 		);
-
-		const elevationPx = wallBaseElevation * TILE_HEIGHT;
-		const corners = this.trueTileCorners(coord, elevationPx);
-		const [b1, b2] =
-			dir === "E"
-				? [corners.right, corners.bottom]
-				: [corners.bottom, corners.left];
-
-		registerCorner(b1, height, state, barrier);
-		registerCorner(b2, height, state, barrier);
+		registerCorner(
+			skeleton.endVertex,
+			skeleton.centerBase2,
+			height,
+			skeleton.foundationCenter2.y,
+			state,
+			barrier,
+		);
 
 		if (state === "hidden") {
 			return { depth: -Infinity, draw: () => new Graphics() };
 		}
 
-		const off = this.perpOffset(b1, b2, WALL_THICKNESS_PX);
-		const near1 = { x: b1.x + off.x, y: b1.y + off.y };
-		const near2 = { x: b2.x + off.x, y: b2.y + off.y };
-		const far1 = { x: b1.x - off.x, y: b1.y - off.y };
-		const far2 = { x: b2.x - off.x, y: b2.y - off.y };
-		const up = (p: ScreenPoint) => ({ x: p.x, y: p.y - height });
-		const downToFoundation = (p: ScreenPoint) => ({
-			x: p.x,
-			y: p.y + foundationDropPx,
-		});
-		const depth = Math.max(b1.y, b2.y);
-
 		return {
-			depth,
+			depth: skeleton.depth,
 			draw: () => {
 				const g = new Graphics();
-				const n1u = up(near1);
-				const n2u = up(near2);
-				const f1u = up(far1);
-				const f2u = up(far2);
-				const n1b = downToFoundation(near1);
-				const n2b = downToFoundation(near2);
-				const f1b = downToFoundation(far1);
-				const f2b = downToFoundation(far2);
+
 				const leftFace = [
-					n1b.x,
-					n1b.y,
-					n2b.x,
-					n2b.y,
-					n2u.x,
-					n2u.y,
-					n1u.x,
-					n1u.y,
+					skeleton.nearBase1.x,
+					skeleton.nearBase1.y,
+					skeleton.nearBase2.x,
+					skeleton.nearBase2.y,
+					skeleton.nearTop2.x,
+					skeleton.nearTop2.y,
+					skeleton.nearTop1.x,
+					skeleton.nearTop1.y,
 				];
 				const rightFace = [
-					f1b.x,
-					f1b.y,
-					f2b.x,
-					f2b.y,
-					f2u.x,
-					f2u.y,
-					f1u.x,
-					f1u.y,
+					skeleton.farBase1.x,
+					skeleton.farBase1.y,
+					skeleton.farBase2.x,
+					skeleton.farBase2.y,
+					skeleton.farTop2.x,
+					skeleton.farTop2.y,
+					skeleton.farTop1.x,
+					skeleton.farTop1.y,
 				];
 				const topFace = [
-					n1u.x,
-					n1u.y,
-					f1u.x,
-					f1u.y,
-					f2u.x,
-					f2u.y,
-					n2u.x,
-					n2u.y,
+					skeleton.nearTop1.x,
+					skeleton.nearTop1.y,
+					skeleton.farTop1.x,
+					skeleton.farTop1.y,
+					skeleton.farTop2.x,
+					skeleton.farTop2.y,
+					skeleton.nearTop2.x,
+					skeleton.nearTop2.y,
 				];
+				const foundationLeft = [
+					skeleton.foundationNear1.x,
+					skeleton.foundationNear1.y,
+					skeleton.foundationNear2.x,
+					skeleton.foundationNear2.y,
+					skeleton.nearBase2.x,
+					skeleton.nearBase2.y,
+					skeleton.nearBase1.x,
+					skeleton.nearBase1.y,
+				];
+				const foundationRight = [
+					skeleton.foundationFar1.x,
+					skeleton.foundationFar1.y,
+					skeleton.foundationFar2.x,
+					skeleton.foundationFar2.y,
+					skeleton.farBase2.x,
+					skeleton.farBase2.y,
+					skeleton.farBase1.x,
+					skeleton.farBase1.y,
+				];
+
+				if (skeleton.hasFoundation) {
+					g.poly(foundationLeft);
+					g.fill({ color: style.leftColor, alpha: style.alpha });
+					g.poly(foundationRight);
+					g.fill({ color: style.rightColor, alpha: style.alpha });
+				}
 
 				g.poly(leftFace);
 				g.fill({ color: style.leftColor, alpha: style.alpha });
@@ -594,6 +901,12 @@ export class MapRenderer {
 				g.fill({ color: style.topColor, alpha: style.alpha });
 
 				if (state === "washed") {
+					if (skeleton.hasFoundation) {
+						g.poly(foundationLeft);
+						g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
+						g.poly(foundationRight);
+						g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
+					}
 					g.poly(leftFace);
 					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
 					g.poly(rightFace);
@@ -606,148 +919,54 @@ export class MapRenderer {
 		};
 	}
 
-	private isFiniteElevation(value: number | undefined): value is number {
-		return value !== undefined && Number.isFinite(value);
-	}
-
-	private elevationAt(
-		compiled: RH.CompiledEdgeMap,
-		coord: RH.GridCoord,
-	): number | undefined {
-		return compiled.elevation.get(`${coord.x},${coord.y}`);
-	}
-
-	/**
-	 * Extra neighbouring cells that help determine the "architectural"
-	 * elevation of a wall run.
-	 *
-	 * This is mainly for stair openings:
-	 * the wall visually belongs to the surrounding parapet/run, not just
-	 * to the immediate stair connector tile beside it.
-	 */
-	private supportCoordsForWall(
-		coord: RH.GridCoord,
-		other: RH.GridCoord,
-		dir: "E" | "S",
-	): RH.GridCoord[] {
-		if (dir === "E") {
-			return [
-				{ x: coord.x, y: coord.y - 1 },
-				{ x: other.x, y: other.y - 1 },
-				{ x: coord.x, y: coord.y + 1 },
-				{ x: other.x, y: other.y + 1 },
-			];
-		}
-
-		return [
-			{ x: coord.x - 1, y: coord.y },
-			{ x: other.x - 1, y: other.y },
-			{ x: coord.x + 1, y: coord.y },
-			{ x: other.x + 1, y: other.y },
-		];
-	}
-
-	/**
-	 * Returns:
-	 *
-	 * - wallBaseElevation:
-	 *   the level the wall TOP should align to
-	 *
-	 * - lowestAdjacentElevation:
-	 *   the lowest actual touching surface, so the wall face can extend
-	 *   down to cover sunken stair connector tiles
-	 */
-	private wallElevationsForEdge(
-		coord: RH.GridCoord,
-		other: RH.GridCoord,
-		dir: "E" | "S",
-		compiled: RH.CompiledEdgeMap,
-	): {
-		wallBaseElevation: number;
-		lowestAdjacentElevation: number;
-	} {
-		const coordElevation = this.elevationAt(compiled, coord);
-		const otherElevation = this.elevationAt(compiled, other);
-
-		const directFinite = [coordElevation, otherElevation].filter(
-			(value): value is number => this.isFiniteElevation(value),
-		);
-
-		const directArchitectural = [coordElevation, otherElevation].filter(
-			(value): value is number =>
-				this.isFiniteElevation(value) && !isStairConnectorElevation(value),
-		);
-
-		const supportArchitectural = this.supportCoordsForWall(coord, other, dir)
-			.map((supportCoord) => this.elevationAt(compiled, supportCoord))
-			.filter(
-				(value): value is number =>
-					this.isFiniteElevation(value) && !isStairConnectorElevation(value),
-			);
-
-		/**
-		 * Use the HIGHEST non-stair architectural support around the wall.
-		 *
-		 * This is the key fix for that last stair segment:
-		 * the wall aligns with the surrounding run instead of dropping to
-		 * the immediate floor/connector pair.
-		 */
-		const architecturalPool = [...directArchitectural, ...supportArchitectural];
-
-		const wallBaseElevation =
-			architecturalPool.length > 0
-				? Math.max(...architecturalPool)
-				: directFinite.length > 0
-					? Math.max(...directFinite)
-					: 0;
-
-		const lowestAdjacentElevation =
-			directFinite.length > 0 ? Math.min(...directFinite) : wallBaseElevation;
-
-		return {
-			wallBaseElevation,
-			lowestAdjacentElevation,
-		};
-	}
-
 	private cornerDrawable(
 		screenPos: ScreenPoint,
 		height: number,
+		foundationBottomY: number,
 		washed: boolean,
 		barrier: RH.EdgeBarrier,
 	): Drawable {
 		const style = styleFor(barrier);
 		const { x: cx, y: cy } = screenPos;
+
+		const foundationDrop = Math.max(0, foundationBottomY - cy);
+
 		const top = { x: cx, y: cy - CORNER_HALF_PX };
 		const right = { x: cx + CORNER_HALF_PX, y: cy };
 		const bottom = { x: cx, y: cy + CORNER_HALF_PX };
 		const left = { x: cx - CORNER_HALF_PX, y: cy };
+
+		const lowerRight = { x: right.x, y: right.y + foundationDrop };
+		const lowerBottom = { x: bottom.x, y: bottom.y + foundationDrop };
+		const lowerLeft = { x: left.x, y: left.y + foundationDrop };
+
 		const up = (p: ScreenPoint) => ({ x: p.x, y: p.y - height });
-		const depth = bottom.y + 0.1; // corners draw fractionally after walls at the same depth, so they sit visually on top of the seam they're bridging
+		const depth = lowerBottom.y + 0.1; // corners draw fractionally after walls at the same depth, so they sit visually on top of the seam they're bridging
 
 		return {
 			depth,
 			draw: () => {
 				const g = new Graphics();
-				const topU = up(top),
-					rightU = up(right),
-					bottomU = up(bottom),
-					leftU = up(left);
+				const topU = up(top);
+				const rightU = up(right);
+				const bottomU = up(bottom);
+				const leftU = up(left);
+
 				const leftFace = [
-					left.x,
-					left.y,
-					bottom.x,
-					bottom.y,
+					lowerLeft.x,
+					lowerLeft.y,
+					lowerBottom.x,
+					lowerBottom.y,
 					bottomU.x,
 					bottomU.y,
 					leftU.x,
 					leftU.y,
 				];
 				const rightFace = [
-					bottom.x,
-					bottom.y,
-					right.x,
-					right.y,
+					lowerBottom.x,
+					lowerBottom.y,
+					lowerRight.x,
+					lowerRight.y,
 					rightU.x,
 					rightU.y,
 					bottomU.x,

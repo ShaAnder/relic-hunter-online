@@ -1,5 +1,15 @@
 import { Grid, TileType, type GridCoord } from "../grid";
-import { EdgeBarrier, createEmptyEdgeGrid, setEdgeBetween, type EdgeGrid } from "../edgeGrid";
+import {
+	EdgeBarrier,
+	createEmptyEdgeGrid,
+	setEdgeBetween,
+	type EdgeGrid,
+} from "../edgeGrid";
+import {
+	clampElevationStep,
+	elevationHeightForStep,
+	type ElevationStep,
+} from "./elevation";
 
 /**
  * Tile-level codes for the double-resolution format — deliberately a
@@ -42,57 +52,107 @@ export enum EdgeMapTileCode {
 	 */
 	StairStep = 9,
 	/**
-	 * The actual floor-switch trigger for a staircase - unlike
-	 * StairBottom/StairTop, THIS is what validateMapBundle checks:
-	 * every StairConnector needs a matching StairConnector at the
-	 * identical (x, y) on exactly one neighboring floor (the floor
-	 * below if this is the "lower" copy of the pair, above if this is
-	 * the "upper" copy - see compileMapBundle's elevation pass, which
-	 * uses this same lower/upper distinction to render the two copies
-	 * at different heights so the transition reads as one continuous
-	 * rise across the instant floor-switch).
+	 * Cross-floor staircase trigger.
 	 *
-	 * Deliberately decoupled from StairBottom/StairTop's positions -
-	 * this can sit anywhere along a winding or cornering run of
-	 * StairStep tiles, not necessarily at the midpoint of a straight
-	 * line between the two landings.
+	 * Matching this code at the same logical coordinate on a
+	 * neighbouring floor enables the floor switch.
+	 *
+	 * Connector identity does not imply physical elevation - terrain
+	 * height for a connector tile is authored independently, like
+	 * every other walkable tile (see elevation.ts).
 	 */
 	StairConnector = 10,
+	/**
+	 * Roadway material.
+	 *
+	 * Appended rather than inserted so every existing saved numeric
+	 * tile code keeps its meaning. Defaults to a lower elevation step
+	 * than ordinary ground (see defaultElevationStepForTileCode) so an
+	 * unmodified Road/Pavement boundary produces the intended curb
+	 * relationship without needing to be manually authored.
+	 */
+	Road = 11,
 }
 
-const TILE_ELEVATION: Record<EdgeMapTileCode, number> = {
-	[EdgeMapTileCode.Void]: Infinity,
-	[EdgeMapTileCode.Floor]: 0,
-	[EdgeMapTileCode.Pavement]: 0.1,
-	[EdgeMapTileCode.Nature]: 0,
-	[EdgeMapTileCode.River]: Infinity,
-	[EdgeMapTileCode.StairBottom]: 0,
-	[EdgeMapTileCode.StairTop]: 0,
-	[EdgeMapTileCode.LadderBottom]: 0,
-	[EdgeMapTileCode.LadderTop]: 0,
-	[EdgeMapTileCode.StairStep]: 0,
-	// Default for a single-floor compile with no cross-floor context -
-	// the "lower half of the pair" value. compileMapBundle's elevation
-	// pass overrides this to -0.5 for whichever copy of a matched pair
-	// turns out to be the upper floor - see StairConnector's own doc
-	// comment in the enum above.
-	[EdgeMapTileCode.StairConnector]: 0.5,
-};
+/**
+ * Material defaults only.
+ *
+ * Once a tile has an explicit authored elevation step, changing its
+ * material does not change its height.
+ *
+ * Road defaults lower than ordinary ground so an unmodified
+ * Road/Pavement boundary produces the intended curb relationship.
+ */
+export function defaultElevationStepForTileCode(
+	code: EdgeMapTileCode,
+): ElevationStep {
+	switch (code) {
+		case EdgeMapTileCode.Road:
+			return -2;
+		default:
+			return 0;
+	}
+}
+
+export function isWalkableEdgeTileCode(code: EdgeMapTileCode): boolean {
+	switch (code) {
+		case EdgeMapTileCode.Floor:
+		case EdgeMapTileCode.Pavement:
+		case EdgeMapTileCode.Nature:
+		case EdgeMapTileCode.StairBottom:
+		case EdgeMapTileCode.StairTop:
+		case EdgeMapTileCode.LadderBottom:
+		case EdgeMapTileCode.LadderTop:
+		case EdgeMapTileCode.StairStep:
+		case EdgeMapTileCode.StairConnector:
+		case EdgeMapTileCode.Road:
+			return true;
+		case EdgeMapTileCode.Void:
+		case EdgeMapTileCode.River:
+		default:
+			return false;
+	}
+}
+
+export function isStairTraversalTileCode(
+	code: EdgeMapTileCode | undefined,
+): boolean {
+	return (
+		code === EdgeMapTileCode.StairBottom ||
+		code === EdgeMapTileCode.StairTop ||
+		code === EdgeMapTileCode.StairStep ||
+		code === EdgeMapTileCode.StairConnector
+	);
+}
 
 export interface CompiledEdgeMap {
 	grid: Grid;
 	edges: EdgeGrid;
+	/** Material / structural identity. */
+	tileCodes: Map<string, EdgeMapTileCode>;
+	/** Integer authored elevation truth. */
+	elevationSteps: Map<string, ElevationStep>;
+	/** Resolved physical height used by rendering/entities. */
 	elevation: Map<string, number>;
 }
 
 /**
- * Compiles a double-resolution blueprint into a Grid + EdgeGrid pair.
+ * Compiles a double-resolution blueprint into a Grid + EdgeGrid pair,
+ * plus per-tile material identity and resolved elevation.
+ * elevationOverrides is keyed by logical "x,y" and takes priority over
+ * a tile code's material default (see defaultElevationStepForTileCode)
+ * - this is how an authored map's explicit Raise/Lower painting
+ * overrides what the material alone would produce.
+ *
  * Blueprint dimensions must be (2*width-1) x (2*height-1) for some
  * logical width/height — odd row/column count is what makes "every
  * even index is a tile, every odd index is an edge" work out evenly
  * at the far boundary.
  */
-export function compileEdgeMap(blueprint: number[][]): CompiledEdgeMap {
+export function compileEdgeMap(
+	blueprint: number[][],
+	elevationOverrides: Record<string, number> = {},
+): CompiledEdgeMap {
 	const blueprintHeight = blueprint.length;
 	const blueprintWidth = blueprint[0]?.length ?? 0;
 	const width = (blueprintWidth + 1) / 2;
@@ -106,6 +166,8 @@ export function compileEdgeMap(blueprint: number[][]): CompiledEdgeMap {
 
 	const grid = new Grid(width, height, TileType.Floor);
 	const edges = createEmptyEdgeGrid(width, height);
+	const tileCodes = new Map<string, EdgeMapTileCode>();
+	const elevationSteps = new Map<string, ElevationStep>();
 	const elevation = new Map<string, number>();
 
 	// Tile centers: every (2x, 2y) position.
@@ -113,12 +175,22 @@ export function compileEdgeMap(blueprint: number[][]): CompiledEdgeMap {
 		for (let x = 0; x < width; x++) {
 			const code = blueprint[2 * y][2 * x] as EdgeMapTileCode;
 			const coord: GridCoord = { x, y };
-			const elev = TILE_ELEVATION[code];
-			grid.setTileType(
-				coord,
-				elev < Infinity ? TileType.Floor : TileType.Wall,
+			const key = `${x},${y}`;
+			const walkable = isWalkableEdgeTileCode(code);
+
+			const override = elevationOverrides[key];
+			const step = clampElevationStep(
+				override === undefined
+					? defaultElevationStepForTileCode(code)
+					: override,
 			);
-			elevation.set(`${x},${y}`, elev);
+
+			tileCodes.set(key, code);
+			elevationSteps.set(key, step);
+
+			grid.setTileType(coord, walkable ? TileType.Floor : TileType.Wall);
+
+			elevation.set(key, walkable ? elevationHeightForStep(step) : Infinity);
 		}
 	}
 
@@ -153,5 +225,5 @@ export function compileEdgeMap(blueprint: number[][]): CompiledEdgeMap {
 		}
 	}
 
-	return { grid, edges, elevation };
+	return { grid, edges, tileCodes, elevationSteps, elevation };
 }

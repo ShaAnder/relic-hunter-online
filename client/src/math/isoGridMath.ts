@@ -1,11 +1,5 @@
 import type { GridCoord, StaircaseCluster } from "@relic-hunter/shared";
-import {
-	coordKey,
-	findStaircaseClusterAt,
-	staircaseClimbProgress,
-	CONNECTOR_LOWER_ELEVATION,
-	CONNECTOR_UPPER_ELEVATION,
-} from "@relic-hunter/shared";
+import { coordKey } from "@relic-hunter/shared";
 
 /**
  * ISO Projection math - converts between our grid coords / tile pixel space
@@ -49,50 +43,26 @@ export function gridToScreenElevated(
 		return base;
 	}
 
-	/**
-	 * StairConnector elevation is a MAP-rendering effect.
-	 *
-	 * The same logical connector has opposite elevation values on the
-	 * two floors (+0.2 below, -0.2 above). Using those values for an
-	 * entity means switching floor at the exact same (x,y) position
-	 * suddenly moves the sprite vertically.
-	 *
-	 * Keep the stair TILE raised/sunken in MapRenderer, but keep an
-	 * entity standing on the connector at the neutral shared position.
-	 */
-	const entityElevation =
-		value === CONNECTOR_LOWER_ELEVATION || value === CONNECTOR_UPPER_ELEVATION
-			? 0
-			: value;
-
 	return {
 		x: base.x,
-		y: base.y - entityElevation * ELEVATION_PX_PER_UNIT,
+		y: base.y - value * ELEVATION_PX_PER_UNIT,
 	};
 }
 
-/** How far an entity visually rises over the full length of a staircase, in the same px-per-elevation-unit terms as ELEVATION_PX_PER_UNIT. Deliberately larger than a single elevation unit: for a horizontal (left-to-right) staircase, each step right also moves the tile ~TILE_HEIGHT/2 px *down* on screen from the isometric projection itself, which very nearly cancels a same-sized climb rise and made the effect invisible in practice at ELEVATION_PX_PER_UNIT. Doubled so the net rise stays clearly visible on any orientation. */
-export const STAIRCASE_CLIMB_PX = ELEVATION_PX_PER_UNIT * 2;
-
 /**
- * Same as gridToScreenElevated, but also layers a staircase's own
- * progressive climb on top when coord sits on one — an entity partway
- * up a staircase rises smoothly toward STAIRCASE_CLIMB_PX by the top
- * tile, on top of whatever elevation that specific tile already has.
- * Omitting clusters, or a coord that isn't part of any cluster, both
- * fall back to plain gridToScreenElevated.
+ * Compatibility entry point for Mercenary.
+ *
+ * Stair height is now authored directly into terrain elevation - a
+ * connector's height is just its own elevation, the same as any other
+ * tile, so there's no separate hidden climb offset to layer on top
+ * anymore.
  */
 export function gridToScreenElevatedWithClimb(
 	coord: GridCoord,
 	elevation: Map<string, number> | undefined,
-	clusters: StaircaseCluster[] | undefined,
+	_clusters: StaircaseCluster[] | undefined,
 ): { x: number; y: number } {
-	const base = gridToScreenElevated(coord, elevation);
-	if (!clusters || clusters.length === 0) return base;
-	const cluster = findStaircaseClusterAt(clusters, coord);
-	if (!cluster) return base;
-	const progress = staircaseClimbProgress(cluster, coord);
-	return { x: base.x, y: base.y - progress * STAIRCASE_CLIMB_PX };
+	return gridToScreenElevated(coord, elevation);
 }
 
 // Inverse of gridToScreen. Takes board-LOCAL coordinates — the caller is responsible

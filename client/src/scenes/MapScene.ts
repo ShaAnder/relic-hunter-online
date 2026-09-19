@@ -55,7 +55,6 @@ import type {
 	TutorialCombatGuide,
 } from "@/tutorial/tutorialPort";
 import type { DialogueLine } from "@/tutorial/dialogue";
-import { fillForTileCode } from "@/rendering/tileFills";
 
 /**
  * Tactical map scene — grid, mercenary, AP turns, cards, chests, win condition.
@@ -346,7 +345,6 @@ export class MapScene implements Scene, TutorialPort {
 			lowerFloor,
 			null,
 			null,
-			this.tileFillsForFloor(lowerFloorIndex),
 			true,
 			MapScene.LOWER_FLOOR_WALL_HEIGHT_SCALE,
 		);
@@ -356,15 +354,19 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	private rebuildMapRenderWithFog(liveCoordOverride?: RH.GridCoord): void {
-		const compiled: RH.CompiledEdgeMap = {
+		const viewedFloor = this.game.session.viewedFloor;
+
+		const compiled: RH.CompiledEdgeMap = this.game.session.mapFloors?.[
+			viewedFloor
+		] ?? {
 			grid: this.grid,
 			edges:
 				this.game.session.mapEdges ??
 				RH.createEmptyEdgeGrid(this.grid.width, this.grid.height),
+			tileCodes: new Map(),
+			elevationSteps: new Map(),
 			elevation: this.game.session.mapElevation ?? new Map(),
 		};
-
-		const viewedFloor = this.game.session.viewedFloor;
 
 		// Keep the floor immediately beneath an upper floor visible as
 		// muted structural context.
@@ -430,47 +432,7 @@ export class MapScene implements Scene, TutorialPort {
 					}
 				: null;
 
-		this.mapRenderer.build(
-			compiled,
-			focus,
-			fog,
-			this.tileFillsForCurrentFloor(),
-		);
-	}
-
-	private cachedTileFills: {
-		floorIndex: number;
-		fills: Map<string, number>;
-	} | null = null;
-
-	private tileFillsForFloor(floorIndex: number): Map<string, number> {
-		if (this.cachedTileFills?.floorIndex === floorIndex) {
-			return this.cachedTileFills.fills;
-		}
-
-		const fills = new Map<string, number>();
-		const bundle = this.game.session.mapBundle;
-		if (!bundle) return fills;
-
-		const floor = bundle.floors[floorIndex];
-		if (!floor) return fills;
-
-		const height = (floor.length + 1) / 2;
-		const width = ((floor[0]?.length ?? 1) + 1) / 2;
-
-		for (let y = 0; y < height; y++) {
-			for (let x = 0; x < width; x++) {
-				const color = fillForTileCode(floor[2 * y]?.[2 * x]);
-				if (color !== undefined) fills.set(`${x},${y}`, color);
-			}
-		}
-
-		this.cachedTileFills = { floorIndex, fills };
-		return fills;
-	}
-
-	private tileFillsForCurrentFloor(): Map<string, number> {
-		return this.tileFillsForFloor(this.game.session.viewedFloor);
+		this.mapRenderer.build(compiled, focus, fog);
 	}
 
 	/**
@@ -705,6 +667,7 @@ export class MapScene implements Scene, TutorialPort {
 			this.tutorialMarkers.spawnStaticActors(
 				this.tutorialConfig.script.staticActors,
 				this.mercenaryContainer,
+				this.game.session.mapElevation ?? undefined,
 			);
 		}
 		this.matchController = new MatchController(this.game);
@@ -1866,6 +1829,7 @@ export class MapScene implements Scene, TutorialPort {
 		this.game.app.canvas.style.cursor = "crosshair";
 		this.targetingVisuals.showRange(
 			this.adjacentTiles(this.localUnit.state.coord),
+			this.game.session.mapElevation ?? undefined,
 		);
 	}
 
@@ -2456,6 +2420,7 @@ export class MapScene implements Scene, TutorialPort {
 			destination,
 			this.grid,
 			durationMs,
+			this.game.session.mapElevation ?? undefined,
 		);
 	}
 
@@ -2570,7 +2535,10 @@ export class MapScene implements Scene, TutorialPort {
 	 * only, never enforced — the player can still move anywhere.
 	 */
 	showTutorialTarget(coord: RH.GridCoord): void {
-		this.tutorialMarkers.showTarget(coord);
+		this.tutorialMarkers.showTarget(
+			coord,
+			this.game.session.mapElevation ?? undefined,
+		);
 	}
 
 	hideTutorialTarget(): void {
@@ -2976,7 +2944,6 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.game.session.generatedGrid = null;
 		this.cachedRooms = null;
-		this.cachedTileFills = null;
 		this.grid = this.buildMap();
 
 		this.applyCameraBounds();
@@ -3032,7 +2999,14 @@ export class MapScene implements Scene, TutorialPort {
 
 	/** Convert canvas-local screen coordinates to a grid tile. */
 	private screenPointToGrid(screenX: number, screenY: number): RH.GridCoord {
-		return screenPointToGridUtil(this.boardContainer, screenX, screenY);
+		return screenPointToGridUtil(
+			this.boardContainer,
+			screenX,
+			screenY,
+			this.game.session.mapElevation ?? undefined,
+			this.grid.width,
+			this.grid.height,
+		);
 	}
 
 	/**
@@ -3068,7 +3042,7 @@ export class MapScene implements Scene, TutorialPort {
 		this.game.session.mapFloors = [compiled];
 		this.game.session.mapBundle = {
 			name: "Alleyways",
-			floors: [RH.ALLEYWAYS_EDGE_BLUEPRINT],
+			floors: [{ blueprint: RH.ALLEYWAYS_EDGE_BLUEPRINT, elevationSteps: {} }],
 			groundFloorIndex: 0,
 		};
 		this.game.session.mapGroundFloorIndex = 0;

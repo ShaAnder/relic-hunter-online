@@ -1,37 +1,39 @@
 import {
 	compileEdgeMap,
 	EdgeMapTileCode,
+	defaultElevationStepForTileCode,
+	isStairTraversalTileCode,
 	type CompiledEdgeMap,
 } from "./edgeMapCompiler";
 import { ALLEYWAYS_EDGE_BLUEPRINT } from "./alleywaysEdgeBlueprint";
+import { clampElevationStep, MAX_STAIR_EDGE_DELTA_STEPS } from "./elevation";
 
 /**
- * Elevation a StairConnector renders at once we know which side of a
- * matched pair it's on — the lower floor's copy rises up out of its
- * own ground level, the upper floor's copy sits sunken into its own,
- * so the two read as one continuous rise across the instant
- * floor-switch. See StairConnector's own doc comment in
- * EdgeMapTileCode for the full rationale.
- */
-/**
- * Elevation a StairConnector renders at once we know which side of a
- * matched pair it's on - the lower floor's copy rises up out of its
- * own ground level, the upper floor's copy sits sunken into its own,
- * so the two read as one continuous rise across the instant
- * floor-switch. See StairConnector's own doc comment in
- * EdgeMapTileCode for the full rationale.
+ * One floor's material/structure plus its authored elevation data,
+ * as a single object rather than two separately-indexed arrays -
+ * a floor and its elevation data physically cannot drift to
+ * different array indices when they're the same object.
  *
- * Deliberately modest (0.2, not the original 0.5) - a wall bordering
- * this tile is intentionally kept level rather than tilting with it
- * (see MapRenderer's touchesStairConnector handling), so too large an
- * offset here creates a real, visible gap between the tile's own
- * sunken/raised edge and the wall's level base right next to it.
- * Roughly double Pavement's own 0.1 offset, which is known to read
- * cleanly without a seam - enough to visually register as a step,
- * not enough to separate from the geometry around it.
+ * elevationSteps is unused as of Stage A (Stage B gives it physical
+ * meaning) but lives here now so Stage B never has to touch the data
+ * shape again.
  */
-export const CONNECTOR_LOWER_ELEVATION = 0.2;
-export const CONNECTOR_UPPER_ELEVATION = -0.2;
+export interface MapFloorDefinition {
+	/**
+	 * Existing double-resolution map blueprint:
+	 *
+	 * even/even = tile
+	 * odd/even or even/odd = edge
+	 * odd/odd = unused
+	 */
+	blueprint: number[][];
+
+	/**
+	 * Explicit authored terrain elevation steps keyed by logical
+	 * coordinate ("x,y"). Empty during Stage A.
+	 */
+	elevationSteps: Record<string, number>;
+}
 
 /**
  * All floors of one map, bundled together. Every map is this shape
@@ -50,8 +52,103 @@ export const CONNECTOR_UPPER_ELEVATION = -0.2;
  */
 export interface MapBundle {
 	name: string;
-	floors: number[][][]; // each entry is one floor's double-resolution blueprint
+	/**
+	 * Blueprint + elevation are one object per floor so they cannot
+	 * drift into separate array indices.
+	 */
+	floors: MapFloorDefinition[];
 	groundFloorIndex: number;
+}
+
+function isBlueprint(value: unknown): value is number[][] {
+	return (
+		Array.isArray(value) &&
+		value.every(
+			(row) =>
+				Array.isArray(row) &&
+				row.every((cell) => typeof cell === "number" && Number.isFinite(cell)),
+		)
+	);
+}
+
+function isElevationStepRecord(
+	value: unknown,
+): value is Record<string, number> {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		Object.values(value as Record<string, unknown>).every(
+			(step) => typeof step === "number" && Number.isFinite(step),
+		)
+	);
+}
+
+/**
+ * Reads both the OLD map shape (floors: number[][][]) and the NEW
+ * one (floors: MapFloorDefinition[]) and always returns the new
+ * canonical shape. Every caller loading a bundle from storage should
+ * go through this rather than trusting the raw parsed JSON's shape.
+ */
+export function normalizeMapBundle(value: unknown): MapBundle | null {
+	if (typeof value !== "object" || value === null) return null;
+
+	const candidate = value as Record<string, unknown>;
+
+	if (
+		typeof candidate.name !== "string" ||
+		!Array.isArray(candidate.floors) ||
+		candidate.floors.length === 0 ||
+		typeof candidate.groundFloorIndex !== "number" ||
+		!Number.isInteger(candidate.groundFloorIndex)
+	) {
+		return null;
+	}
+
+	const floors: MapFloorDefinition[] = [];
+
+	for (const rawFloor of candidate.floors) {
+		// Legacy floor: a bare blueprint array.
+		if (isBlueprint(rawFloor)) {
+			floors.push({ blueprint: rawFloor, elevationSteps: {} });
+			continue;
+		}
+
+		if (
+			typeof rawFloor !== "object" ||
+			rawFloor === null ||
+			Array.isArray(rawFloor)
+		) {
+			return null;
+		}
+
+		const floorObject = rawFloor as Record<string, unknown>;
+
+		if (!isBlueprint(floorObject.blueprint)) return null;
+
+		const rawSteps = floorObject.elevationSteps;
+		if (rawSteps !== undefined && !isElevationStepRecord(rawSteps)) {
+			return null;
+		}
+
+		floors.push({
+			blueprint: floorObject.blueprint,
+			elevationSteps: rawSteps === undefined ? {} : rawSteps,
+		});
+	}
+
+	if (
+		candidate.groundFloorIndex < 0 ||
+		candidate.groundFloorIndex >= floors.length
+	) {
+		return null;
+	}
+
+	return {
+		name: candidate.name,
+		floors,
+		groundFloorIndex: candidate.groundFloorIndex,
+	};
 }
 
 /** One problem the validator found — always names the exact floor and, where relevant, the exact tile, since "something's wrong somewhere" isn't actionable and "Floor 2 (14, 8)" is. */
@@ -84,6 +181,34 @@ function logicalWidth(floorBlueprint: number[][]): number {
 
 function logicalHeight(floorBlueprint: number[][]): number {
 	return (floorBlueprint.length + 1) / 2;
+}
+
+/** Reads a floor's blueprint out of the bundle at floorIndex, or undefined if that index doesn't exist. */
+function blueprintAt(
+	bundle: MapBundle,
+	floorIndex: number,
+): number[][] | undefined {
+	return bundle.floors[floorIndex]?.blueprint;
+}
+
+/** The authored elevation step at a logical coordinate on one floor - the explicit override if one was painted, otherwise the tile's material default. */
+function elevationStepAt(
+	bundle: MapBundle,
+	floorIndex: number,
+	x: number,
+	y: number,
+): number {
+	const floor = bundle.floors[floorIndex];
+	if (!floor) return 0;
+
+	const code = tileCodeAt(floor.blueprint, x, y);
+	if (code === null) return 0;
+
+	const override = floor.elevationSteps[`${x},${y}`];
+
+	return override === undefined
+		? defaultElevationStepForTileCode(code as EdgeMapTileCode)
+		: clampElevationStep(override);
 }
 
 /**
@@ -132,7 +257,7 @@ export function validateMapBundle(bundle: MapBundle): ValidationResult {
 	const floorConnectedDown = bundle.floors.map(() => false);
 
 	for (let floorIndex = 0; floorIndex < bundle.floors.length; floorIndex++) {
-		const floor = bundle.floors[floorIndex];
+		const floor = bundle.floors[floorIndex].blueprint;
 		const width = logicalWidth(floor);
 		const height = logicalHeight(floor);
 
@@ -141,9 +266,51 @@ export function validateMapBundle(bundle: MapBundle): ValidationResult {
 				const code = tileCodeAt(floor, x, y);
 				if (code === null) continue;
 
+				const typedCode = code as EdgeMapTileCode;
+				if (isStairTraversalTileCode(typedCode)) {
+					const hereStep = elevationStepAt(bundle, floorIndex, x, y);
+
+					// East and south only so every pair gets validated once.
+					const neighbours = [
+						{ x: x + 1, y },
+						{ x, y: y + 1 },
+					];
+
+					for (const neighbour of neighbours) {
+						const neighbourCode = tileCodeAt(floor, neighbour.x, neighbour.y);
+
+						if (
+							neighbourCode === null ||
+							!isStairTraversalTileCode(neighbourCode as EdgeMapTileCode)
+						) {
+							continue;
+						}
+
+						const neighbourStep = elevationStepAt(
+							bundle,
+							floorIndex,
+							neighbour.x,
+							neighbour.y,
+						);
+
+						if (
+							Math.abs(neighbourStep - hereStep) > MAX_STAIR_EDGE_DELTA_STEPS
+						) {
+							issues.push({
+								message:
+									`Stair tiles at (${x}, ${y}) and ` +
+									`(${neighbour.x}, ${neighbour.y}) jump more than ` +
+									`${MAX_STAIR_EDGE_DELTA_STEPS} elevation step.`,
+								floorIndex,
+								coord: { x, y },
+							});
+						}
+					}
+				}
+
 				if (code === EdgeMapTileCode.StairConnector) {
-					const below = bundle.floors[floorIndex - 1];
-					const above = bundle.floors[floorIndex + 1];
+					const below = blueprintAt(bundle, floorIndex - 1);
+					const above = blueprintAt(bundle, floorIndex + 1);
 					const matchesBelow =
 						below !== undefined &&
 						tileCodeAt(below, x, y) === EdgeMapTileCode.StairConnector;
@@ -176,7 +343,7 @@ export function validateMapBundle(bundle: MapBundle): ValidationResult {
 				) {
 					const isBottom = code === EdgeMapTileCode.LadderBottom;
 					const neighborFloorIndex = isBottom ? floorIndex + 1 : floorIndex - 1;
-					const neighborFloor = bundle.floors[neighborFloorIndex];
+					const neighborFloor = blueprintAt(bundle, neighborFloorIndex);
 					const expectedMatch = isBottom
 						? EdgeMapTileCode.LadderTop
 						: EdgeMapTileCode.LadderBottom;
@@ -246,46 +413,21 @@ export function validateMapBundle(bundle: MapBundle): ValidationResult {
  * this prioritizes the "connects up" (lower-side) elevation for it
  * rather than trying to render both simultaneously, which the
  * instant-floor-switch model has no way to represent anyway.
+ *
+ * Stage A of the elevation rebuild: this behavior is kept completely
+ * intact, only reading through .blueprint now.
+ */
+/**
+ * Compiles every floor of a bundle. Elevation is authored directly
+ * per-tile now (floor.elevationSteps), so there's no cross-floor
+ * connector height adjustment pass to do here anymore - a
+ * StairConnector's elevation is whatever was actually painted for it,
+ * same as any other tile.
  */
 export function compileMapBundle(bundle: MapBundle): CompiledEdgeMap[] {
-	const compiledFloors = bundle.floors.map((blueprint) =>
-		compileEdgeMap(blueprint),
+	return bundle.floors.map((floor) =>
+		compileEdgeMap(floor.blueprint, floor.elevationSteps),
 	);
-
-	for (let floorIndex = 0; floorIndex < bundle.floors.length; floorIndex++) {
-		const floor = bundle.floors[floorIndex];
-		const compiled = compiledFloors[floorIndex];
-		const below = bundle.floors[floorIndex - 1];
-		const width = logicalWidth(floor);
-		const height = logicalHeight(floor);
-
-		for (let y = 0; y < height; y++) {
-			for (let x = 0; x < width; x++) {
-				if (tileCodeAt(floor, x, y) !== EdgeMapTileCode.StairConnector)
-					continue;
-
-				const matchesBelow =
-					below !== undefined &&
-					tileCodeAt(below, x, y) === EdgeMapTileCode.StairConnector;
-				const above = bundle.floors[floorIndex + 1];
-				const matchesAbove =
-					above !== undefined &&
-					tileCodeAt(above, x, y) === EdgeMapTileCode.StairConnector;
-
-				// Matches below only -> this is the UPPER side of that
-				// pair, sunken. Matches above (or both, or neither valid
-				// match) -> keep the default lower-side elevation that
-				// compileEdgeMap already assigned.
-				if (matchesBelow && !matchesAbove) {
-					compiled.elevation.set(`${x},${y}`, CONNECTOR_UPPER_ELEVATION);
-				} else if (matchesAbove) {
-					compiled.elevation.set(`${x},${y}`, CONNECTOR_LOWER_ELEVATION);
-				}
-			}
-		}
-	}
-
-	return compiledFloors;
 }
 
 export function tileCodeAtLogical(
@@ -307,14 +449,14 @@ export function resolveFloorTransition(
 	x: number,
 	y: number,
 ): number | null {
-	const floor = bundle.floors[fromFloor];
+	const floor = blueprintAt(bundle, fromFloor);
 	if (!floor) return null;
 	const code = tileCodeAt(floor, x, y);
 	if (code === null) return null;
 
 	if (code === EdgeMapTileCode.StairConnector) {
-		const below = bundle.floors[fromFloor - 1];
-		const above = bundle.floors[fromFloor + 1];
+		const below = blueprintAt(bundle, fromFloor - 1);
+		const above = blueprintAt(bundle, fromFloor + 1);
 		const matchesBelow =
 			below !== undefined &&
 			tileCodeAt(below, x, y) === EdgeMapTileCode.StairConnector;
@@ -327,7 +469,7 @@ export function resolveFloorTransition(
 	}
 
 	if (code === EdgeMapTileCode.LadderBottom) {
-		const above = bundle.floors[fromFloor + 1];
+		const above = blueprintAt(bundle, fromFloor + 1);
 		if (above && tileCodeAt(above, x, y) === EdgeMapTileCode.LadderTop) {
 			return fromFloor + 1;
 		}
@@ -335,7 +477,7 @@ export function resolveFloorTransition(
 	}
 
 	if (code === EdgeMapTileCode.LadderTop) {
-		const below = bundle.floors[fromFloor - 1];
+		const below = blueprintAt(bundle, fromFloor - 1);
 		if (below && tileCodeAt(below, x, y) === EdgeMapTileCode.LadderBottom) {
 			return fromFloor - 1;
 		}
@@ -348,7 +490,7 @@ export function resolveFloorTransition(
 export function officialAlleywaysBundle(): MapBundle {
 	return {
 		name: "Alleyways",
-		floors: [ALLEYWAYS_EDGE_BLUEPRINT],
+		floors: [{ blueprint: ALLEYWAYS_EDGE_BLUEPRINT, elevationSteps: {} }],
 		groundFloorIndex: 0,
 	};
 }
@@ -370,7 +512,7 @@ export function resolveFloorTransitionToward(
 ): number | null {
 	if (towardFloor === fromFloor) return null;
 
-	const floor = bundle.floors[fromFloor];
+	const floor = blueprintAt(bundle, fromFloor);
 	if (!floor) return null;
 
 	const code = tileCodeAt(floor, x, y);
@@ -379,7 +521,7 @@ export function resolveFloorTransitionToward(
 	const goingUp = towardFloor > fromFloor;
 	const nextFloor = goingUp ? fromFloor + 1 : fromFloor - 1;
 
-	const neighbor = bundle.floors[nextFloor];
+	const neighbor = blueprintAt(bundle, nextFloor);
 	if (!neighbor) return null;
 
 	if (code === EdgeMapTileCode.StairConnector) {
@@ -422,7 +564,7 @@ export function findConnectorsTowardFloor(
 ): { x: number; y: number }[] {
 	if (towardFloor === fromFloor) return [];
 
-	const floor = bundle.floors[fromFloor];
+	const floor = blueprintAt(bundle, fromFloor);
 	if (!floor) return [];
 
 	const width = logicalWidth(floor);

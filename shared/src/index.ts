@@ -28,6 +28,6 @@ export * from "./world/maps/edgeMapCompiler";
 export * from "./world/maps/mapBundle";
 export * from "./world/maps/rooms";
 export * from "./world/maps/custom";
-
+export * from "./world/maps/wallTopology";
 export * from "./world/movement";
 export * from "./world/placement";
