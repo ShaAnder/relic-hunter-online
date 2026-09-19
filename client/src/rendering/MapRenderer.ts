@@ -398,7 +398,7 @@ export class MapRenderer {
 		 * Keep connector tiles at their true footprint.
 		 */
 		const tileOversize = isStairConnectorElevation(elevation)
-			? 1
+			? 0.985
 			: TILE_OVERSIZE;
 
 		const hw = (TILE_WIDTH / 2) * tileOversize;
@@ -501,74 +501,8 @@ export class MapRenderer {
 			? baseHeight * FOCUSED_WALL_HEIGHT_FRACTION
 			: baseHeight;
 
-		// Elevation is used purely to position the wall visually at the
-		// correct height on screen - it should reflect real, walkable
-		// ground, not whichever cell happened to be "coord" for this
-		// loop iteration. Void's elevation is Infinity (see
-		// edgeMapCompiler's TILE_ELEVATION), and "coord" is always the
-		// west/north cell of the pair - for any wall sitting on the
-		// map's outermost boundary, that's exactly the void side. An
-		// Infinite elevationPx collapsed every corner of the wall to
-		// y=-Infinity, silently drawing it off-screen with no error -
-		// not hidden by any visibility check, just geometrically
-		// broken. Falls back to "other"'s elevation, and to 0 (floor
-		// height) only if genuinely neither side has finite elevation.
-		const coordElevation = compiled.elevation.get(`${coord.x},${coord.y}`);
-
-		const otherElevation = compiled.elevation.get(`${other.x},${other.y}`);
-
-		const coordIsConnector = isStairConnectorElevation(coordElevation);
-
-		const otherIsConnector = isStairConnectorElevation(otherElevation);
-
-		const isFiniteElevation = (value: number | undefined): value is number =>
-			value !== undefined && Number.isFinite(value);
-
-		/**
-		 * A wall has TWO related vertical measurements:
-		 *
-		 * 1. wallBaseElevation
-		 *    The architectural level the wall belongs to - always the
-		 *    HIGHEST real architectural surface touching it. This is
-		 *    what fixes the 0/0.1 (Floor/Pavement) inconsistency: the
-		 *    wall now always uses 0.1, not whichever side happened to
-		 *    be "coord" for this particular loop iteration.
-		 *
-		 * 2. lowestAdjacentElevation
-		 *    The lowest actual surface touching that edge, StairConnector
-		 *    included. Used only to decide how far the wall's visible
-		 *    FACE extends downward, never to move the wall's own top -
-		 *    a whole run of walls stays level even next to a sunken
-		 *    stair tile.
-		 *
-		 * StairConnector elevation is deliberately excluded when
-		 * choosing the architectural base - it's a stair-surface
-		 * effect, not a different level for the surrounding wall.
-		 */
-		const finiteElevations = [coordElevation, otherElevation].filter(
-			(value): value is number => isFiniteElevation(value),
-		);
-
-		const architecturalElevations = [
-			!coordIsConnector && isFiniteElevation(coordElevation)
-				? coordElevation
-				: null,
-			!otherIsConnector && isFiniteElevation(otherElevation)
-				? otherElevation
-				: null,
-		].filter((value): value is number => value !== null);
-
-		const wallBaseElevation =
-			architecturalElevations.length > 0
-				? Math.max(...architecturalElevations)
-				: finiteElevations.length > 0
-					? Math.max(...finiteElevations)
-					: 0;
-
-		const lowestAdjacentElevation =
-			finiteElevations.length > 0
-				? Math.min(...finiteElevations)
-				: wallBaseElevation;
+		const { wallBaseElevation, lowestAdjacentElevation } =
+			this.wallElevationsForEdge(coord, other, dir, compiled);
 
 		/**
 		 * Extra face below the architectural wall base - e.g. wall base
@@ -669,6 +603,110 @@ export class MapRenderer {
 				}
 				return g;
 			},
+		};
+	}
+
+	private isFiniteElevation(value: number | undefined): value is number {
+		return value !== undefined && Number.isFinite(value);
+	}
+
+	private elevationAt(
+		compiled: RH.CompiledEdgeMap,
+		coord: RH.GridCoord,
+	): number | undefined {
+		return compiled.elevation.get(`${coord.x},${coord.y}`);
+	}
+
+	/**
+	 * Extra neighbouring cells that help determine the "architectural"
+	 * elevation of a wall run.
+	 *
+	 * This is mainly for stair openings:
+	 * the wall visually belongs to the surrounding parapet/run, not just
+	 * to the immediate stair connector tile beside it.
+	 */
+	private supportCoordsForWall(
+		coord: RH.GridCoord,
+		other: RH.GridCoord,
+		dir: "E" | "S",
+	): RH.GridCoord[] {
+		if (dir === "E") {
+			return [
+				{ x: coord.x, y: coord.y - 1 },
+				{ x: other.x, y: other.y - 1 },
+				{ x: coord.x, y: coord.y + 1 },
+				{ x: other.x, y: other.y + 1 },
+			];
+		}
+
+		return [
+			{ x: coord.x - 1, y: coord.y },
+			{ x: other.x - 1, y: other.y },
+			{ x: coord.x + 1, y: coord.y },
+			{ x: other.x + 1, y: other.y },
+		];
+	}
+
+	/**
+	 * Returns:
+	 *
+	 * - wallBaseElevation:
+	 *   the level the wall TOP should align to
+	 *
+	 * - lowestAdjacentElevation:
+	 *   the lowest actual touching surface, so the wall face can extend
+	 *   down to cover sunken stair connector tiles
+	 */
+	private wallElevationsForEdge(
+		coord: RH.GridCoord,
+		other: RH.GridCoord,
+		dir: "E" | "S",
+		compiled: RH.CompiledEdgeMap,
+	): {
+		wallBaseElevation: number;
+		lowestAdjacentElevation: number;
+	} {
+		const coordElevation = this.elevationAt(compiled, coord);
+		const otherElevation = this.elevationAt(compiled, other);
+
+		const directFinite = [coordElevation, otherElevation].filter(
+			(value): value is number => this.isFiniteElevation(value),
+		);
+
+		const directArchitectural = [coordElevation, otherElevation].filter(
+			(value): value is number =>
+				this.isFiniteElevation(value) && !isStairConnectorElevation(value),
+		);
+
+		const supportArchitectural = this.supportCoordsForWall(coord, other, dir)
+			.map((supportCoord) => this.elevationAt(compiled, supportCoord))
+			.filter(
+				(value): value is number =>
+					this.isFiniteElevation(value) && !isStairConnectorElevation(value),
+			);
+
+		/**
+		 * Use the HIGHEST non-stair architectural support around the wall.
+		 *
+		 * This is the key fix for that last stair segment:
+		 * the wall aligns with the surrounding run instead of dropping to
+		 * the immediate floor/connector pair.
+		 */
+		const architecturalPool = [...directArchitectural, ...supportArchitectural];
+
+		const wallBaseElevation =
+			architecturalPool.length > 0
+				? Math.max(...architecturalPool)
+				: directFinite.length > 0
+					? Math.max(...directFinite)
+					: 0;
+
+		const lowestAdjacentElevation =
+			directFinite.length > 0 ? Math.min(...directFinite) : wallBaseElevation;
+
+		return {
+			wallBaseElevation,
+			lowestAdjacentElevation,
 		};
 	}
 
