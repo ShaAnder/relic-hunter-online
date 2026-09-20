@@ -11,10 +11,23 @@ import { fillForTileCode } from "./tileFills";
 const GAP_PX = 7;
 /** How much larger than its true footprint each tile is drawn — just enough that two neighboring tiles' edges overlap slightly into the gap, so an edge with no wall on it reads as one continuous floor rather than a visible seam. */
 const TILE_OVERSIZE = 1.09;
-/** Wall piece half-thickness, sized to exactly fill the gap it sits in — no more, so it never eats into either tile's own walkable-looking footprint beyond what the gap already accounts for. */
-const WALL_THICKNESS_PX = GAP_PX;
-/** Corner piece half-size — matched exactly to wall thickness so a corner connects to any wall meeting it with zero visible gap. */
-const CORNER_HALF_PX = WALL_THICKNESS_PX;
+/**
+ * Solid barriers still occupy the full authored edge gap.
+ *
+ * Fence/glass panels are intentionally much thinner: their visual
+ * weight comes from the connector/post, not from a fat wall prism.
+ */
+const SOLID_BARRIER_THICKNESS_PX = GAP_PX;
+const PANEL_BARRIER_THICKNESS_PX = 1.5;
+/**
+ * Connector size is independent from segment thickness.
+ *
+ * A masonry wall connector remains full-width while fence/glass use
+ * narrow posts/mullions.
+ */
+const SOLID_CONNECTOR_HALF_PX = SOLID_BARRIER_THICKNESS_PX;
+const POST_CONNECTOR_HALF_PX = 3;
+const MULLION_CONNECTOR_HALF_PX = 2.5;
 const WALL_HEIGHT_PX = TILE_HEIGHT;
 /** Doors are drawn shorter than a full wall so they read as an opening rather than a barrier, even before any door-swing animation exists. */
 const DOOR_HEIGHT_FRACTION = 0.3;
@@ -22,26 +35,13 @@ const DOOR_HEIGHT_FRACTION = 0.3;
 const LOW_WALL_HEIGHT_FRACTION = 0.45;
 /** How short a room's own boundary walls become once the player is standing inside that room — tall enough to still read as "there's a wall here" (the outline), short enough not to block the view of the interior or the character standing in it. Visual only: the wall's actual logical height/blocking never changes, only how tall this specific drawing of it is. */
 const FOCUSED_WALL_HEIGHT_FRACTION = 0.2;
-/** Glass panels render partly see-through, matching their "full height, but transparent" design. */
-const GLASS_ALPHA = 0.55;
 
 /**
  * The "not what you're currently looking at" wash — used for BOTH
  * room-focus (dimming every room except the one you're standing in)
  * and fog-of-war's "explored but not currently visible" tier. Same
  * technique, same strength, deliberately: they're the same idea
- * (something real, just not your current focus) and giving them
- * different intensities would need every piece of the map to track
- * WHY it's washed, not just THAT it is — real complexity for a
- * difference nobody asked for. Layered as a second, dark-tinted copy
- * of the same shape drawn on top of the normal (always full-opacity,
- * full-color) one — not as alpha on the object's own color. Blending
- * a shape's own color toward transparency shifts its apparent hue
- * depending on whatever renders behind it, and adjacent oversized
- * tiles overlapping slightly at their shared seam compounds that
- * differently than the rest of the tile — together these produce a
- * visible "colors flipping" artifact at washed tile seams when this
- * is done as a plain g.alpha assignment instead.
+ * (something real, just not your current focus)
  */
 const WASH_COLOR = 0x14141e;
 const WASH_ALPHA = 0.72;
@@ -70,9 +70,23 @@ const FENCE_TOP_COLOR = 0x4a5c3c;
 const FENCE_LEFT_FACE_COLOR = 0x323f28;
 const FENCE_RIGHT_FACE_COLOR = 0x3d4c32;
 
+/**
+ * Fence panel is intentionally subdued/transparent.
+ * The opaque metal post is what makes the structure read clearly.
+ */
+const FENCE_PANEL_ALPHA = 0.3;
+const FENCE_POST_TOP_COLOR = 0x8b949b;
+const FENCE_POST_LEFT_COLOR = 0x596168;
+const FENCE_POST_RIGHT_COLOR = 0x6c757c;
+
 const GLASS_TOP_COLOR = 0x7d94a0;
 const GLASS_LEFT_FACE_COLOR = 0x56666f;
 const GLASS_RIGHT_FACE_COLOR = 0x687d87;
+
+const GLASS_PANEL_ALPHA = 0.32;
+const GLASS_MULLION_TOP_COLOR = 0x9aa6ad;
+const GLASS_MULLION_LEFT_COLOR = 0x636d73;
+const GLASS_MULLION_RIGHT_COLOR = 0x778289;
 
 const LOW_WALL_TOP_COLOR = 0x5c5648;
 const LOW_WALL_LEFT_FACE_COLOR = 0x3e3a30;
@@ -94,50 +108,97 @@ interface MapMaterialRenderContext {
 	floorIndex: number;
 }
 
-/** Per-barrier-type visual info, looked up once per wall/corner piece instead of a growing chain of isDoor/isFence/isGlass/isLowWall ternaries at every color reference. */
 interface BarrierStyle {
 	heightFraction: number;
-	topColor: number;
-	leftColor: number;
-	rightColor: number;
-	alpha: number;
+
+	/**
+	 * Segment = the object spanning one StructuralEdgeRef.
+	 */
+	segmentThicknessPx: number;
+	segmentTopColor: number;
+	segmentLeftColor: number;
+	segmentRightColor: number;
+	segmentAlpha: number;
+
+	/**
+	 * Connector = the one object occupying a shared GridVertex.
+	 */
+	connectorHalfPx: number;
+	connectorTopColor: number;
+	connectorLeftColor: number;
+	connectorRightColor: number;
+	connectorAlpha: number;
 }
 
 const BARRIER_STYLES: Record<number, BarrierStyle> = {
 	[RH.EdgeBarrier.FullWall]: {
 		heightFraction: 1,
-		topColor: WALL_TOP_COLOR,
-		leftColor: WALL_LEFT_FACE_COLOR,
-		rightColor: WALL_RIGHT_FACE_COLOR,
-		alpha: 1,
+		segmentThicknessPx: SOLID_BARRIER_THICKNESS_PX,
+		segmentTopColor: WALL_TOP_COLOR,
+		segmentLeftColor: WALL_LEFT_FACE_COLOR,
+		segmentRightColor: WALL_RIGHT_FACE_COLOR,
+		segmentAlpha: 1,
+		connectorHalfPx: SOLID_CONNECTOR_HALF_PX,
+		connectorTopColor: WALL_TOP_COLOR,
+		connectorLeftColor: WALL_LEFT_FACE_COLOR,
+		connectorRightColor: WALL_RIGHT_FACE_COLOR,
+		connectorAlpha: 1,
 	},
+
 	[RH.EdgeBarrier.Door]: {
 		heightFraction: DOOR_HEIGHT_FRACTION,
-		topColor: DOOR_TOP_COLOR,
-		leftColor: DOOR_LEFT_FACE_COLOR,
-		rightColor: DOOR_RIGHT_FACE_COLOR,
-		alpha: 1,
+		segmentThicknessPx: SOLID_BARRIER_THICKNESS_PX,
+		segmentTopColor: DOOR_TOP_COLOR,
+		segmentLeftColor: DOOR_LEFT_FACE_COLOR,
+		segmentRightColor: DOOR_RIGHT_FACE_COLOR,
+		segmentAlpha: 1,
+		connectorHalfPx: SOLID_CONNECTOR_HALF_PX,
+		connectorTopColor: DOOR_TOP_COLOR,
+		connectorLeftColor: DOOR_LEFT_FACE_COLOR,
+		connectorRightColor: DOOR_RIGHT_FACE_COLOR,
+		connectorAlpha: 1,
 	},
+
 	[RH.EdgeBarrier.Fence]: {
 		heightFraction: 1,
-		topColor: FENCE_TOP_COLOR,
-		leftColor: FENCE_LEFT_FACE_COLOR,
-		rightColor: FENCE_RIGHT_FACE_COLOR,
-		alpha: 1,
+		segmentThicknessPx: PANEL_BARRIER_THICKNESS_PX,
+		segmentTopColor: FENCE_TOP_COLOR,
+		segmentLeftColor: FENCE_LEFT_FACE_COLOR,
+		segmentRightColor: FENCE_RIGHT_FACE_COLOR,
+		segmentAlpha: FENCE_PANEL_ALPHA,
+		connectorHalfPx: POST_CONNECTOR_HALF_PX,
+		connectorTopColor: FENCE_POST_TOP_COLOR,
+		connectorLeftColor: FENCE_POST_LEFT_COLOR,
+		connectorRightColor: FENCE_POST_RIGHT_COLOR,
+		connectorAlpha: 1,
 	},
+
 	[RH.EdgeBarrier.Glass]: {
 		heightFraction: 1,
-		topColor: GLASS_TOP_COLOR,
-		leftColor: GLASS_LEFT_FACE_COLOR,
-		rightColor: GLASS_RIGHT_FACE_COLOR,
-		alpha: GLASS_ALPHA,
+		segmentThicknessPx: PANEL_BARRIER_THICKNESS_PX,
+		segmentTopColor: GLASS_TOP_COLOR,
+		segmentLeftColor: GLASS_LEFT_FACE_COLOR,
+		segmentRightColor: GLASS_RIGHT_FACE_COLOR,
+		segmentAlpha: GLASS_PANEL_ALPHA,
+		connectorHalfPx: MULLION_CONNECTOR_HALF_PX,
+		connectorTopColor: GLASS_MULLION_TOP_COLOR,
+		connectorLeftColor: GLASS_MULLION_LEFT_COLOR,
+		connectorRightColor: GLASS_MULLION_RIGHT_COLOR,
+		connectorAlpha: 1,
 	},
+
 	[RH.EdgeBarrier.LowWall]: {
 		heightFraction: LOW_WALL_HEIGHT_FRACTION,
-		topColor: LOW_WALL_TOP_COLOR,
-		leftColor: LOW_WALL_LEFT_FACE_COLOR,
-		rightColor: LOW_WALL_RIGHT_FACE_COLOR,
-		alpha: 1,
+		segmentThicknessPx: SOLID_BARRIER_THICKNESS_PX,
+		segmentTopColor: LOW_WALL_TOP_COLOR,
+		segmentLeftColor: LOW_WALL_LEFT_FACE_COLOR,
+		segmentRightColor: LOW_WALL_RIGHT_FACE_COLOR,
+		segmentAlpha: 1,
+		connectorHalfPx: SOLID_CONNECTOR_HALF_PX,
+		connectorTopColor: LOW_WALL_TOP_COLOR,
+		connectorLeftColor: LOW_WALL_LEFT_FACE_COLOR,
+		connectorRightColor: LOW_WALL_RIGHT_FACE_COLOR,
+		connectorAlpha: 1,
 	},
 };
 
@@ -145,16 +206,43 @@ function styleFor(barrier: RH.EdgeBarrier): BarrierStyle {
 	return BARRIER_STYLES[barrier] ?? BARRIER_STYLES[RH.EdgeBarrier.FullWall];
 }
 
+/**
+ * One GridVertex may be touched by different barrier types.
+ *
+ * We render ONE connector there, so mixed joins need a deterministic
+ * visual owner rather than whichever edge happened to be iterated
+ * first.
+ *
+ * Higher number wins.
+ */
+function connectorPriorityFor(barrier: RH.EdgeBarrier): number {
+	switch (barrier) {
+		case RH.EdgeBarrier.FullWall:
+			return 50;
+		case RH.EdgeBarrier.Door:
+			return 40;
+		case RH.EdgeBarrier.Glass:
+			return 30;
+		case RH.EdgeBarrier.Fence:
+			return 20;
+		case RH.EdgeBarrier.LowWall:
+			return 10;
+		default:
+			return 0;
+	}
+}
+
 /** What a piece of the map should draw as, combining room-focus and fog-of-war into one answer instead of two separately-applied effects. "hidden" wins over everything (fog unseen); otherwise "washed" if either fog marks it explored-but-not-visible OR room-focus says it's not the room you're in; otherwise "normal". */
 type VisualState = "hidden" | "washed" | "normal";
 
 /**
- * A wall's full resolved geometry, computed once via the topology
- * resolver and reused for every face (body, foundation, top). Kept as
- * its own object rather than recomputed inline so a future texture
- * pass has real geometry to consume instead of recalculating it.
+ * Full resolved geometry for one barrier segment spanning one
+ * StructuralEdgeRef.
+ *
+ * The topology stays shared/gameplay-owned; this object is purely the
+ * projected render geometry consumed by the presentation layer.
  */
-interface WallSkeleton {
+interface BarrierSegmentSkeleton {
 	startVertex: RH.GridVertex;
 	endVertex: RH.GridVertex;
 
@@ -189,8 +277,8 @@ interface WallSkeleton {
  * Room-focus and fog-of-war are both applied at build time, not as
  * later per-object alpha tweaks
  *
- * Wall/corner geometry goes through the canonical wall-topology
- * resolver
+ * Barrier segment/connector geometry goes through the canonical
+ * wall-topology resolver.
  */
 export class MapRenderer {
 	private ownedWorldGraphics: Graphics[] = [];
@@ -215,14 +303,12 @@ export class MapRenderer {
 
 	private clearForRebuild(): void {
 		/**
-		 * The active-floor renderer uses two containers:
-		 *
+		 * The active-floor renderer uses two containers
 		 * groundContainer
 		 *     -> tile tops
 		 *
 		 * worldDepthContainer
 		 *     -> terrain faces / walls / entities
-		 *
 		 * The lower-floor renderer still uses a single container for both.
 		 * In that case we must clear it only once.
 		 */
@@ -464,7 +550,7 @@ export class MapRenderer {
 		}
 
 		// ------------------------------------------------------------
-		// WALL CORNER COLLECTION
+		// BARRIER CONNECTOR COLLECTION
 		// ------------------------------------------------------------
 
 		// Corners are keyed by real topology (vertex), not rounded screen
@@ -477,7 +563,7 @@ export class MapRenderer {
 			normal: 2,
 		};
 
-		const cornerTouches = new Map<
+		const connectorTouches = new Map<
 			string,
 			{
 				base: ScreenPoint;
@@ -488,7 +574,7 @@ export class MapRenderer {
 			}
 		>();
 
-		const registerCorner = (
+		const registerConnector = (
 			vertex: RH.GridVertex,
 			base: ScreenPoint,
 			height: number,
@@ -498,7 +584,7 @@ export class MapRenderer {
 		): void => {
 			const key = `${vertex.x},${vertex.y}`;
 
-			const existing = cornerTouches.get(key);
+			const existing = connectorTouches.get(key);
 
 			const nextHeight = Math.max(existing?.height ?? 0, height);
 
@@ -512,7 +598,7 @@ export class MapRenderer {
 					? state
 					: existing.state;
 
-			cornerTouches.set(key, {
+			connectorTouches.set(key, {
 				// Every connected wall resolves this vertex through
 				// the same topology function, so these bases should
 				// agree exactly.
@@ -525,12 +611,15 @@ export class MapRenderer {
 				state: nextState,
 
 				barrier:
-					!existing || height > existing.height ? barrier : existing.barrier,
+					!existing ||
+					connectorPriorityFor(barrier) > connectorPriorityFor(existing.barrier)
+						? barrier
+						: existing.barrier,
 			});
 		};
 
 		// ------------------------------------------------------------
-		// EAST/WEST WALL EDGES
+		// EEAST/WEST BARRIER SEGMENTS
 		// ------------------------------------------------------------
 
 		for (let y = 0; y < compiled.grid.height; y++) {
@@ -552,7 +641,7 @@ export class MapRenderer {
 				}
 
 				drawables.push(
-					this.wallDrawable(
+					this.barrierSegmentDrawable(
 						a,
 						b,
 						barrier,
@@ -560,14 +649,14 @@ export class MapRenderer {
 						focusBoundaryKeys,
 						visualStateAt,
 						wallHeightScale,
-						registerCorner,
+						registerConnector,
 					),
 				);
 			}
 		}
 
 		// ------------------------------------------------------------
-		// NORTH/SOUTH WALL EDGES
+		// NORTH/SOUTH BARRIER SEGMENTS
 		// ------------------------------------------------------------
 
 		for (let y = 0; y < compiled.grid.height - 1; y++) {
@@ -589,7 +678,7 @@ export class MapRenderer {
 				}
 
 				drawables.push(
-					this.wallDrawable(
+					this.barrierSegmentDrawable(
 						a,
 						b,
 						barrier,
@@ -597,14 +686,14 @@ export class MapRenderer {
 						focusBoundaryKeys,
 						visualStateAt,
 						wallHeightScale,
-						registerCorner,
+						registerConnector,
 					),
 				);
 			}
 		}
 
 		// ------------------------------------------------------------
-		// WALL CORNERS
+		// BARRIER CONNECTORS / POSTS
 		// ------------------------------------------------------------
 
 		for (const {
@@ -613,13 +702,13 @@ export class MapRenderer {
 			height,
 			state,
 			barrier,
-		} of cornerTouches.values()) {
+		} of connectorTouches.values()) {
 			if (state === "hidden") {
 				continue;
 			}
 
 			drawables.push(
-				this.cornerDrawable(
+				this.barrierConnectorDrawable(
 					base,
 					height,
 					foundationBottomY,
@@ -870,17 +959,20 @@ export class MapRenderer {
 	}
 
 	/**
-	 * Full resolved geometry for one wall edge, via the canonical
-	 * wall-topology resolver - every wall touching the same physical
-	 * vertex asks the same function for that vertex's height, so
-	 * connected walls can never disagree about where a shared corner
-	 * sits.
+	 * Resolves one structural barrier edge into projected segment
+	 * geometry.
+	 *
+	 * Every edge touching the same GridVertex still resolves its junction
+	 * through the canonical shared topology helpers, so segments agree on
+	 * their physical endpoints even when their visual thickness differs.
 	 */
-	private buildWallSkeleton(
+
+	private buildBarrierSegmentSkeleton(
 		edge: RH.StructuralEdgeRef,
 		compiled: RH.CompiledEdgeMap,
 		height: number,
-	): WallSkeleton {
+		thicknessPx: number,
+	): BarrierSegmentSkeleton {
 		const [startVertex, endVertex] = RH.structuralEdgeVertices(edge);
 
 		const startElevation = RH.resolveWallJunctionHeight(
@@ -916,7 +1008,7 @@ export class MapRenderer {
 		const raw1 = this.vertexScreenPoint(startVertex, 0);
 		const raw2 = this.vertexScreenPoint(endVertex, 0);
 
-		const off = this.perpOffset(raw1, raw2, WALL_THICKNESS_PX);
+		const off = this.perpOffset(raw1, raw2, thicknessPx);
 
 		const nearBase1 = { x: centerBase1.x + off.x, y: centerBase1.y + off.y };
 		const nearBase2 = { x: centerBase2.x + off.x, y: centerBase2.y + off.y };
@@ -976,7 +1068,7 @@ export class MapRenderer {
 		};
 	}
 
-	private wallDrawable(
+	private barrierSegmentDrawable(
 		coord: RH.GridCoord,
 		other: RH.GridCoord,
 		barrier: RH.EdgeBarrier,
@@ -984,7 +1076,7 @@ export class MapRenderer {
 		focusBoundaryKeys: Set<string> | null,
 		visualStateAt: (coord: RH.GridCoord, roomFocused: boolean) => VisualState,
 		wallHeightScale: number,
-		registerCorner: (
+		registerConnector: (
 			vertex: RH.GridVertex,
 			base: ScreenPoint,
 			height: number,
@@ -1024,9 +1116,14 @@ export class MapRenderer {
 			};
 		}
 
-		const skeleton = this.buildWallSkeleton(edge, compiled, height);
+		const skeleton = this.buildBarrierSegmentSkeleton(
+			edge,
+			compiled,
+			height,
+			style.segmentThicknessPx,
+		);
 
-		registerCorner(
+		registerConnector(
 			skeleton.startVertex,
 			skeleton.centerBase1,
 			height,
@@ -1034,7 +1131,7 @@ export class MapRenderer {
 			state,
 			barrier,
 		);
-		registerCorner(
+		registerConnector(
 			skeleton.endVertex,
 			skeleton.centerBase2,
 			height,
@@ -1111,17 +1208,31 @@ export class MapRenderer {
 
 				if (skeleton.hasFoundation) {
 					g.poly(foundationLeft);
-					g.fill({ color: style.leftColor, alpha: style.alpha });
+					g.fill({
+						color: style.segmentLeftColor,
+						alpha: style.segmentAlpha,
+					});
 					g.poly(foundationRight);
-					g.fill({ color: style.rightColor, alpha: style.alpha });
+					g.fill({
+						color: style.segmentRightColor,
+						alpha: style.segmentAlpha,
+					});
 				}
-
 				g.poly(leftFace);
-				g.fill({ color: style.leftColor, alpha: style.alpha });
+				g.fill({
+					color: style.segmentLeftColor,
+					alpha: style.segmentAlpha,
+				});
 				g.poly(rightFace);
-				g.fill({ color: style.rightColor, alpha: style.alpha });
+				g.fill({
+					color: style.segmentRightColor,
+					alpha: style.segmentAlpha,
+				});
 				g.poly(topFace);
-				g.fill({ color: style.topColor, alpha: style.alpha });
+				g.fill({
+					color: style.segmentTopColor,
+					alpha: style.segmentAlpha,
+				});
 
 				if (state === "washed") {
 					if (skeleton.hasFoundation) {
@@ -1142,7 +1253,7 @@ export class MapRenderer {
 		};
 	}
 
-	private cornerDrawable(
+	private barrierConnectorDrawable(
 		screenPos: ScreenPoint,
 		height: number,
 		foundationBottomY: number,
@@ -1150,21 +1261,37 @@ export class MapRenderer {
 		barrier: RH.EdgeBarrier,
 	): Drawable {
 		const style = styleFor(barrier);
+
 		const { x: cx, y: cy } = screenPos;
-
 		const foundationDrop = Math.max(0, foundationBottomY - cy);
-
-		const top = { x: cx, y: cy - CORNER_HALF_PX };
-		const right = { x: cx + CORNER_HALF_PX, y: cy };
-		const bottom = { x: cx, y: cy + CORNER_HALF_PX };
-		const left = { x: cx - CORNER_HALF_PX, y: cy };
+		const connectorHalfPx = style.connectorHalfPx;
+		const top = {
+			x: cx,
+			y: cy - connectorHalfPx,
+		};
+		const right = {
+			x: cx + connectorHalfPx,
+			y: cy,
+		};
+		const bottom = {
+			x: cx,
+			y: cy + connectorHalfPx,
+		};
+		const left = {
+			x: cx - connectorHalfPx,
+			y: cy,
+		};
 
 		const lowerRight = { x: right.x, y: right.y + foundationDrop };
 		const lowerBottom = { x: bottom.x, y: bottom.y + foundationDrop };
 		const lowerLeft = { x: left.x, y: left.y + foundationDrop };
 
 		const up = (p: ScreenPoint) => ({ x: p.x, y: p.y - height });
-		const depth = lowerBottom.y + 0.1; // corners draw fractionally after walls at the same depth, so they sit visually on top of the seam they're bridging
+		/**
+		 * Connectors draw fractionally after a segment at the same physical
+		 * base depth so the post/pillar covers the segment endpoint seam.
+		 */
+		const depth = lowerBottom.y + 0.1;
 
 		return {
 			layer: "world",
@@ -1209,11 +1336,20 @@ export class MapRenderer {
 				];
 
 				g.poly(leftFace);
-				g.fill({ color: style.leftColor, alpha: style.alpha });
+				g.fill({
+					color: style.connectorLeftColor,
+					alpha: style.connectorAlpha,
+				});
 				g.poly(rightFace);
-				g.fill({ color: style.rightColor, alpha: style.alpha });
+				g.fill({
+					color: style.connectorRightColor,
+					alpha: style.connectorAlpha,
+				});
 				g.poly(topFace);
-				g.fill({ color: style.topColor, alpha: style.alpha });
+				g.fill({
+					color: style.connectorTopColor,
+					alpha: style.connectorAlpha,
+				});
 
 				if (washed) {
 					g.poly(leftFace);
