@@ -9,6 +9,7 @@ import {
 	type SpriteCharacterClass,
 } from "@/types/characterSprite";
 import { getIsoFacingFromScreenDelta } from "@/math/characterDirection";
+import { setWorldDepth, WORLD_DEPTH_BIAS } from "@/rendering/worldDepth";
 
 const SPHERE_RADIUS = 12;
 const MOVE_DURATION_PER_TILE_MS = 180;
@@ -257,6 +258,19 @@ export class Mercenary {
 		this.view.y = Math.round(
 			this.currentScreenPos.y + STANDING_POSITION_Y_OFFSET,
 		);
+
+		/**
+		 * Depth must use the logical ground-contact point, not view.y.
+		 *
+		 * view.y includes STANDING_POSITION_Y_OFFSET (-6) purely to make
+		 * the character sit visually toward the back of the tile. Using
+		 * that offset for sorting would make the character depth disagree
+		 * with the tile/wall geometry it physically stands on.
+		 *
+		 * syncPosition() runs during construction, instant teleports and
+		 * every movement frame, so zIndex stays live while walking.
+		 */
+		setWorldDepth(this.view, this.currentScreenPos.y, WORLD_DEPTH_BIAS.entity);
 	}
 
 	private drawShadow(): Graphics {
