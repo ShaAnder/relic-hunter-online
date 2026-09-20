@@ -80,7 +80,9 @@ export class MapScene implements Scene, TutorialPort {
 	 */
 	private lowerFloorTilesContainer = new Container();
 	private tilesContainer = new Container();
-	private mercenaryContainer = new Container();
+	private groundOverlayContainer = new Container();
+	private worldDepthContainer = new Container();
+	private foregroundOverlayContainer = new Container();
 
 	// Systems
 	private camera: CameraController;
@@ -549,6 +551,18 @@ export class MapScene implements Scene, TutorialPort {
 		this.mapWidth = dims.width;
 		this.mapHeight = dims.height;
 
+		this.worldDepthContainer.sortableChildren = true;
+
+		this.boardContainer.addChild(
+			this.lowerFloorTilesContainer,
+			this.tilesContainer,
+			this.groundOverlayContainer,
+			this.worldDepthContainer,
+			this.foregroundOverlayContainer,
+		);
+
+		this.view.addChild(this.boardContainer);
+
 		// WE ADD THIS - So when a new match happens it's a fresh deck, without it
 		// would try to carry old deck over. Tutorials get a genuinely empty
 		// array, not null — null lazily rebuilds a full deck on first
@@ -571,29 +585,34 @@ export class MapScene implements Scene, TutorialPort {
 		this.boardContainer.addChild(this.tilesContainer);
 		this.view.addChild(this.boardContainer);
 
-		this.mapController = new MapController(this.game, this.mercenaryContainer, {
-			showFeedback: (message) => this.showFeedback(message),
-			showItemPopup: (item, isTarget) => this.showItemPopup(item, isTarget),
-			getUnitLabel: (unit) => this.getUnitLabel(unit),
-			teleportEntity: (state, mercenary) =>
-				this.teleportEntity(state, mercenary as Mercenary),
-			syncUI: () => this.syncUI(),
-			onTutorialEvent: (event) => this.tutorialConfig?.onTutorialEvent(event),
-			getLocalUnit: () => this.localUnit,
-			getUnits: () => this.units,
-			getGrid: () => this.grid,
-			rebuildMapRender: () => {
-				this.syncFloorVisibility();
-				this.rebuildMapRenderWithFog();
+		this.mapController = new MapController(
+			this.game,
+			this.worldDepthContainer,
+			{
+				showFeedback: (message) => this.showFeedback(message),
+				showItemPopup: (item, isTarget) => this.showItemPopup(item, isTarget),
+				getUnitLabel: (unit) => this.getUnitLabel(unit),
+				teleportEntity: (state, mercenary) =>
+					this.teleportEntity(state, mercenary as Mercenary),
+				syncUI: () => this.syncUI(),
+				onTutorialEvent: (event) => this.tutorialConfig?.onTutorialEvent(event),
+				getLocalUnit: () => this.localUnit,
+				getUnits: () => this.units,
+				getGrid: () => this.grid,
+				rebuildMapRender: () => {
+					this.syncFloorVisibility();
+					this.rebuildMapRenderWithFog();
+				},
+				revealExitArea: () => this.revealExitArea(),
+				exitTargetingMode: () => this.exitTargetingMode(),
+				pickEnemySpawnTile: (used) => this.pickEnemySpawnTile(used),
+				delay: (ms) => this.delay(ms),
+				triggerWin: () => this.triggerWin(),
+				triggerLoss: (winner) => this.triggerLoss(winner),
 			},
-			revealExitArea: () => this.revealExitArea(),
-			exitTargetingMode: () => this.exitTargetingMode(),
-			pickEnemySpawnTile: (used) => this.pickEnemySpawnTile(used),
-			delay: (ms) => this.delay(ms),
-			triggerWin: () => this.triggerWin(),
-			triggerLoss: (winner) => this.triggerLoss(winner),
-		});
-		this.boardContainer.addChild(this.mapController.chestSystem.container);
+		);
+
+		this.worldDepthContainer.addChild(this.mapController.chestSystem.container);
 
 		{
 			const sw = this.game.app.screen.width;
@@ -657,7 +676,11 @@ export class MapScene implements Scene, TutorialPort {
 		);
 
 		this.lowerFloorMapRenderer = new MapRenderer(this.lowerFloorTilesContainer);
-		this.mapRenderer = new MapRenderer(this.tilesContainer);
+
+		this.mapRenderer = new MapRenderer(
+			this.tilesContainer,
+			this.worldDepthContainer,
+		);
 
 		this.applyCameraBounds();
 
@@ -672,10 +695,11 @@ export class MapScene implements Scene, TutorialPort {
 		if (this.tutorialConfig?.script.staticActors) {
 			this.tutorialMarkers.spawnStaticActors(
 				this.tutorialConfig.script.staticActors,
-				this.mercenaryContainer,
+				this.worldDepthContainer,
 				this.game.session.mapElevation ?? undefined,
 			);
 		}
+
 		this.matchController = new MatchController(this.game);
 		// Item popup rides along as a child of the mercenary's own view,
 		// so it moves with the token automatically — no manual per-frame
@@ -687,13 +711,15 @@ export class MapScene implements Scene, TutorialPort {
 		this.itemPopupText.anchor.set(0.5, 1);
 		this.itemPopup.addChild(this.itemPopupIcon, this.itemPopupText);
 
-		this.mercenaryContainer.addChild(this.targetingVisuals.reticleView);
+		this.foregroundOverlayContainer.addChild(this.targetingVisuals.reticleView);
 
 		if (!this.tutorialConfig || this.tutorialConfig.spawnChests) {
 			this.spawnChests();
 		}
 
-		this.mercenaryContainer.addChild(this.tutorialMarkers.targetMarkerView);
+		this.foregroundOverlayContainer.addChild(
+			this.tutorialMarkers.targetMarkerView,
+		);
 
 		this.playZone = new PlayZone();
 		this.view.addChild(this.playZone.view);
@@ -746,18 +772,12 @@ export class MapScene implements Scene, TutorialPort {
 		}
 
 		this.moveController = this.createMoveController();
-		this.boardContainer.addChild(this.moveController.view);
-		this.boardContainer.addChild(this.targetingVisuals.attackRangeView);
 
-		this.boardContainer.addChild(this.mapController.trapSystem.markerContainer);
-
-		// Characters render above every ground-decal layer above (chests,
-		// move-preview, attack-range highlights, trap markers) — added
-		// last so Pixi draws it last. This game's own click handling does
-		// manual coordinate hit-testing (pointInCircle/pointInContainer),
-		// not Pixi's interactive event system, so draw order here has no
-		// effect on what's clickable — only on what's visually on top.
-		this.boardContainer.addChild(this.mercenaryContainer);
+		this.groundOverlayContainer.addChild(
+			this.moveController.view,
+			this.targetingVisuals.attackRangeView,
+			this.mapController.trapSystem.markerContainer,
+		);
 
 		this.hud = new MapHud(this.game);
 		this.hud.setActionMenuSubmenuToggled((open) => {
@@ -1521,7 +1541,7 @@ export class MapScene implements Scene, TutorialPort {
 			this.game.session.mapElevation ?? undefined,
 			this.game.session.mapStaircaseClusters,
 		);
-		this.mercenaryContainer.addChild(mercenary.view);
+		this.worldDepthContainer.addChild(mercenary.view);
 
 		const turnManager = new TurnManager(
 			() => state,
@@ -1692,7 +1712,7 @@ export class MapScene implements Scene, TutorialPort {
 				this.game.session.mapStaircaseClusters,
 			);
 
-			this.mercenaryContainer.addChild(mercenary.view);
+			this.worldDepthContainer.addChild(mercenary.view);
 
 			const turnManager = new TurnManager(
 				() => state,
@@ -2384,30 +2404,10 @@ export class MapScene implements Scene, TutorialPort {
 		this.game.session.mapElevation = compiled.elevation;
 		this.game.session.viewedFloor = floorIndex;
 
-		// MoveController snapshots grid/edges/elevation at construction
-		// time rather than reading them live - it has to be rebuilt
-		// whenever the floor actually changes, or movement keeps
-		// validating against whichever floor the player started on,
-		// even though rendering has already moved on to the new one
-		// (this was the actual root cause of walkability/void behaving
-		// backward on a basement floor - visuals were right, movement
-		// was still checking the spawn floor's data underneath).
-		// Gated on floorActuallyChanged specifically because applyFloor
-		// itself runs unconditionally at the start of every player turn
-		// (see beginPlayerTurn) - without this guard, MoveController
-		// would be torn down and rebuilt every single turn even when
-		// nothing about the floor ever changed. Not present on the very
-		// first call, from the constructor, before moveController
-		// exists yet.
 		if (this.moveController && floorActuallyChanged) {
-			this.boardContainer.removeChild(this.moveController.view);
+			this.groundOverlayContainer.removeChild(this.moveController.view);
 			this.moveController = this.createMoveController();
-			this.boardContainer.addChild(this.moveController.view);
-			// Re-adding the view above moved it to the end of
-			// boardContainer's children - restore mercenaryContainer's
-			// on-top position, the same invariant the constructor and
-			// regenerateMap() both already maintain.
-			this.boardContainer.addChild(this.mercenaryContainer);
+			this.groundOverlayContainer.addChild(this.moveController.view);
 		}
 
 		this.syncFloorVisibility();
@@ -3023,7 +3023,21 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.applyCameraBounds();
 
-		this.mercenaryContainer.removeChildren();
+		/**
+		 * Hunters and monsters are now direct children of the shared
+		 * worldDepthContainer.
+		 *
+		 * Do NOT clear worldDepthContainer wholesale: it also contains
+		 * MapRenderer-owned terrain/wall Graphics.
+		 */
+		for (const unit of this.units) {
+			unit.mercenary.view.removeFromParent();
+		}
+
+		for (const monster of this.mapController.monsterSystem.all) {
+			monster.token.view.removeFromParent();
+		}
+
 		this.units = [];
 		this.mapController.monsterSystem.reset();
 		this.spawnLocalUnit();
@@ -3033,7 +3047,6 @@ export class MapScene implements Scene, TutorialPort {
 		this.spawnEnemyHunters();
 
 		this.targetingVisuals.hideMarker();
-		this.mercenaryContainer.addChild(this.targetingVisuals.reticleView);
 		this.game.session.chestPlan = null;
 		this.game.session.chestPlacements = null;
 		this.game.session.playerSpawn = null;
@@ -3045,13 +3058,9 @@ export class MapScene implements Scene, TutorialPort {
 		this.cardDrawQueue.enqueue(starter);
 		this.turnsTaken = 0;
 
-		this.boardContainer.removeChild(this.moveController.view);
+		this.groundOverlayContainer.removeChild(this.moveController.view);
 		this.moveController = this.createMoveController();
-		this.boardContainer.addChild(this.moveController.view);
-		// Re-adding moveController.view above moved it to the end of
-		// boardContainer's children — restore mercenaryContainer's
-		// on-top position, the same invariant the constructor sets up.
-		this.boardContainer.addChild(this.mercenaryContainer);
+		this.groundOverlayContainer.addChild(this.moveController.view);
 
 		this.rebuildMapRenderWithFog();
 		this.centerCameraOnActiveHunter();

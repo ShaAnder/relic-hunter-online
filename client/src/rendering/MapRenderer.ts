@@ -81,7 +81,10 @@ const LOW_WALL_RIGHT_FACE_COLOR = 0x4a4539;
 type ScreenPoint = { x: number; y: number };
 
 /** One item waiting to be drawn, with the depth key that determines render order — see the class doc comment for why this is the whole mechanism for correct overlap, with no explicit zIndex anywhere. */
+type DrawableLayer = "ground" | "world";
+
 interface Drawable {
+	layer: DrawableLayer;
 	depth: number;
 	draw: () => Graphics;
 }
@@ -183,52 +186,41 @@ interface WallSkeleton {
 /**
  * Renders an edge-based map (Grid + EdgeGrid, from compileEdgeMap).
  *
- * The core trick for correct overlap without any zIndex: every tile,
- * wall piece, and corner piece computes a single depth number (the
- * screen-Y of its own forward-most point) before anything is drawn,
- * everything is sorted by that number, and only then added to the
- * container in that order. PixiJS renders children in the order
- * they're added, so painter's-algorithm depth sorting is the entire
- * mechanism — a piece nearer the camera (larger depth) is always
- * added after, and therefore drawn on top of, anything farther away.
- *
  * Room-focus and fog-of-war are both applied at build time, not as
- * later per-object alpha tweaks — passing fresh focusRoom/fog state
- * and rebuilding is simple and correct for a map this size, and
- * critically, keeps both effects going through the exact same code
- * path instead of one being a real rebuild and the other a bolted-on
- * incremental patch that's easy to forget to wire up everywhere the
- * first one already is.
+ * later per-object alpha tweaks
  *
  * Wall/corner geometry goes through the canonical wall-topology
- * resolver (shared/src/world/maps/wallTopology.ts): every wall
- * junction asks that one function for its height, so four wall
- * segments meeting at one physical corner can never disagree with
- * each other about where that corner actually is.
+ * resolver
  */
 export class MapRenderer {
-	constructor(private container: Container) {}
+	private ownedWorldGraphics: Graphics[] = [];
+
+	constructor(
+		private groundContainer: Container,
+		private worldDepthContainer: Container = groundContainer,
+	) {
+		this.groundContainer.sortableChildren = true;
+		this.worldDepthContainer.sortableChildren = true;
+	}
+
+	private clearOwnedWorldGraphics(): void {
+		for (const graphic of this.ownedWorldGraphics) {
+			if (graphic.parent === this.worldDepthContainer) {
+				this.worldDepthContainer.removeChild(graphic);
+			}
+			graphic.destroy();
+		}
+		this.ownedWorldGraphics = [];
+	}
 
 	/**
 	 * @param focusRoom When set, this room's own boundary walls draw
-	 * visually shorter (an outline you can see and move past, not a
-	 * view-blocking wall), and everything not part of this room —
-	 * other rooms' tiles, walls, corners, including the open street —
-	 * draws with a dark wash over it. Pass null for the normal,
-	 * undimmed, full-height view (e.g. while standing outside any
-	 * room — the caller is responsible for not passing the outside
-	 * room itself here, see MapScene.focusRoomFor).
+	 * visually shorter
 	 * @param fog When set, applies real fog-of-war on top of
-	 * everything else: an unseen tile/wall isn't drawn at all, an
-	 * explored-but-not-currently-visible one gets the same dark wash
-	 * room-focus uses, and a currently-visible one falls through to
-	 * whatever room-focus alone would already give it. Pass null to
-	 * disable fog-of-war entirely (matching the mission's own
+	 * everything else: an unseen tile/wall isn't drawn at all
 	 * fogOfWarEnabled toggle).
 	 * @param forceWashed When true, renders the whole floor with the
-	 * dark washed treatment regardless of fog/room-focus - used for
-	 * the lower-floor underlay, so it reads as muted structural
-	 * context rather than relying on heavy container transparency.
+	 * dark washed treatment regardless of fog/room-focus
 	 * @param wallHeightScale Scales every wall's height - 1 for the
 	 * active floor, smaller for a decorative underlay.
 	 */
@@ -244,7 +236,11 @@ export class MapRenderer {
 		wallHeightScale = 1,
 		materialContext?: MapMaterialRenderContext,
 	): void {
-		this.container.removeChildren();
+		for (const child of this.groundContainer.removeChildren()) {
+			child.destroy();
+		}
+
+		this.clearOwnedWorldGraphics();
 
 		const drawables: Drawable[] = [];
 
@@ -338,7 +334,7 @@ export class MapRenderer {
 						state === "washed",
 						fillForTileCode(tileCode),
 
-						this.tileHasLowerElevationNeighbour(compiled, coord, elevation),
+						this.tileNeedsTrueFootprint(compiled, coord, elevation, tileCode),
 
 						material,
 					),
@@ -606,8 +602,25 @@ export class MapRenderer {
 
 		drawables.sort((a, b) => a.depth - b.depth);
 
-		for (const d of drawables) {
-			this.container.addChild(d.draw());
+		const groundDrawables = drawables
+			.filter((d) => d.layer === "ground")
+			.sort((a, b) => a.depth - b.depth);
+
+		const worldDrawables = drawables
+			.filter((d) => d.layer === "world")
+			.sort((a, b) => a.depth - b.depth);
+
+		for (const drawable of groundDrawables) {
+			const graphic = drawable.draw();
+			graphic.zIndex = drawable.depth;
+			this.groundContainer.addChild(graphic);
+		}
+
+		for (const drawable of worldDrawables) {
+			const graphic = drawable.draw();
+			graphic.zIndex = drawable.depth;
+			this.worldDepthContainer.addChild(graphic);
+			this.ownedWorldGraphics.push(graphic);
 		}
 	}
 
@@ -666,10 +679,11 @@ export class MapRenderer {
 	 * Therefore every tile touching a height change uses its TRUE
 	 * footprint.
 	 */
-	private tileHasLowerElevationNeighbour(
+	private tileNeedsTrueFootprint(
 		compiled: RH.CompiledEdgeMap,
 		coord: RH.GridCoord,
 		elevation: number,
+		code: RH.EdgeMapTileCode | undefined,
 	): boolean {
 		const neighbours: RH.GridCoord[] = [
 			{ x: coord.x + 1, y: coord.y },
@@ -688,17 +702,19 @@ export class MapRenderer {
 				continue;
 			}
 
-			const other = this.elevationAt(compiled, neighbour);
+			const key = RH.coordKey(neighbour);
+			const otherElevation = compiled.elevation.get(key);
+			const otherCode = compiled.tileCodes.get(key);
 
 			if (
-				other !== undefined &&
-				Number.isFinite(other) &&
-				elevation - other > 0.000001
+				otherElevation !== undefined &&
+				Number.isFinite(otherElevation) &&
+				elevation - otherElevation > 0.000001
 			) {
-				// THIS tile is higher than its neighbour.
-				//
-				// Its top surface must not substantially overshoot the
-				// terrain face beneath it.
+				return true;
+			}
+
+			if (otherCode !== code) {
 				return true;
 			}
 		}
@@ -727,6 +743,7 @@ export class MapRenderer {
 		const depth = trueCorners.bottom.y - 100_000; // tiles always sort behind anything standing on their own edge
 
 		return {
+			layer: "ground",
 			depth,
 			draw: () => {
 				const g = new Graphics();
@@ -794,9 +811,8 @@ export class MapRenderer {
 		const face = [a1.x, a1.y, a2.x, a2.y, b2.x, b2.y, b1.x, b1.y];
 
 		return {
-			// Tiles = -100000. Terrain skirts = -50000. Structural walls
-			// retain their normal screen-depth values.
-			depth: Math.max(a1.y, a2.y, b1.y, b2.y) - 50_000,
+			layer: "world",
+			depth: Math.max(a1.y, a2.y, b1.y, b2.y),
 			draw: () => {
 				const g = new Graphics();
 				g.poly(face);
@@ -970,7 +986,11 @@ export class MapRenderer {
 
 		const edge = RH.structuralEdgeForTilePair(coord, other, barrier);
 		if (!edge) {
-			return { depth: -Infinity, draw: () => new Graphics() };
+			return {
+				layer: "world",
+				depth: -Infinity,
+				draw: () => new Graphics(),
+			};
 		}
 
 		const skeleton = this.buildWallSkeleton(edge, compiled, height);
@@ -993,11 +1013,17 @@ export class MapRenderer {
 		);
 
 		if (state === "hidden") {
-			return { depth: -Infinity, draw: () => new Graphics() };
+			return {
+				layer: "world",
+				depth: -Infinity,
+				draw: () => new Graphics(),
+			};
 		}
 
 		return {
+			layer: "world",
 			depth: skeleton.depth,
+
 			draw: () => {
 				const g = new Graphics();
 
@@ -1110,7 +1136,9 @@ export class MapRenderer {
 		const depth = lowerBottom.y + 0.1; // corners draw fractionally after walls at the same depth, so they sit visually on top of the seam they're bridging
 
 		return {
+			layer: "world",
 			depth,
+
 			draw: () => {
 				const g = new Graphics();
 				const topU = up(top);
