@@ -55,6 +55,7 @@ import type {
 	TutorialCombatGuide,
 } from "@/tutorial/tutorialPort";
 import type { DialogueLine } from "@/tutorial/dialogue";
+import { preloadMapMaterials } from "@/rendering/materials/mapMaterialFactory";
 
 /**
  * Tactical map scene — grid, mercenary, AP turns, cards, chests, win condition.
@@ -347,8 +348,11 @@ export class MapScene implements Scene, TutorialPort {
 			null,
 			true,
 			MapScene.LOWER_FLOOR_WALL_HEIGHT_SCALE,
+			{
+				mapSeed: this.game.session.mapSeed ?? 0,
+				floorIndex: lowerFloorIndex,
+			},
 		);
-
 		this.lowerFloorTilesContainer.alpha = MapScene.LOWER_FLOOR_ALPHA;
 		this.lowerFloorTilesContainer.y = MapScene.LOWER_FLOOR_Y_OFFSET;
 	}
@@ -432,7 +436,10 @@ export class MapScene implements Scene, TutorialPort {
 					}
 				: null;
 
-		this.mapRenderer.build(compiled, focus, fog);
+		this.mapRenderer.build(compiled, focus, fog, false, 1, {
+			mapSeed: this.game.session.mapSeed ?? 0,
+			floorIndex: viewedFloor,
+		});
 	}
 
 	/**
@@ -772,7 +779,9 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	/** Render the map, center the camera, and wire up input. */
-	onEnter(): void {
+	async onEnter(): Promise<void> {
+		await preloadMapMaterials();
+
 		this.game.audio.playMusic("map");
 		this.rebuildMapRenderWithFog();
 		this.centerCameraOnActiveHunter();

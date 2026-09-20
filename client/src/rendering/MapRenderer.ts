@@ -1,4 +1,5 @@
-import { Container, Graphics } from "pixi.js";
+import { Container, Graphics, type Texture } from "pixi.js";
+import { resolveTileTexture } from "./materials/mapMaterialFactory";
 import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
 import * as RH from "@relic-hunter/shared";
 import { fillForTileCode } from "./tileFills";
@@ -80,6 +81,11 @@ type ScreenPoint = { x: number; y: number };
 interface Drawable {
 	depth: number;
 	draw: () => Graphics;
+}
+
+interface MapMaterialRenderContext {
+	mapSeed: number;
+	floorIndex: number;
 }
 
 /** Per-barrier-type visual info, looked up once per wall/corner piece instead of a growing chain of isDoor/isFence/isGlass/isLowWall ternaries at every color reference. */
@@ -233,13 +239,16 @@ export class MapRenderer {
 		} | null = null,
 		forceWashed = false,
 		wallHeightScale = 1,
+		materialContext?: MapMaterialRenderContext,
 	): void {
 		this.container.removeChildren();
+
 		const drawables: Drawable[] = [];
 
 		const focusCellKeys = focusRoom
 			? new Set(focusRoom.cells.map((c) => `${c.x},${c.y}`))
 			: null;
+
 		const focusBoundaryKeys = focusRoom
 			? new Set(
 					focusRoom.boundaryEdges.map((e) => this.edgeDedupeKey(e.a, e.b)),
@@ -257,40 +266,83 @@ export class MapRenderer {
 					fog.center,
 					fog.turn,
 				);
-				if (visibility === "unseen") return "hidden";
-				if (visibility === "explored") return "washed";
+
+				if (visibility === "unseen") {
+					return "hidden";
+				}
+
+				if (visibility === "explored") {
+					return "washed";
+				}
+
 				// "visible": fall through
 			}
 
 			// Used by the lower-floor underlay: render the whole floor with
 			// the same darkened "washed" treatment used elsewhere, rather
-			// than making the whole container highly transparent (which
-			// creates the x-ray / grid-visible-through look).
-			if (forceWashed) return "washed";
+			// than making the whole container highly transparent.
+			if (forceWashed) {
+				return "washed";
+			}
 
 			return roomFocused ? "washed" : "normal";
 		};
 
+		// ------------------------------------------------------------
+		// TILE TOPS
+		// ------------------------------------------------------------
+
 		for (let y = 0; y < compiled.grid.height; y++) {
 			for (let x = 0; x < compiled.grid.width; x++) {
-				const coord = { x, y };
+				const coord: RH.GridCoord = {
+					x,
+					y,
+				};
+
 				const key = `${x},${y}`;
+
 				const elevation = compiled.elevation.get(key) ?? 0;
-				if (!Number.isFinite(elevation)) continue; // void — nothing to draw
+
+				// Void / non-renderable tile.
+				if (!Number.isFinite(elevation)) {
+					continue;
+				}
+
 				const roomFocused = focusCellKeys !== null && !focusCellKeys.has(key);
+
 				const state = visualStateAt(coord, roomFocused);
-				if (state === "hidden") continue;
+
+				if (state === "hidden") {
+					continue;
+				}
+
+				const tileCode = compiled.tileCodes.get(key);
+
+				const texture = materialContext
+					? resolveTileTexture(
+							tileCode,
+							coord,
+							materialContext.mapSeed,
+							materialContext.floorIndex,
+						)
+					: undefined;
+
 				drawables.push(
 					this.tileDrawable(
 						coord,
 						elevation,
 						state === "washed",
-						fillForTileCode(compiled.tileCodes.get(key)),
+						fillForTileCode(tileCode),
 						this.tileTouchesElevationBoundary(compiled, coord, elevation),
+						texture,
 					),
 				);
 			}
 		}
+
+		// ------------------------------------------------------------
+		// TERRAIN FACES
+		// ------------------------------------------------------------
 
 		// Vertical terrain faces between two horizontally/vertically
 		// adjacent tiles with different elevation - the actual
@@ -301,6 +353,7 @@ export class MapRenderer {
 			dir: "E" | "S",
 		): void => {
 			const aElevation = this.elevationAt(compiled, a);
+
 			const bElevation = this.elevationAt(compiled, b);
 
 			if (
@@ -315,13 +368,17 @@ export class MapRenderer {
 
 			const aOutsideFocus =
 				focusCellKeys !== null && !focusCellKeys.has(RH.coordKey(a));
+
 			const bOutsideFocus =
 				focusCellKeys !== null && !focusCellKeys.has(RH.coordKey(b));
 
 			const aState = visualStateAt(a, aOutsideFocus);
+
 			const bState = visualStateAt(b, bOutsideFocus);
 
-			if (aState === "hidden" && bState === "hidden") return;
+			if (aState === "hidden" && bState === "hidden") {
+				return;
+			}
 
 			drawables.push(
 				this.terrainFaceDrawable(
@@ -337,16 +394,41 @@ export class MapRenderer {
 
 		for (let y = 0; y < compiled.grid.height; y++) {
 			for (let x = 0; x < compiled.grid.width - 1; x++) {
-				pushTerrainFace({ x, y }, { x: x + 1, y }, "E");
-			}
-		}
-		for (let y = 0; y < compiled.grid.height - 1; y++) {
-			for (let x = 0; x < compiled.grid.width; x++) {
-				pushTerrainFace({ x, y }, { x, y: y + 1 }, "S");
+				pushTerrainFace(
+					{
+						x,
+						y,
+					},
+					{
+						x: x + 1,
+						y,
+					},
+					"E",
+				);
 			}
 		}
 
-		// corners keyed by real topology (vertex), not rounded screen
+		for (let y = 0; y < compiled.grid.height - 1; y++) {
+			for (let x = 0; x < compiled.grid.width; x++) {
+				pushTerrainFace(
+					{
+						x,
+						y,
+					},
+					{
+						x,
+						y: y + 1,
+					},
+					"S",
+				);
+			}
+		}
+
+		// ------------------------------------------------------------
+		// WALL CORNER COLLECTION
+		// ------------------------------------------------------------
+
+		// Corners are keyed by real topology (vertex), not rounded screen
 		// position - every wall touching the same logical vertex agrees
 		// exactly, since they all resolve through the same topology
 		// function.
@@ -355,6 +437,7 @@ export class MapRenderer {
 			washed: 1,
 			normal: 2,
 		};
+
 		const cornerTouches = new Map<
 			string,
 			{
@@ -375,36 +458,60 @@ export class MapRenderer {
 			barrier: RH.EdgeBarrier,
 		): void => {
 			const key = `${vertex.x},${vertex.y}`;
+
 			const existing = cornerTouches.get(key);
+
 			const nextHeight = Math.max(existing?.height ?? 0, height);
+
 			const nextFoundationBottomY = Math.max(
 				existing?.foundationBottomY ?? base.y,
 				foundationBottomY,
 			);
+
 			const nextState: VisualState =
 				!existing || STATE_RANK[state] > STATE_RANK[existing.state]
 					? state
 					: existing.state;
 
 			cornerTouches.set(key, {
-				// Every connected wall resolves this vertex through the
-				// same topology function, so these bases should agree
-				// exactly.
+				// Every connected wall resolves this vertex through
+				// the same topology function, so these bases should
+				// agree exactly.
 				base: existing?.base ?? base,
+
 				foundationBottomY: nextFoundationBottomY,
+
 				height: nextHeight,
+
 				state: nextState,
+
 				barrier:
 					!existing || height > existing.height ? barrier : existing.barrier,
 			});
 		};
 
+		// ------------------------------------------------------------
+		// EAST/WEST WALL EDGES
+		// ------------------------------------------------------------
+
 		for (let y = 0; y < compiled.grid.height; y++) {
 			for (let x = 0; x < compiled.grid.width - 1; x++) {
-				const a = { x, y };
-				const b = { x: x + 1, y };
+				const a: RH.GridCoord = {
+					x,
+					y,
+				};
+
+				const b: RH.GridCoord = {
+					x: x + 1,
+					y,
+				};
+
 				const barrier = RH.getEdgeBetween(compiled.edges, a, b);
-				if (barrier === RH.EdgeBarrier.None) continue;
+
+				if (barrier === RH.EdgeBarrier.None) {
+					continue;
+				}
+
 				drawables.push(
 					this.wallDrawable(
 						a,
@@ -419,12 +526,29 @@ export class MapRenderer {
 				);
 			}
 		}
+
+		// ------------------------------------------------------------
+		// NORTH/SOUTH WALL EDGES
+		// ------------------------------------------------------------
+
 		for (let y = 0; y < compiled.grid.height - 1; y++) {
 			for (let x = 0; x < compiled.grid.width; x++) {
-				const a = { x, y };
-				const b = { x, y: y + 1 };
+				const a: RH.GridCoord = {
+					x,
+					y,
+				};
+
+				const b: RH.GridCoord = {
+					x,
+					y: y + 1,
+				};
+
 				const barrier = RH.getEdgeBetween(compiled.edges, a, b);
-				if (barrier === RH.EdgeBarrier.None) continue;
+
+				if (barrier === RH.EdgeBarrier.None) {
+					continue;
+				}
+
 				drawables.push(
 					this.wallDrawable(
 						a,
@@ -439,6 +563,10 @@ export class MapRenderer {
 				);
 			}
 		}
+
+		// ------------------------------------------------------------
+		// WALL CORNERS
+		// ------------------------------------------------------------
 
 		for (const {
 			base,
@@ -447,7 +575,10 @@ export class MapRenderer {
 			state,
 			barrier,
 		} of cornerTouches.values()) {
-			if (state === "hidden") continue;
+			if (state === "hidden") {
+				continue;
+			}
+
 			drawables.push(
 				this.cornerDrawable(
 					base,
@@ -459,7 +590,12 @@ export class MapRenderer {
 			);
 		}
 
+		// ------------------------------------------------------------
+		// FINAL DEPTH SORT + DRAW
+		// ------------------------------------------------------------
+
 		drawables.sort((a, b) => a.depth - b.depth);
+
 		for (const d of drawables) {
 			this.container.addChild(d.draw());
 		}
@@ -565,6 +701,7 @@ export class MapRenderer {
 		washed: boolean,
 		fillOverride?: number,
 		trueFootprint = false,
+		texture?: Texture,
 	): Drawable {
 		const elevationPx = elevation * TILE_HEIGHT;
 
@@ -593,7 +730,15 @@ export class MapRenderer {
 					c.y,
 				];
 				g.poly(poly);
-				g.fill(color);
+
+				if (texture) {
+					g.fill({
+						texture,
+						textureSpace: "local",
+					});
+				} else {
+					g.fill(color);
+				}
 				if (washed) {
 					g.poly(poly);
 					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
