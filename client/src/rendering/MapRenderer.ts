@@ -372,6 +372,10 @@ export class MapRenderer {
 				return;
 			}
 
+			if (aElevation <= bElevation + 0.000001) {
+				return;
+			}
+
 			const aOutsideFocus =
 				focusCellKeys !== null && !focusCellKeys.has(RH.coordKey(a));
 

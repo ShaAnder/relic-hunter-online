@@ -178,6 +178,8 @@ export function compileEdgeMap(
 			const key = `${x},${y}`;
 			const walkable = isWalkableEdgeTileCode(code);
 
+			const renderable = code !== EdgeMapTileCode.Void;
+
 			const override = elevationOverrides[key];
 			const step = clampElevationStep(
 				override === undefined
@@ -190,7 +192,7 @@ export function compileEdgeMap(
 
 			grid.setTileType(coord, walkable ? TileType.Floor : TileType.Wall);
 
-			elevation.set(key, walkable ? elevationHeightForStep(step) : Infinity);
+			elevation.set(key, renderable ? elevationHeightForStep(step) : Infinity);
 		}
 	}
 

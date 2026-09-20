@@ -5,6 +5,10 @@ import {
 	type GridCoord,
 } from "@relic-hunter/shared";
 import { ROAD_TEXTURE_URLS } from "./roadMaterial";
+import { PAVEMENT_TEXTURE_URLS } from "./pavementMaterial";
+import { FLOOR_TEXTURE_URLS } from "./floorMaterial";
+import { GRASS_TEXTURE_URLS } from "./grassMaterial";
+import { WATER_TEXTURE_URLS } from "./waterMaterial";
 
 interface TileTextureFamily {
 	urls: readonly string[];
@@ -33,6 +37,22 @@ const TILE_TEXTURE_FAMILIES: Partial<
 > = {
 	[EdgeMapTileCode.Road]: {
 		urls: ROAD_TEXTURE_URLS,
+	},
+
+	[EdgeMapTileCode.Pavement]: {
+		urls: PAVEMENT_TEXTURE_URLS,
+	},
+
+	[EdgeMapTileCode.Floor]: {
+		urls: FLOOR_TEXTURE_URLS,
+	},
+
+	[EdgeMapTileCode.Nature]: {
+		urls: GRASS_TEXTURE_URLS,
+	},
+
+	[EdgeMapTileCode.River]: {
+		urls: WATER_TEXTURE_URLS,
 	},
 };
 
