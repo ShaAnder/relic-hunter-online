@@ -578,13 +578,6 @@ export class MapScene implements Scene, TutorialPort {
 		this.mapWidth = this.grid.width;
 		this.mapHeight = this.grid.height;
 
-		// Lower-floor geometry must render first so the active floor always
-		// paints cleanly over it.
-		this.boardContainer.addChild(this.lowerFloorTilesContainer);
-
-		this.boardContainer.addChild(this.tilesContainer);
-		this.view.addChild(this.boardContainer);
-
 		this.mapController = new MapController(
 			this.game,
 			this.worldDepthContainer,

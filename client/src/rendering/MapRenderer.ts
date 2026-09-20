@@ -213,6 +213,43 @@ export class MapRenderer {
 		this.ownedWorldGraphics = [];
 	}
 
+	private clearForRebuild(): void {
+		/**
+		 * The active-floor renderer uses two containers:
+		 *
+		 * groundContainer
+		 *     -> tile tops
+		 *
+		 * worldDepthContainer
+		 *     -> terrain faces / walls / entities
+		 *
+		 * The lower-floor renderer still uses a single container for both.
+		 * In that case we must clear it only once.
+		 */
+		if (this.groundContainer === this.worldDepthContainer) {
+			for (const child of this.groundContainer.removeChildren()) {
+				child.destroy();
+			}
+
+			this.ownedWorldGraphics = [];
+			return;
+		}
+		/**
+		 * Active floor:
+		 *
+		 * groundContainer is fully owned by MapRenderer, so every child
+		 * can be removed.
+		 */
+		for (const child of this.groundContainer.removeChildren()) {
+			child.destroy();
+		}
+		/**
+		 * worldDepthContainer is shared with hunters, monsters and chests,
+		 * so only remove Graphics created by this MapRenderer.
+		 */
+		this.clearOwnedWorldGraphics();
+	}
+
 	/**
 	 * @param focusRoom When set, this room's own boundary walls draw
 	 * visually shorter
@@ -236,11 +273,7 @@ export class MapRenderer {
 		wallHeightScale = 1,
 		materialContext?: MapMaterialRenderContext,
 	): void {
-		for (const child of this.groundContainer.removeChildren()) {
-			child.destroy();
-		}
-
-		this.clearOwnedWorldGraphics();
+		this.clearForRebuild();
 
 		const drawables: Drawable[] = [];
 
@@ -599,8 +632,6 @@ export class MapRenderer {
 		// ------------------------------------------------------------
 		// FINAL DEPTH SORT + DRAW
 		// ------------------------------------------------------------
-
-		drawables.sort((a, b) => a.depth - b.depth);
 
 		const groundDrawables = drawables
 			.filter((d) => d.layer === "ground")
