@@ -925,7 +925,7 @@ export class MapScene implements Scene, TutorialPort {
 			if (liveCoordKey !== this.lastLiveVisibilityCoordKey) {
 				this.lastLiveVisibilityCoordKey = liveCoordKey;
 
-				this.refreshVisibility(this.localUnit.state, localVisionCoord);
+				// this.refreshVisibility(this.localUnit.state, localVisionCoord);
 			}
 		} else {
 			this.lastLiveVisibilityCoordKey = null;

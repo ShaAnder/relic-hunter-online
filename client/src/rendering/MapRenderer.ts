@@ -1,5 +1,8 @@
-import { Container, Graphics, type Texture } from "pixi.js";
-import { resolveTileTexture } from "./materials/mapMaterialFactory";
+import { Container, Graphics } from "pixi.js";
+import {
+	resolveTileMaterial,
+	type ResolvedTileMaterial,
+} from "./materials/mapMaterialFactory";
 import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
 import * as RH from "@relic-hunter/shared";
 import { fillForTileCode } from "./tileFills";
@@ -318,13 +321,14 @@ export class MapRenderer {
 
 				const tileCode = compiled.tileCodes.get(key);
 
-				const texture = materialContext
-					? resolveTileTexture(
-							tileCode,
+				const material = materialContext
+					? resolveTileMaterial({
+							code: tileCode,
 							coord,
-							materialContext.mapSeed,
-							materialContext.floorIndex,
-						)
+							compiled,
+							mapSeed: materialContext.mapSeed,
+							floorIndex: materialContext.floorIndex,
+						})
 					: undefined;
 
 				drawables.push(
@@ -333,8 +337,10 @@ export class MapRenderer {
 						elevation,
 						state === "washed",
 						fillForTileCode(tileCode),
-						this.tileTouchesElevationBoundary(compiled, coord, elevation),
-						texture,
+
+						this.tileHasLowerElevationNeighbour(compiled, coord, elevation),
+
+						material,
 					),
 				);
 			}
@@ -656,7 +662,7 @@ export class MapRenderer {
 	 * Therefore every tile touching a height change uses its TRUE
 	 * footprint.
 	 */
-	private tileTouchesElevationBoundary(
+	private tileHasLowerElevationNeighbour(
 		compiled: RH.CompiledEdgeMap,
 		coord: RH.GridCoord,
 		elevation: number,
@@ -680,14 +686,15 @@ export class MapRenderer {
 
 			const other = this.elevationAt(compiled, neighbour);
 
-			// Only a REAL finite height difference disables oversizing.
-			// Void/out-of-bounds does not automatically create a terrain
-			// face and should not introduce a new gap.
 			if (
 				other !== undefined &&
 				Number.isFinite(other) &&
-				Math.abs(other - elevation) > 0.000001
+				elevation - other > 0.000001
 			) {
+				// THIS tile is higher than its neighbour.
+				//
+				// Its top surface must not substantially overshoot the
+				// terrain face beneath it.
 				return true;
 			}
 		}
@@ -701,7 +708,7 @@ export class MapRenderer {
 		washed: boolean,
 		fillOverride?: number,
 		trueFootprint = false,
-		texture?: Texture,
+		material?: ResolvedTileMaterial,
 	): Drawable {
 		const elevationPx = elevation * TILE_HEIGHT;
 
@@ -731,13 +738,23 @@ export class MapRenderer {
 				];
 				g.poly(poly);
 
-				if (texture) {
+				if (material?.baseTexture) {
 					g.fill({
-						texture,
+						texture: material.baseTexture,
 						textureSpace: "local",
 					});
 				} else {
 					g.fill(color);
+				}
+
+				for (const overlay of material?.overlays ?? []) {
+					g.poly(poly);
+
+					g.fill({
+						texture: overlay.texture,
+						textureSpace: "local",
+						alpha: overlay.alpha,
+					});
 				}
 				if (washed) {
 					g.poly(poly);

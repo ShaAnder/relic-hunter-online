@@ -1,9 +1,31 @@
 import { Assets, type Texture } from "pixi.js";
-import { EdgeMapTileCode, type GridCoord } from "@relic-hunter/shared";
+import {
+	EdgeMapTileCode,
+	type CompiledEdgeMap,
+	type GridCoord,
+} from "@relic-hunter/shared";
 import { ROAD_TEXTURE_URLS } from "./roadMaterial";
 
 interface TileTextureFamily {
 	urls: readonly string[];
+}
+
+export interface ResolvedTileOverlay {
+	texture: Texture;
+	alpha: number;
+}
+
+export interface ResolvedTileMaterial {
+	baseTexture?: Texture;
+	overlays: readonly ResolvedTileOverlay[];
+}
+
+export interface TileMaterialResolveContext {
+	code: EdgeMapTileCode | undefined;
+	coord: GridCoord;
+	compiled: CompiledEdgeMap;
+	mapSeed: number;
+	floorIndex: number;
 }
 
 const TILE_TEXTURE_FAMILIES: Partial<
@@ -37,20 +59,31 @@ export function preloadMapMaterials(): Promise<void> {
 	return preLoadPromise;
 }
 
-export function resolveTileTexture(
-	code: EdgeMapTileCode | undefined,
-	coord: GridCoord,
-	mapSeed: number,
-	floorIndex: number,
-): Texture | undefined {
-	if (code === undefined) return undefined;
-
+export function resolveTileMaterial(
+	context: TileMaterialResolveContext,
+): ResolvedTileMaterial {
+	const { code, coord, mapSeed, floorIndex } = context;
+	if (code === undefined) {
+		return {
+			baseTexture: undefined,
+			overlays: [],
+		};
+	}
 	const family = TILE_TEXTURE_FAMILIES[code];
-	if (!family || family.urls.length === 0) return undefined;
-
+	if (!family || family.urls.length === 0) {
+		return {
+			baseTexture: undefined,
+			overlays: [],
+		};
+	}
 	const hash = hashTile(mapSeed, floorIndex, coord.x, coord.y, code);
 	const url = family.urls[hash % family.urls.length];
-	return textureCache.get(url);
+	return {
+		baseTexture: textureCache.get(url),
+		// Reserved for future:
+		// cracks, dust, markings, etc.
+		overlays: [],
+	};
 }
 
 function hashTile(
