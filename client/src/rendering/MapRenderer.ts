@@ -3,6 +3,7 @@ import {
 	resolveTileMaterial,
 	type ResolvedTileMaterial,
 } from "./materials/mapMaterialFactory";
+import { resolveBarrierMaterial } from "./materials/barrierMaterialFactory";
 import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
 import * as RH from "@relic-hunter/shared";
 import { fillForTileCode } from "./tileFills";
@@ -1068,6 +1069,28 @@ export class MapRenderer {
 		};
 	}
 
+	private fillBarrierPolygon(
+		g: Graphics,
+		polygon: number[],
+		texture: import("pixi.js").Texture | undefined,
+		fallbackColor: number,
+		alpha: number,
+	): void {
+		g.poly(polygon);
+		if (texture) {
+			g.fill({
+				texture,
+				textureSpace: "local",
+				alpha,
+			});
+			return;
+		}
+		g.fill({
+			color: fallbackColor,
+			alpha,
+		});
+	}
+
 	private barrierSegmentDrawable(
 		coord: RH.GridCoord,
 		other: RH.GridCoord,
@@ -1086,6 +1109,7 @@ export class MapRenderer {
 		) => void,
 	): Drawable {
 		const style = styleFor(barrier);
+		const material = resolveBarrierMaterial(barrier);
 		const isFocusedBoundary =
 			focusBoundaryKeys?.has(this.edgeDedupeKey(coord, other)) ?? false;
 		const roomFocused = focusBoundaryKeys !== null && !isFocusedBoundary;
@@ -1207,32 +1231,46 @@ export class MapRenderer {
 				];
 
 				if (skeleton.hasFoundation) {
-					g.poly(foundationLeft);
-					g.fill({
-						color: style.segmentLeftColor,
-						alpha: style.segmentAlpha,
-					});
-					g.poly(foundationRight);
-					g.fill({
-						color: style.segmentRightColor,
-						alpha: style.segmentAlpha,
-					});
+					this.fillBarrierPolygon(
+						g,
+						foundationLeft,
+						material.segmentFaceTexture,
+						style.segmentLeftColor,
+						style.segmentAlpha,
+					);
+
+					this.fillBarrierPolygon(
+						g,
+						foundationRight,
+						material.segmentFaceTexture,
+						style.segmentRightColor,
+						style.segmentAlpha,
+					);
 				}
-				g.poly(leftFace);
-				g.fill({
-					color: style.segmentLeftColor,
-					alpha: style.segmentAlpha,
-				});
-				g.poly(rightFace);
-				g.fill({
-					color: style.segmentRightColor,
-					alpha: style.segmentAlpha,
-				});
-				g.poly(topFace);
-				g.fill({
-					color: style.segmentTopColor,
-					alpha: style.segmentAlpha,
-				});
+
+				this.fillBarrierPolygon(
+					g,
+					leftFace,
+					material.segmentFaceTexture,
+					style.segmentLeftColor,
+					style.segmentAlpha,
+				);
+
+				this.fillBarrierPolygon(
+					g,
+					rightFace,
+					material.segmentFaceTexture,
+					style.segmentRightColor,
+					style.segmentAlpha,
+				);
+
+				this.fillBarrierPolygon(
+					g,
+					topFace,
+					material.segmentTopTexture,
+					style.segmentTopColor,
+					style.segmentAlpha,
+				);
 
 				if (state === "washed") {
 					if (skeleton.hasFoundation) {
@@ -1261,6 +1299,7 @@ export class MapRenderer {
 		barrier: RH.EdgeBarrier,
 	): Drawable {
 		const style = styleFor(barrier);
+		const material = resolveBarrierMaterial(barrier);
 
 		const { x: cx, y: cy } = screenPos;
 		const foundationDrop = Math.max(0, foundationBottomY - cy);
@@ -1335,21 +1374,29 @@ export class MapRenderer {
 					leftU.y,
 				];
 
-				g.poly(leftFace);
-				g.fill({
-					color: style.connectorLeftColor,
-					alpha: style.connectorAlpha,
-				});
-				g.poly(rightFace);
-				g.fill({
-					color: style.connectorRightColor,
-					alpha: style.connectorAlpha,
-				});
-				g.poly(topFace);
-				g.fill({
-					color: style.connectorTopColor,
-					alpha: style.connectorAlpha,
-				});
+				this.fillBarrierPolygon(
+					g,
+					leftFace,
+					material.connectorFaceTexture,
+					style.connectorLeftColor,
+					style.connectorAlpha,
+				);
+
+				this.fillBarrierPolygon(
+					g,
+					rightFace,
+					material.connectorFaceTexture,
+					style.connectorRightColor,
+					style.connectorAlpha,
+				);
+
+				this.fillBarrierPolygon(
+					g,
+					topFace,
+					material.connectorTopTexture,
+					style.connectorTopColor,
+					style.connectorAlpha,
+				);
 
 				if (washed) {
 					g.poly(leftFace);

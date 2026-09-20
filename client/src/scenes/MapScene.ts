@@ -56,6 +56,7 @@ import type {
 } from "@/tutorial/tutorialPort";
 import type { DialogueLine } from "@/tutorial/dialogue";
 import { preloadMapMaterials } from "@/rendering/materials/mapMaterialFactory";
+import { preloadBarrierMaterials } from "@/rendering/materials/barrierMaterialFactory";
 
 /**
  * Tactical map scene — grid, mercenary, AP turns, cards, chests, win condition.
@@ -791,7 +792,7 @@ export class MapScene implements Scene, TutorialPort {
 
 	/** Render the map, center the camera, and wire up input. */
 	async onEnter(): Promise<void> {
-		await preloadMapMaterials();
+		await Promise.all([preloadMapMaterials(), preloadBarrierMaterials()]);
 
 		this.game.audio.playMusic("map");
 		this.rebuildMapRenderWithFog();
