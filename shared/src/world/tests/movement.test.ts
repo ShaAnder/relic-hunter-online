@@ -111,19 +111,31 @@ describe("terrain traversal authority", () => {
 		).toBe(1);
 	});
 
-	it("costs 2 for elevation delta 2", () => {
+	it("costs 1 for elevation delta 2", () => {
 		expect(
 			getTraversalStepCost(from, to, EdgeBarrier.None, terrain(0, 2)),
+		).toBe(1);
+	});
+
+	it("costs 1 for elevation delta 3", () => {
+		expect(
+			getTraversalStepCost(from, to, EdgeBarrier.None, terrain(0, 3)),
+		).toBe(1);
+	});
+
+	it("costs 2 for rough elevation delta 4", () => {
+		expect(
+			getTraversalStepCost(from, to, EdgeBarrier.None, terrain(0, 4)),
 		).toBe(2);
 	});
 
-	it("rejects elevation delta 3 for the default profile", () => {
+	it("rejects elevation delta 5", () => {
 		expect(
-			getTraversalStepCost(from, to, EdgeBarrier.None, terrain(0, 3)),
+			getTraversalStepCost(from, to, EdgeBarrier.None, terrain(0, 5)),
 		).toBeNull();
 	});
 
-	it("treats Road -2 to Pavement 0 as a delta-2 move costing 2", () => {
+	it("treats Road -2 to Pavement 0 as normal graded movement", () => {
 		expect(
 			getTraversalStepCost(
 				from,
@@ -131,7 +143,7 @@ describe("terrain traversal authority", () => {
 				EdgeBarrier.None,
 				terrain(-2, 0, EdgeMapTileCode.Road, EdgeMapTileCode.Pavement),
 			),
-		).toBe(2);
+		).toBe(1);
 	});
 
 	it("stair-to-stair delta 1 costs 1", () => {
@@ -162,14 +174,20 @@ describe("terrain traversal authority", () => {
 		).toBe(2);
 	});
 
-	it("combines low-wall and elevation surcharges", () => {
+	it("low wall across a normal delta-3 grade costs 2 total", () => {
 		expect(
-			getTraversalStepCost(from, to, EdgeBarrier.LowWall, terrain(0, 2)),
+			getTraversalStepCost(from, to, EdgeBarrier.LowWall, terrain(0, 3)),
+		).toBe(2);
+	});
+
+	it("combines low-wall and rough delta-4 surcharges", () => {
+		expect(
+			getTraversalStepCost(from, to, EdgeBarrier.LowWall, terrain(0, 4)),
 		).toBe(3);
 	});
 
 	it("ignoreElevationPenalty removes the rough-elevation surcharge", () => {
-		const context = terrain(0, 2);
+		const context = terrain(0, 4);
 
 		context.profile = {
 			ignoreElevationPenalty: true,
@@ -191,15 +209,13 @@ describe("terrain traversal authority", () => {
 	});
 
 	it("a larger direct elevation profile permits a larger non-stair delta", () => {
-		const context = terrain(0, 3);
+		const context = terrain(0, 5);
 
 		context.profile = {
-			maxDirectElevationDeltaSteps: 3,
+			maxDirectElevationDeltaSteps: 5,
 		};
 
-		expect(
-			getTraversalStepCost(from, to, EdgeBarrier.None, context),
-		).not.toBeNull();
+		expect(getTraversalStepCost(from, to, EdgeBarrier.None, context)).toBe(2);
 	});
 
 	it.each([EdgeBarrier.FullWall, EdgeBarrier.Fence, EdgeBarrier.Glass])(
@@ -230,12 +246,12 @@ describe("terrain traversal authority", () => {
 			]),
 		};
 
-		expect(computePathMovementCost(start, path, null, context)).toBe(3);
+		expect(computePathMovementCost(start, path, null, context)).toBe(2);
 	});
 });
 
 describe("weighted movement range", () => {
-	it("stores actual movement cost rather than path length", () => {
+	it("treats elevation through delta 3 as normal movement cost", () => {
 		const grid = new Grid(3, 1);
 
 		const edges = createEmptyEdgeGrid(3, 1);
@@ -252,13 +268,13 @@ describe("weighted movement range", () => {
 			grid,
 			edges,
 			{ x: 0, y: 0 },
-			3,
+			2,
 			new Set(),
 			terrain,
 		);
 
-		expect(range.get("1,0")?.distance).toBe(2);
-		expect(range.get("2,0")?.distance).toBe(3);
+		expect(range.get("1,0")?.distance).toBe(1);
+		expect(range.get("2,0")?.distance).toBe(2);
 	});
 
 	it("includes low-wall cost in Dijkstra distance", () => {
@@ -278,14 +294,37 @@ describe("weighted movement range", () => {
 		expect(range.get("1,0")?.distance).toBe(2);
 	});
 
-	it("does not include an elevation-delta-3 destination", () => {
+	it("charges 2 movement for a rough elevation-delta-4 destination", () => {
 		const grid = new Grid(2, 1);
 		const edges = createEmptyEdgeGrid(2, 1);
 
 		const terrain: TerrainTraversalContext = {
 			elevationSteps: new Map([
 				["0,0", 0],
-				["1,0", 3],
+				["1,0", 4],
+			]),
+		};
+
+		const range = computeMovementRangeWithEdges(
+			grid,
+			edges,
+			{ x: 0, y: 0 },
+			2,
+			new Set(),
+			terrain,
+		);
+
+		expect(range.get("1,0")?.distance).toBe(2);
+	});
+
+	it("does not include an elevation-delta-5 destination", () => {
+		const grid = new Grid(2, 1);
+		const edges = createEmptyEdgeGrid(2, 1);
+
+		const terrain: TerrainTraversalContext = {
+			elevationSteps: new Map([
+				["0,0", 0],
+				["1,0", 5],
 			]),
 		};
 
