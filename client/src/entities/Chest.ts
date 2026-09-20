@@ -1,6 +1,7 @@
 import { Container, Graphics } from "pixi.js";
 import type { GridCoord } from "@relic-hunter/shared";
 import { gridToScreenElevated } from "@/math/isoGridMath";
+import { setWorldDepth, WORLD_DEPTH_BIAS } from "@/rendering/worldDepth";
 
 /**
  * Placeholder visual for a chest sitting on the map — a closed box shape
@@ -18,6 +19,7 @@ export class Chest {
 		const pos = gridToScreenElevated(coord, elevation);
 		this.view.x = pos.x;
 		this.view.y = pos.y;
+		setWorldDepth(this.view, pos.y, WORLD_DEPTH_BIAS.chest);
 		this.view.addChild(this.box);
 		this.redraw();
 	}

@@ -3,6 +3,7 @@ import { GridCoord } from "@relic-hunter/shared";
 import type { MonsterTier } from "@relic-hunter/shared";
 import { gridToScreenElevated } from "@/math/isoGridMath";
 import { easeInOutCubic } from "@/math/easeInOutCubic";
+import { setWorldDepth, WORLD_DEPTH_BIAS } from "@/rendering/worldDepth";
 
 const TIER_COLORS: Record<MonsterTier, number> = {
 	light: 0x7bbf6a,
@@ -104,6 +105,16 @@ export class MonsterToken {
 	private syncPosition(): void {
 		this.view.x = this.currentScreenPos.x;
 		this.view.y = this.currentScreenPos.y;
+
+		/**
+		 * MonsterToken<s currentScreenPos is already the elevated
+		 * ground-contact point, so it is also the correct painter-order
+		 * depth.
+		 *
+		 * This method runs every animation frame and on instant floor
+		 * repositioning.
+		 */
+		setWorldDepth(this.view, this.currentScreenPos.y, WORLD_DEPTH_BIAS.entity);
 	}
 
 	/** Teleports to screenPos with no animation - used for floor switches, where the monster's screen position needs to jump straight to the new floor's elevation at the same tile, not walk there. */

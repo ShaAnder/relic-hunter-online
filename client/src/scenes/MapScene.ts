@@ -612,8 +612,6 @@ export class MapScene implements Scene, TutorialPort {
 			},
 		);
 
-		this.worldDepthContainer.addChild(this.mapController.chestSystem.container);
-
 		{
 			const sw = this.game.app.screen.width;
 			const sh = this.game.app.screen.height;

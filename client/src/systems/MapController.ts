@@ -68,7 +68,7 @@ export interface MapControllerCallbacks {
  * @author ShaAnder
  */
 export class MapController {
-	readonly chestSystem = new ChestSystem();
+	readonly chestSystem: ChestSystem;
 	readonly monsterSystem: MonsterSystem;
 	readonly trapSystem = new TrapSystem();
 	readonly battleHost: BattleHost;
@@ -77,10 +77,11 @@ export class MapController {
 
 	constructor(
 		private game: Game,
-		mercenaryContainer: Container,
+		worldDepthContainer: Container,
 		private cb: MapControllerCallbacks,
 	) {
-		this.monsterSystem = new MonsterSystem(mercenaryContainer);
+		this.chestSystem = new ChestSystem(worldDepthContainer);
+		this.monsterSystem = new MonsterSystem(worldDepthContainer);
 		this.battleHost = new BattleHost(this.game);
 	}
 

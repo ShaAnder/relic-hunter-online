@@ -1,4 +1,4 @@
-import { Container } from "pixi.js";
+import type { Container } from "pixi.js";
 import * as RH from "@relic-hunter/shared";
 import { Chest } from "@/entities/Chest";
 
@@ -24,10 +24,19 @@ export type ChestOpenOutcome =
  */
 export class ChestSystem {
 	private placedChests: PlacedChest[] = [];
-	readonly container = new Container();
-
+	constructor(private worldDepthContainer: Container) {}
 	get all(): readonly PlacedChest[] {
 		return this.placedChests;
+	}
+
+	private clearPlacedChests(): void {
+		for (const placed of this.placedChests) {
+			placed.entity.view.removeFromParent();
+			placed.entity.view.destroy({
+				children: true,
+			});
+		}
+		this.placedChests = [];
 	}
 
 	/** Rebuilds from session's already-decided placements — a returning player, not a fresh match. */
@@ -39,14 +48,13 @@ export class ChestSystem {
 		}[],
 		floors?: readonly RH.CompiledEdgeMap[],
 	): void {
-		this.container.removeChildren();
-		this.placedChests = [];
+		this.clearPlacedChests();
 		for (const record of records) {
 			const entity = new Chest(
 				record.coord,
 				floors?.[record.floorIndex]?.elevation,
 			);
-			this.container.addChild(entity.view);
+			this.worldDepthContainer.addChild(entity.view);
 			this.placedChests.push({
 				coord: record.coord,
 				plan: record.plan,
@@ -67,8 +75,7 @@ export class ChestSystem {
 		floorIndex = 0,
 		elevation?: Map<string, number>,
 	): void {
-		this.container.removeChildren();
-		this.placedChests = [];
+		this.clearPlacedChests();
 
 		const used = new Set(reserved);
 		for (const chestPlan of plan.chests) {
@@ -76,7 +83,7 @@ export class ChestSystem {
 			if (!coord) break;
 			used.add(RH.coordKey(coord));
 			const entity = new Chest(coord, elevation);
-			this.container.addChild(entity.view);
+			this.worldDepthContainer.addChild(entity.view);
 			this.placedChests.push({ coord, plan: chestPlan, entity, floorIndex });
 		}
 	}

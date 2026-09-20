@@ -6,6 +6,7 @@ import {
 	TILE_HEIGHT,
 } from "@/math/isoGridMath";
 import { interpolatePolyline } from "@/entities/Mercenary";
+import { setWorldDepth, WORLD_DEPTH_BIAS } from "@/rendering/worldDepth";
 import type {
 	StaticActorSpec,
 	TutorialUiPointerTarget,
@@ -214,8 +215,10 @@ export class TutorialMarkers {
 			const token = new Container();
 			token.x = pos.x;
 			token.y = pos.y;
+			setWorldDepth(token, pos.y, WORLD_DEPTH_BIAS.entity);
 
 			const body = new Graphics();
+
 			body.circle(0, -14, 16);
 			body.fill(actor.color);
 			body.stroke({ width: 2, color: 0x000000, alpha: 0.5 });
@@ -284,6 +287,7 @@ export class TutorialMarkers {
 				const pos = interpolatePolyline(points, eased);
 				token.x = pos.x;
 				token.y = pos.y;
+				setWorldDepth(token, pos.y, WORLD_DEPTH_BIAS.entity);
 				if (t < 1) {
 					requestAnimationFrame(frame);
 				} else {

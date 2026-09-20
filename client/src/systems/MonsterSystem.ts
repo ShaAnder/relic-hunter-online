@@ -22,7 +22,7 @@ export class MonsterSystem {
 	];
 
 	constructor(
-		private mercenaryContainer: Container,
+		private worldDepthContainer: Container,
 		private elevation?: Map<string, number>,
 	) {}
 
@@ -85,7 +85,7 @@ export class MonsterSystem {
 			floorIndex,
 		);
 		const token = new MonsterToken(coord, tier, this.elevation);
-		this.mercenaryContainer.addChild(token.view);
+		this.worldDepthContainer.addChild(token.view);
 
 		const entity: MonsterEntity = { state, token };
 		this.monsters.push(entity);
@@ -101,7 +101,7 @@ export class MonsterSystem {
 			floorIndex,
 		);
 		const token = new MonsterToken(coord, "boss", this.elevation);
-		this.mercenaryContainer.addChild(token.view);
+		this.worldDepthContainer.addChild(token.view);
 
 		const entity: MonsterEntity = { state, token };
 		this.boss = entity;
@@ -118,7 +118,7 @@ export class MonsterSystem {
 	): MonsterEntity {
 		const state = RH.createMonster(id, tier, coord, floorIndex);
 		const token = new MonsterToken(coord, tier, this.elevation);
-		this.mercenaryContainer.addChild(token.view);
+		this.worldDepthContainer.addChild(token.view);
 
 		const entity: MonsterEntity = { state, token };
 		this.monsters.push(entity);
@@ -130,7 +130,9 @@ export class MonsterSystem {
 		const index = this.monsters.indexOf(monster);
 		if (index !== -1) this.monsters.splice(index, 1);
 		if (monster === this.boss) this.boss = null;
-		this.mercenaryContainer.removeChild(monster.token.view);
-		monster.token.view.destroy({ children: true });
+		monster.token.view.removeFromParent();
+		monster.token.view.destroy({
+			children: true,
+		});
 	}
 }
