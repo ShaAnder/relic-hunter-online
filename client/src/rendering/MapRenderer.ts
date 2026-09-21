@@ -12,15 +12,6 @@ import { WORLD_DEPTH_BIAS } from "./worldDepth";
 /** Pixels of visual gap a wall piece sits within */
 const GAP_PX = 7;
 
-/**
- * How far a foreground tile<s top surface is repeated inward from a
- * barrier edge inside world-depth space.
- *
- * GAP_PX + 1 covers the front-side half-thickness of the thickest
- * current solid barrier without turning this into a second full tile.
- */
-const TERRAIN_BARRIER_OCCLUDER_INSET_PX = GAP_PX + 1;
-
 /** How much larger than its true footprint each tile is drawn  */
 const TILE_OVERSIZE = 1.09;
 /**
@@ -375,7 +366,6 @@ export class MapRenderer {
 		this.clearForRebuild();
 
 		const drawables: Drawable[] = [];
-
 		const focusCellKeys = focusRoom
 			? new Set(focusRoom.cells.map((c) => `${c.x},${c.y}`))
 			: null;
@@ -431,7 +421,6 @@ export class MapRenderer {
 				};
 
 				const key = `${x},${y}`;
-
 				const elevation = compiled.elevation.get(key) ?? 0;
 
 				// Void / non-renderable tile.
@@ -440,7 +429,6 @@ export class MapRenderer {
 				}
 
 				const roomFocused = focusCellKeys !== null && !focusCellKeys.has(key);
-
 				const state = visualStateAt(coord, roomFocused);
 
 				if (state === "hidden") {
@@ -448,7 +436,6 @@ export class MapRenderer {
 				}
 
 				const tileCode = compiled.tileCodes.get(key);
-
 				const material = materialContext
 					? resolveTileMaterial({
 							code: tileCode,
@@ -487,7 +474,6 @@ export class MapRenderer {
 			dir: "E" | "S",
 		): void => {
 			const aElevation = this.elevationAt(compiled, a);
-
 			const bElevation = this.elevationAt(compiled, b);
 
 			if (
@@ -506,12 +492,9 @@ export class MapRenderer {
 
 			const aOutsideFocus =
 				focusCellKeys !== null && !focusCellKeys.has(RH.coordKey(a));
-
 			const bOutsideFocus =
 				focusCellKeys !== null && !focusCellKeys.has(RH.coordKey(b));
-
 			const aState = visualStateAt(a, aOutsideFocus);
-
 			const bState = visualStateAt(b, bOutsideFocus);
 
 			if (aState === "hidden" && bState === "hidden") {
@@ -563,77 +546,6 @@ export class MapRenderer {
 		}
 
 		// ------------------------------------------------------------
-		// TERRAIN / BARRIER CONTACT OCCLUSION
-		// ------------------------------------------------------------
-
-		/**
-		 * Adds the narrow world-depth tile strip for whichever of the two
-		 * tiles is visually in front after elevation projection.
-		 *
-		 * This is called only for edges that actually contain a structural
-		 * barrier.
-		 */
-		const pushBarrierTerrainOccluder = (
-			a: RH.GridCoord,
-			b: RH.GridCoord,
-		): void => {
-			const aElevation = this.elevationAt(compiled, a);
-
-			const bElevation = this.elevationAt(compiled, b);
-
-			if (
-				aElevation === undefined ||
-				bElevation === undefined ||
-				!Number.isFinite(aElevation) ||
-				!Number.isFinite(bElevation)
-			) {
-				return;
-			}
-
-			const aCorners = this.trueTileCorners(a, aElevation * TILE_HEIGHT);
-			const bCorners = this.trueTileCorners(b, bElevation * TILE_HEIGHT);
-
-			/**
-			 * Larger projected screen Y is visually closer to the camera in
-			 * the current isometric projection.
-			 */
-			const aIsFront = aCorners.center.y >= bCorners.center.y;
-			const frontCoord = aIsFront ? a : b;
-			const otherCoord = aIsFront ? b : a;
-			const frontElevation = aIsFront ? aElevation : bElevation;
-			const frontKey = RH.coordKey(frontCoord);
-			const roomFocused =
-				focusCellKeys !== null && !focusCellKeys.has(frontKey);
-			const state = visualStateAt(frontCoord, roomFocused);
-
-			if (state === "hidden") {
-				return;
-			}
-
-			const tileCode = compiled.tileCodes.get(frontKey);
-			const material = materialContext
-				? resolveTileMaterial({
-						code: tileCode,
-						coord: frontCoord,
-						compiled,
-						mapSeed: materialContext.mapSeed,
-						floorIndex: materialContext.floorIndex,
-					})
-				: undefined;
-
-			drawables.push(
-				this.terrainBarrierOccluderDrawable(
-					frontCoord,
-					otherCoord,
-					frontElevation,
-					state === "washed",
-					fillForTileCode(tileCode),
-					material,
-				),
-			);
-		};
-
-		// ------------------------------------------------------------
 		// BARRIER CONNECTOR COLLECTION
 		// ------------------------------------------------------------
 
@@ -655,6 +567,12 @@ export class MapRenderer {
 				height: number;
 				state: VisualState;
 				barrier: RH.EdgeBarrier;
+
+				/**
+				 * Foreground tile tops that may visually cover this shared
+				 * Fence/Glass connector.
+				 */
+				occluderPolygons: number[][];
 			}
 		>();
 
@@ -665,35 +583,35 @@ export class MapRenderer {
 			foundationBottomY: number,
 			state: VisualState,
 			barrier: RH.EdgeBarrier,
+			occluderPolygon?: number[],
 		): void => {
 			const key = `${vertex.x},${vertex.y}`;
-
 			const existing = connectorTouches.get(key);
-
 			const nextHeight = Math.max(existing?.height ?? 0, height);
-
 			const nextFoundationBottomY = Math.max(
 				existing?.foundationBottomY ?? base.y,
 				foundationBottomY,
 			);
-
 			const nextState: VisualState =
 				!existing || STATE_RANK[state] > STATE_RANK[existing.state]
 					? state
 					: existing.state;
+			const nextOccluderPolygons = existing
+				? [...existing.occluderPolygons]
+				: [];
+			if (occluderPolygon) {
+				nextOccluderPolygons.push(occluderPolygon);
+			}
 
 			connectorTouches.set(key, {
 				// Every connected wall resolves this vertex through
 				// the same topology function, so these bases should
 				// agree exactly.
 				base: existing?.base ?? base,
-
 				foundationBottomY: nextFoundationBottomY,
-
 				height: nextHeight,
-
 				state: nextState,
-
+				occluderPolygons: nextOccluderPolygons,
 				barrier:
 					!existing ||
 					connectorPriorityFor(barrier) > connectorPriorityFor(existing.barrier)
@@ -736,12 +654,6 @@ export class MapRenderer {
 						registerConnector,
 					),
 				);
-				if (
-					barrier === RH.EdgeBarrier.Fence ||
-					barrier === RH.EdgeBarrier.Glass
-				) {
-					pushBarrierTerrainOccluder(a, b);
-				}
 			}
 		}
 
@@ -779,12 +691,6 @@ export class MapRenderer {
 						registerConnector,
 					),
 				);
-				if (
-					barrier === RH.EdgeBarrier.Fence ||
-					barrier === RH.EdgeBarrier.Glass
-				) {
-					pushBarrierTerrainOccluder(a, b);
-				}
 			}
 		}
 
@@ -798,6 +704,7 @@ export class MapRenderer {
 			height,
 			state,
 			barrier,
+			occluderPolygons,
 		} of connectorTouches.values()) {
 			if (state === "hidden") {
 				continue;
@@ -810,6 +717,7 @@ export class MapRenderer {
 					foundationBottomY,
 					state === "washed",
 					barrier,
+					occluderPolygons,
 				),
 			);
 		}
@@ -1003,141 +911,69 @@ export class MapRenderer {
 	}
 
 	/**
-	 * Repeats only the narrow top-surface strip of the tile that is
-	 * visually in front of a structural barrier.
+	 * Exact top-surface polygon for one tile.
 	 *
-	 * Full tile tops remain in groundContainer. This tiny strip is the
-	 * only part promoted into worldDepthContainer, allowing terrain and
-	 * physical world objects to interleave at their shared contact edge.
+	 * This is deliberately the TRUE tile footprint, never TILE_OVERSIZE:
+	 * a depth mask must stop on the authored tile boundary rather than
+	 * bleeding into neighbouring geometry.
 	 */
-	private terrainBarrierOccluderDrawable(
-		frontCoord: RH.GridCoord,
-		otherCoord: RH.GridCoord,
+	private tileTopOcclusionPolygon(
+		coord: RH.GridCoord,
 		elevation: number,
-		washed: boolean,
-		fillOverride?: number,
-		material?: ResolvedTileMaterial,
-	): Drawable {
-		const corners = this.trueTileCorners(frontCoord, elevation * TILE_HEIGHT);
+	): number[] {
+		const corners = this.trueTileCorners(coord, elevation * TILE_HEIGHT);
 
-		let edge1: ScreenPoint;
-		let edge2: ScreenPoint;
+		return [
+			corners.top.x,
+			corners.top.y,
 
-		if (otherCoord.x === frontCoord.x - 1 && otherCoord.y === frontCoord.y) {
-			// Other tile is west: shared side is top -> left.
-			edge1 = corners.top;
-			edge2 = corners.left;
-		} else if (
-			otherCoord.x === frontCoord.x + 1 &&
-			otherCoord.y === frontCoord.y
-		) {
-			// Other tile is east: shared side is right -> bottom.
-			edge1 = corners.right;
-			edge2 = corners.bottom;
-		} else if (
-			otherCoord.y === frontCoord.y - 1 &&
-			otherCoord.x === frontCoord.x
-		) {
-			// Other tile is north: shared side is top -> right.
-			edge1 = corners.top;
-			edge2 = corners.right;
-		} else if (
-			otherCoord.y === frontCoord.y + 1 &&
-			otherCoord.x === frontCoord.x
-		) {
-			// Other tile is south: shared side is bottom -> left.
-			edge1 = corners.bottom;
-			edge2 = corners.left;
-		} else {
-			return {
-				layer: "world",
-				depth: -Infinity,
-				draw: () => new Graphics(),
-			};
-		}
+			corners.right.x,
+			corners.right.y,
 
-		const midpoint = {
-			x: (edge1.x + edge2.x) / 2,
-			y: (edge1.y + edge2.y) / 2,
-		};
+			corners.bottom.x,
+			corners.bottom.y,
 
-		const inwardX = corners.center.x - midpoint.x;
-
-		const inwardY = corners.center.y - midpoint.y;
-
-		const inwardLength = Math.hypot(inwardX, inwardY);
-
-		if (inwardLength <= 0.000001) {
-			return {
-				layer: "world",
-				depth: -Infinity,
-				draw: () => new Graphics(),
-			};
-		}
-
-		const insetX = (inwardX / inwardLength) * TERRAIN_BARRIER_OCCLUDER_INSET_PX;
-
-		const insetY = (inwardY / inwardLength) * TERRAIN_BARRIER_OCCLUDER_INSET_PX;
-
-		const inner1 = {
-			x: edge1.x + insetX,
-			y: edge1.y + insetY,
-		};
-
-		const inner2 = {
-			x: edge2.x + insetX,
-			y: edge2.y + insetY,
-		};
-
-		const polygon = [
-			edge1.x,
-			edge1.y,
-			edge2.x,
-			edge2.y,
-			inner2.x,
-			inner2.y,
-			inner1.x,
-			inner1.y,
+			corners.left.x,
+			corners.left.y,
 		];
+	}
 
-		const depth = Math.max(edge1.y, edge2.y) + WORLD_DEPTH_BIAS.terrainOccluder;
+	/**
+	 * Clips a world-depth Graphic so it cannot draw through any supplied
+	 * foreground tile-top polygons.
+	 *
+	 * The mask itself is owned by MapRenderer and is cleaned up by the
+	 * existing ownedWorldGraphics lifecycle.
+	 */
+	private applyInverseWorldMask(
+		view: Graphics,
+		polygons: readonly number[][],
+	): void {
+		if (polygons.length === 0) {
+			return;
+		}
 
-		const color = fillOverride ?? FLOOR_COLOR;
+		const mask = new Graphics();
 
-		return {
-			layer: "world",
-			depth,
-			draw: () => {
-				const g = new Graphics();
-				g.poly(polygon);
-				if (material?.baseTexture) {
-					g.fill({
-						texture: material.baseTexture,
-						textureSpace: "local",
-					});
-				} else {
-					g.fill(color);
-				}
-				for (const overlay of material?.overlays ?? []) {
-					g.poly(polygon);
+		for (const polygon of polygons) {
+			mask.poly(polygon);
 
-					g.fill({
-						texture: overlay.texture,
-						textureSpace: "local",
-						alpha: overlay.alpha,
-					});
-				}
-				if (washed) {
-					g.poly(polygon);
+			mask.fill(0xffffff);
+		}
 
-					g.fill({
-						color: WASH_COLOR,
-						alpha: WASH_ALPHA,
-					});
-				}
-				return g;
-			},
-		};
+		/**
+		 * Pixi requires a mask object to be in the display list.
+		 * A mask is not normally rendered as visible content while it is
+		 * serving as the view<s mask.
+		 */
+		this.worldDepthContainer.addChild(mask);
+
+		this.ownedWorldGraphics.push(mask);
+
+		view.setMask({
+			mask,
+			inverse: true,
+		});
 	}
 
 	/**
@@ -1342,6 +1178,7 @@ export class MapRenderer {
 			foundationBottomY: number,
 			state: VisualState,
 			barrier: RH.EdgeBarrier,
+			occluderPolygon?: number[],
 		) => void,
 	): Drawable {
 		const style = styleFor(barrier);
@@ -1361,6 +1198,23 @@ export class MapRenderer {
 			STATE_RANK[stateAtCoord] >= STATE_RANK[stateAtOther]
 				? stateAtCoord
 				: stateAtOther;
+
+		const isTileOccludedBarrier =
+			barrier === RH.EdgeBarrier.Fence || barrier === RH.EdgeBarrier.Glass;
+
+		/**
+		 * `other` is the loop<s `b` coordinate: with the current fixed
+		 * isometric camera this is the camera-front tile on this edge.
+		 */
+		const frontElevation = this.elevationAt(compiled, other);
+
+		const occluderPolygon =
+			isTileOccludedBarrier &&
+			frontElevation !== undefined &&
+			Number.isFinite(frontElevation) &&
+			stateAtOther !== "hidden"
+				? this.tileTopOcclusionPolygon(other, frontElevation)
+				: undefined;
 
 		const baseHeight = WALL_HEIGHT_PX * style.heightFraction * wallHeightScale;
 		const height = isFocusedBoundary
@@ -1390,7 +1244,9 @@ export class MapRenderer {
 			skeleton.foundationCenter1.y,
 			state,
 			barrier,
+			occluderPolygon,
 		);
+
 		registerConnector(
 			skeleton.endVertex,
 			skeleton.centerBase2,
@@ -1398,6 +1254,7 @@ export class MapRenderer {
 			skeleton.foundationCenter2.y,
 			state,
 			barrier,
+			occluderPolygon,
 		);
 
 		if (state === "hidden") {
@@ -1534,6 +1391,7 @@ export class MapRenderer {
 		foundationBottomY: number,
 		washed: boolean,
 		barrier: RH.EdgeBarrier,
+		occluderPolygons: readonly number[][],
 	): Drawable {
 		const style = styleFor(barrier);
 		const material = resolveBarrierMaterial(barrier);
@@ -1645,6 +1503,15 @@ export class MapRenderer {
 					g.poly(topFace);
 					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
 				}
+
+				if (
+					(barrier === RH.EdgeBarrier.Fence ||
+						barrier === RH.EdgeBarrier.Glass) &&
+					occluderPolygons.length > 0
+				) {
+					this.applyInverseWorldMask(g, occluderPolygons);
+				}
+
 				return g;
 			},
 		};
