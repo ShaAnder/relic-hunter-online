@@ -7,10 +7,21 @@ import { resolveBarrierMaterial } from "./materials/barrierMaterialFactory";
 import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
 import * as RH from "@relic-hunter/shared";
 import { fillForTileCode } from "./tileFills";
+import { WORLD_DEPTH_BIAS } from "./worldDepth";
 
-/** Pixels of visual gap a wall piece sits within — this is the "tile, wall, gap, tile" spacing described in prototyping: a small logical gap between what would otherwise be two directly-touching tiles, which the wall piece fills exactly when present, and which the oversized tiles below fill seamlessly when it isn't. */
+/** Pixels of visual gap a wall piece sits within */
 const GAP_PX = 7;
-/** How much larger than its true footprint each tile is drawn — just enough that two neighboring tiles' edges overlap slightly into the gap, so an edge with no wall on it reads as one continuous floor rather than a visible seam. */
+
+/**
+ * How far a foreground tile<s top surface is repeated inward from a
+ * barrier edge inside world-depth space.
+ *
+ * GAP_PX + 1 covers the front-side half-thickness of the thickest
+ * current solid barrier without turning this into a second full tile.
+ */
+const TERRAIN_BARRIER_OCCLUDER_INSET_PX = GAP_PX + 1;
+
+/** How much larger than its true footprint each tile is drawn  */
 const TILE_OVERSIZE = 1.09;
 /**
  * Solid barriers still occupy the full authored edge gap.
@@ -30,11 +41,11 @@ const SOLID_CONNECTOR_HALF_PX = SOLID_BARRIER_THICKNESS_PX;
 const POST_CONNECTOR_HALF_PX = 3;
 const MULLION_CONNECTOR_HALF_PX = 2.5;
 const WALL_HEIGHT_PX = TILE_HEIGHT;
-/** Doors are drawn shorter than a full wall so they read as an opening rather than a barrier, even before any door-swing animation exists. */
+/** Doors are drawn shorter than a full wall so they read as an opening rather than a barrier */
 const DOOR_HEIGHT_FRACTION = 0.3;
-/** Low walls are a distinct barrier type by design — costs extra movement, does NOT block sight — so they're drawn low enough to read as "steppable obstacle," not a real wall. */
+/** Low walls are a distinct barrier type by design — costs extra movement, does NOT block sight */
 const LOW_WALL_HEIGHT_FRACTION = 0.45;
-/** How short a room's own boundary walls become once the player is standing inside that room — tall enough to still read as "there's a wall here" (the outline), short enough not to block the view of the interior or the character standing in it. Visual only: the wall's actual logical height/blocking never changes, only how tall this specific drawing of it is. */
+/** How short a room's own boundary walls become once the player is standing inside that room  */
 const FOCUSED_WALL_HEIGHT_FRACTION = 0.2;
 
 /**
@@ -95,7 +106,7 @@ const LOW_WALL_RIGHT_FACE_COLOR = 0x4a4539;
 
 type ScreenPoint = { x: number; y: number };
 
-/** One item waiting to be drawn, with the depth key that determines render order — see the class doc comment for why this is the whole mechanism for correct overlap, with no explicit zIndex anywhere. */
+/** One item waiting to be drawn, with the depth key that determines render order  */
 type DrawableLayer = "ground" | "world";
 
 interface Drawable {
@@ -233,7 +244,8 @@ function connectorPriorityFor(barrier: RH.EdgeBarrier): number {
 	}
 }
 
-/** What a piece of the map should draw as, combining room-focus and fog-of-war into one answer instead of two separately-applied effects. "hidden" wins over everything (fog unseen); otherwise "washed" if either fog marks it explored-but-not-visible OR room-focus says it's not the room you're in; otherwise "normal". */
+/** What a piece of the map should draw as, combining room-focus and fog-of-war into
+ * one answer instead of two separately-applied effects. "hidden" wins over everything  */
 type VisualState = "hidden" | "washed" | "normal";
 
 /**
@@ -551,6 +563,77 @@ export class MapRenderer {
 		}
 
 		// ------------------------------------------------------------
+		// TERRAIN / BARRIER CONTACT OCCLUSION
+		// ------------------------------------------------------------
+
+		/**
+		 * Adds the narrow world-depth tile strip for whichever of the two
+		 * tiles is visually in front after elevation projection.
+		 *
+		 * This is called only for edges that actually contain a structural
+		 * barrier.
+		 */
+		const pushBarrierTerrainOccluder = (
+			a: RH.GridCoord,
+			b: RH.GridCoord,
+		): void => {
+			const aElevation = this.elevationAt(compiled, a);
+
+			const bElevation = this.elevationAt(compiled, b);
+
+			if (
+				aElevation === undefined ||
+				bElevation === undefined ||
+				!Number.isFinite(aElevation) ||
+				!Number.isFinite(bElevation)
+			) {
+				return;
+			}
+
+			const aCorners = this.trueTileCorners(a, aElevation * TILE_HEIGHT);
+			const bCorners = this.trueTileCorners(b, bElevation * TILE_HEIGHT);
+
+			/**
+			 * Larger projected screen Y is visually closer to the camera in
+			 * the current isometric projection.
+			 */
+			const aIsFront = aCorners.center.y >= bCorners.center.y;
+			const frontCoord = aIsFront ? a : b;
+			const otherCoord = aIsFront ? b : a;
+			const frontElevation = aIsFront ? aElevation : bElevation;
+			const frontKey = RH.coordKey(frontCoord);
+			const roomFocused =
+				focusCellKeys !== null && !focusCellKeys.has(frontKey);
+			const state = visualStateAt(frontCoord, roomFocused);
+
+			if (state === "hidden") {
+				return;
+			}
+
+			const tileCode = compiled.tileCodes.get(frontKey);
+			const material = materialContext
+				? resolveTileMaterial({
+						code: tileCode,
+						coord: frontCoord,
+						compiled,
+						mapSeed: materialContext.mapSeed,
+						floorIndex: materialContext.floorIndex,
+					})
+				: undefined;
+
+			drawables.push(
+				this.terrainBarrierOccluderDrawable(
+					frontCoord,
+					otherCoord,
+					frontElevation,
+					state === "washed",
+					fillForTileCode(tileCode),
+					material,
+				),
+			);
+		};
+
+		// ------------------------------------------------------------
 		// BARRIER CONNECTOR COLLECTION
 		// ------------------------------------------------------------
 
@@ -620,7 +703,7 @@ export class MapRenderer {
 		};
 
 		// ------------------------------------------------------------
-		// EEAST/WEST BARRIER SEGMENTS
+		// EAST/WEST BARRIER SEGMENTS
 		// ------------------------------------------------------------
 
 		for (let y = 0; y < compiled.grid.height; y++) {
@@ -653,6 +736,12 @@ export class MapRenderer {
 						registerConnector,
 					),
 				);
+				if (
+					barrier === RH.EdgeBarrier.Fence ||
+					barrier === RH.EdgeBarrier.Glass
+				) {
+					pushBarrierTerrainOccluder(a, b);
+				}
 			}
 		}
 
@@ -690,6 +779,12 @@ export class MapRenderer {
 						registerConnector,
 					),
 				);
+				if (
+					barrier === RH.EdgeBarrier.Fence ||
+					barrier === RH.EdgeBarrier.Glass
+				) {
+					pushBarrierTerrainOccluder(a, b);
+				}
 			}
 		}
 
@@ -908,6 +1003,144 @@ export class MapRenderer {
 	}
 
 	/**
+	 * Repeats only the narrow top-surface strip of the tile that is
+	 * visually in front of a structural barrier.
+	 *
+	 * Full tile tops remain in groundContainer. This tiny strip is the
+	 * only part promoted into worldDepthContainer, allowing terrain and
+	 * physical world objects to interleave at their shared contact edge.
+	 */
+	private terrainBarrierOccluderDrawable(
+		frontCoord: RH.GridCoord,
+		otherCoord: RH.GridCoord,
+		elevation: number,
+		washed: boolean,
+		fillOverride?: number,
+		material?: ResolvedTileMaterial,
+	): Drawable {
+		const corners = this.trueTileCorners(frontCoord, elevation * TILE_HEIGHT);
+
+		let edge1: ScreenPoint;
+		let edge2: ScreenPoint;
+
+		if (otherCoord.x === frontCoord.x - 1 && otherCoord.y === frontCoord.y) {
+			// Other tile is west: shared side is top -> left.
+			edge1 = corners.top;
+			edge2 = corners.left;
+		} else if (
+			otherCoord.x === frontCoord.x + 1 &&
+			otherCoord.y === frontCoord.y
+		) {
+			// Other tile is east: shared side is right -> bottom.
+			edge1 = corners.right;
+			edge2 = corners.bottom;
+		} else if (
+			otherCoord.y === frontCoord.y - 1 &&
+			otherCoord.x === frontCoord.x
+		) {
+			// Other tile is north: shared side is top -> right.
+			edge1 = corners.top;
+			edge2 = corners.right;
+		} else if (
+			otherCoord.y === frontCoord.y + 1 &&
+			otherCoord.x === frontCoord.x
+		) {
+			// Other tile is south: shared side is bottom -> left.
+			edge1 = corners.bottom;
+			edge2 = corners.left;
+		} else {
+			return {
+				layer: "world",
+				depth: -Infinity,
+				draw: () => new Graphics(),
+			};
+		}
+
+		const midpoint = {
+			x: (edge1.x + edge2.x) / 2,
+			y: (edge1.y + edge2.y) / 2,
+		};
+
+		const inwardX = corners.center.x - midpoint.x;
+
+		const inwardY = corners.center.y - midpoint.y;
+
+		const inwardLength = Math.hypot(inwardX, inwardY);
+
+		if (inwardLength <= 0.000001) {
+			return {
+				layer: "world",
+				depth: -Infinity,
+				draw: () => new Graphics(),
+			};
+		}
+
+		const insetX = (inwardX / inwardLength) * TERRAIN_BARRIER_OCCLUDER_INSET_PX;
+
+		const insetY = (inwardY / inwardLength) * TERRAIN_BARRIER_OCCLUDER_INSET_PX;
+
+		const inner1 = {
+			x: edge1.x + insetX,
+			y: edge1.y + insetY,
+		};
+
+		const inner2 = {
+			x: edge2.x + insetX,
+			y: edge2.y + insetY,
+		};
+
+		const polygon = [
+			edge1.x,
+			edge1.y,
+			edge2.x,
+			edge2.y,
+			inner2.x,
+			inner2.y,
+			inner1.x,
+			inner1.y,
+		];
+
+		const depth = Math.max(edge1.y, edge2.y) + WORLD_DEPTH_BIAS.terrainOccluder;
+
+		const color = fillOverride ?? FLOOR_COLOR;
+
+		return {
+			layer: "world",
+			depth,
+			draw: () => {
+				const g = new Graphics();
+				g.poly(polygon);
+				if (material?.baseTexture) {
+					g.fill({
+						texture: material.baseTexture,
+						textureSpace: "local",
+					});
+				} else {
+					g.fill(color);
+				}
+				for (const overlay of material?.overlays ?? []) {
+					g.poly(polygon);
+
+					g.fill({
+						texture: overlay.texture,
+						textureSpace: "local",
+						alpha: overlay.alpha,
+					});
+				}
+				if (washed) {
+					g.poly(polygon);
+
+					g.fill({
+						color: WASH_COLOR,
+						alpha: WASH_ALPHA,
+					});
+				}
+				return g;
+			},
+		};
+	}
+
+	/**
 	 * Vertical terrain face between two adjacent tiles at different
 	 * elevations - the visible "curb" or "cliff" side of a raised or
 	 * sunken tile, distinct from a wall (which is an authored barrier,
@@ -933,7 +1166,8 @@ export class MapRenderer {
 
 		return {
 			layer: "world",
-			depth: Math.max(a1.y, a2.y, b1.y, b2.y),
+			depth: Math.max(a1.y, a2.y, b1.y, b2.y) + WORLD_DEPTH_BIAS.terrainFace,
+
 			draw: () => {
 				const g = new Graphics();
 				g.poly(face);
@@ -1060,12 +1294,14 @@ export class MapRenderer {
 			hasFoundation:
 				Math.abs(foundationCenter1.y - centerBase1.y) > 0.000001 ||
 				Math.abs(foundationCenter2.y - centerBase2.y) > 0.000001,
-			depth: Math.max(
-				centerBase1.y,
-				centerBase2.y,
-				foundationCenter1.y,
-				foundationCenter2.y,
-			),
+			/**
+			 * Sort the barrier by the architectural surface it stands on.
+			 *
+			 * The foundation may extend downward to meet lower terrain, but that
+			 * visual skirt must not make the whole wall/fence behave as though its
+			 * ground-contact point were down there.
+			 */
+			depth: Math.max(centerBase1.y, centerBase2.y),
 		};
 	}
 
@@ -1174,7 +1410,8 @@ export class MapRenderer {
 
 		return {
 			layer: "world",
-			depth: skeleton.depth,
+
+			depth: skeleton.depth + WORLD_DEPTH_BIAS.barrierSegment,
 
 			draw: () => {
 				const g = new Graphics();
@@ -1324,13 +1561,15 @@ export class MapRenderer {
 		const lowerRight = { x: right.x, y: right.y + foundationDrop };
 		const lowerBottom = { x: bottom.x, y: bottom.y + foundationDrop };
 		const lowerLeft = { x: left.x, y: left.y + foundationDrop };
-
 		const up = (p: ScreenPoint) => ({ x: p.x, y: p.y - height });
+
 		/**
-		 * Connectors draw fractionally after a segment at the same physical
-		 * base depth so the post/pillar covers the segment endpoint seam.
+		 * The connector sorts from its architectural ground-contact point.
+		 *
+		 * foundationBottomY affects geometry only; it must not pull the
+		 * entire post/pillar forward in painter order.
 		 */
-		const depth = lowerBottom.y + 0.1;
+		const depth = cy + WORLD_DEPTH_BIAS.barrierConnector;
 
 		return {
 			layer: "world",
