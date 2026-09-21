@@ -1,3 +1,13 @@
+/**
+ * Full wall material discovery.
+ *
+ * We now support three independently authored surfaces:
+ * - wall face
+ * - wall top
+ * - wall connector
+ *
+ * Geometry still comes from MapRenderer.
+ */
 const wallFaceModules = import.meta.glob(
 	"../../assets/map/barriers/wall/face/wall_face_*.png",
 	{
@@ -22,17 +32,20 @@ const wallConnectorModules = import.meta.glob(
 	},
 ) as Record<string, string>;
 
-export const WALL_FACE_TEXTURE_URLS: readonly string[] =
-	Object.entries(wallFaceModules)
-		.sort(([a], [b]) => a.localeCompare(b))
-		.map(([, url]) => url);
+export const WALL_FACE_TEXTURE_URLS: readonly string[] = Object.entries(
+	wallFaceModules,
+)
+	.sort(([a], [b]) => a.localeCompare(b))
+	.map(([, url]) => url);
 
-export const WALL_TOP_TEXTURE_URLS: readonly string[] =
-	Object.entries(wallTopModules)
-		.sort(([a], [b]) => a.localeCompare(b))
-		.map(([, url]) => url);
+export const WALL_TOP_TEXTURE_URLS: readonly string[] = Object.entries(
+	wallTopModules,
+)
+	.sort(([a], [b]) => a.localeCompare(b))
+	.map(([, url]) => url);
 
-export const WALL_CONNECTOR_TEXTURE_URLS: readonly string[] =
-	Object.entries(wallConnectorModules)
-		.sort(([a], [b]) => a.localeCompare(b))
-		.map(([, url]) => url);
+export const WALL_CONNECTOR_TEXTURE_URLS: readonly string[] = Object.entries(
+	wallConnectorModules,
+)
+	.sort(([a], [b]) => a.localeCompare(b))
+	.map(([, url]) => url);

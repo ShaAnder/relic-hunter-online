@@ -3,236 +3,54 @@ import {
 	resolveTileMaterial,
 	type ResolvedTileMaterial,
 } from "./materials/mapMaterialFactory";
-import { resolveBarrierMaterial } from "./materials/barrierMaterialFactory";
+import {
+	resolveBarrierMaterial,
+	type ResolvedBarrierMaterial,
+} from "./materials/barrierMaterialFactory";
 import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
 import * as RH from "@relic-hunter/shared";
 import { fillForTileCode } from "./tileFills";
 import { WORLD_DEPTH_BIAS } from "./worldDepth";
+import {
+	barrierRenderProfileFor,
+	connectorPriorityFor,
+	type BarrierRenderProfile,
+} from "./barrierRenderProfile";
+import {
+	addBarrierQuadOverlay,
+	addBarrierQuadSurface,
+	type BarrierSurfaceQuad,
+} from "./barrierQuadSurface";
 
-/** Pixels of visual gap a wall piece sits within */
-const GAP_PX = 7;
-
-/** How much larger than its true footprint each tile is drawn  */
+/** How much larger than its true footprint each ordinary tile is drawn. */
 const TILE_OVERSIZE = 1.09;
-/**
- * Solid barriers still occupy the full authored edge gap.
- *
- * Fence/glass panels are intentionally much thinner: their visual
- * weight comes from the connector/post, not from a fat wall prism.
- */
-const SOLID_BARRIER_THICKNESS_PX = GAP_PX;
-const PANEL_BARRIER_THICKNESS_PX = 1.5;
-/**
- * Connector size is independent from segment thickness.
- *
- * A masonry wall connector remains full-width while fence/glass use
- * narrow posts/mullions.
- */
-const SOLID_CONNECTOR_HALF_PX = SOLID_BARRIER_THICKNESS_PX;
-const POST_CONNECTOR_HALF_PX = 3;
-const MULLION_CONNECTOR_HALF_PX = 2.5;
+
+/** One normal full-height barrier storey in projected pixels. */
 const WALL_HEIGHT_PX = TILE_HEIGHT;
-/** Doors are drawn shorter than a full wall so they read as an opening rather than a barrier */
-const DOOR_HEIGHT_FRACTION = 0.3;
-/** Low walls are a distinct barrier type by design — costs extra movement, does NOT block sight */
-const LOW_WALL_HEIGHT_FRACTION = 0.45;
-/** How short a room's own boundary walls become once the player is standing inside that room  */
+
+/** How short a room's own boundary barriers become while the player is inside it. */
 const FOCUSED_WALL_HEIGHT_FRACTION = 0.2;
 
-/**
- * The "not what you're currently looking at" wash — used for BOTH
- * room-focus (dimming every room except the one you're standing in)
- * and fog-of-war's "explored but not currently visible" tier. Same
- * technique, same strength, deliberately: they're the same idea
- * (something real, just not your current focus)
- */
+/** Shared wash used by room focus and explored fog. */
 const WASH_COLOR = 0x14141e;
 const WASH_ALPHA = 0.72;
 
 const FLOOR_COLOR = 0xc8c8c8;
-
 const TERRAIN_SIDE_COLOR = 0x4a4652;
-
-const WALL_TOP_COLOR = 0x463c6e;
-const WALL_LEFT_FACE_COLOR = 0x2d2648;
-const WALL_RIGHT_FACE_COLOR = 0x372f58;
-
-const DOOR_TOP_COLOR = 0xc8b43c;
-const DOOR_LEFT_FACE_COLOR = 0x8c7d28;
-const DOOR_RIGHT_FACE_COLOR = 0xaa9632;
-
-/**
- * Fence, glass, and low-wall each get their own muted, in-game-palette
- * color — distinct from a full wall and from each other, and
- * deliberately NOT the bright, saturated colors the Map Creator's own
- * editing palette uses for the same barrier types (those exist purely
- * to be tellable-apart on a small painting grid, not meant to carry
- * into the finished map).
- */
-const FENCE_TOP_COLOR = 0x4a5c3c;
-const FENCE_LEFT_FACE_COLOR = 0x323f28;
-const FENCE_RIGHT_FACE_COLOR = 0x3d4c32;
-
-/**
- * Fence panel is intentionally subdued/transparent.
- * The opaque metal post is what makes the structure read clearly.
- */
-const FENCE_PANEL_ALPHA = 0.3;
-const FENCE_POST_TOP_COLOR = 0x8b949b;
-const FENCE_POST_LEFT_COLOR = 0x596168;
-const FENCE_POST_RIGHT_COLOR = 0x6c757c;
-
-const GLASS_TOP_COLOR = 0x7d94a0;
-const GLASS_LEFT_FACE_COLOR = 0x56666f;
-const GLASS_RIGHT_FACE_COLOR = 0x687d87;
-
-const GLASS_PANEL_ALPHA = 0.32;
-const GLASS_MULLION_TOP_COLOR = 0x9aa6ad;
-const GLASS_MULLION_LEFT_COLOR = 0x636d73;
-const GLASS_MULLION_RIGHT_COLOR = 0x778289;
-
-const LOW_WALL_TOP_COLOR = 0x5c5648;
-const LOW_WALL_LEFT_FACE_COLOR = 0x3e3a30;
-const LOW_WALL_RIGHT_FACE_COLOR = 0x4a4539;
 
 type ScreenPoint = { x: number; y: number };
 
-/** One item waiting to be drawn, with the depth key that determines render order  */
 type DrawableLayer = "ground" | "world";
 
 interface Drawable {
 	layer: DrawableLayer;
 	depth: number;
-	draw: () => Graphics;
+	draw: () => Container;
 }
 
 interface MapMaterialRenderContext {
 	mapSeed: number;
 	floorIndex: number;
-}
-
-interface BarrierStyle {
-	heightFraction: number;
-
-	/**
-	 * Segment = the object spanning one StructuralEdgeRef.
-	 */
-	segmentThicknessPx: number;
-	segmentTopColor: number;
-	segmentLeftColor: number;
-	segmentRightColor: number;
-	segmentAlpha: number;
-
-	/**
-	 * Connector = the one object occupying a shared GridVertex.
-	 */
-	connectorHalfPx: number;
-	connectorTopColor: number;
-	connectorLeftColor: number;
-	connectorRightColor: number;
-	connectorAlpha: number;
-}
-
-const BARRIER_STYLES: Record<number, BarrierStyle> = {
-	[RH.EdgeBarrier.FullWall]: {
-		heightFraction: 1,
-		segmentThicknessPx: SOLID_BARRIER_THICKNESS_PX,
-		segmentTopColor: WALL_TOP_COLOR,
-		segmentLeftColor: WALL_LEFT_FACE_COLOR,
-		segmentRightColor: WALL_RIGHT_FACE_COLOR,
-		segmentAlpha: 1,
-		connectorHalfPx: SOLID_CONNECTOR_HALF_PX,
-		connectorTopColor: WALL_TOP_COLOR,
-		connectorLeftColor: WALL_LEFT_FACE_COLOR,
-		connectorRightColor: WALL_RIGHT_FACE_COLOR,
-		connectorAlpha: 1,
-	},
-
-	[RH.EdgeBarrier.Door]: {
-		heightFraction: DOOR_HEIGHT_FRACTION,
-		segmentThicknessPx: SOLID_BARRIER_THICKNESS_PX,
-		segmentTopColor: DOOR_TOP_COLOR,
-		segmentLeftColor: DOOR_LEFT_FACE_COLOR,
-		segmentRightColor: DOOR_RIGHT_FACE_COLOR,
-		segmentAlpha: 1,
-		connectorHalfPx: SOLID_CONNECTOR_HALF_PX,
-		connectorTopColor: DOOR_TOP_COLOR,
-		connectorLeftColor: DOOR_LEFT_FACE_COLOR,
-		connectorRightColor: DOOR_RIGHT_FACE_COLOR,
-		connectorAlpha: 1,
-	},
-
-	[RH.EdgeBarrier.Fence]: {
-		heightFraction: 1,
-		segmentThicknessPx: PANEL_BARRIER_THICKNESS_PX,
-		segmentTopColor: FENCE_TOP_COLOR,
-		segmentLeftColor: FENCE_LEFT_FACE_COLOR,
-		segmentRightColor: FENCE_RIGHT_FACE_COLOR,
-		segmentAlpha: FENCE_PANEL_ALPHA,
-		connectorHalfPx: POST_CONNECTOR_HALF_PX,
-		connectorTopColor: FENCE_POST_TOP_COLOR,
-		connectorLeftColor: FENCE_POST_LEFT_COLOR,
-		connectorRightColor: FENCE_POST_RIGHT_COLOR,
-		connectorAlpha: 1,
-	},
-
-	[RH.EdgeBarrier.Glass]: {
-		heightFraction: 1,
-		segmentThicknessPx: PANEL_BARRIER_THICKNESS_PX,
-		segmentTopColor: GLASS_TOP_COLOR,
-		segmentLeftColor: GLASS_LEFT_FACE_COLOR,
-		segmentRightColor: GLASS_RIGHT_FACE_COLOR,
-		segmentAlpha: GLASS_PANEL_ALPHA,
-		connectorHalfPx: MULLION_CONNECTOR_HALF_PX,
-		connectorTopColor: GLASS_MULLION_TOP_COLOR,
-		connectorLeftColor: GLASS_MULLION_LEFT_COLOR,
-		connectorRightColor: GLASS_MULLION_RIGHT_COLOR,
-		connectorAlpha: 1,
-	},
-
-	[RH.EdgeBarrier.LowWall]: {
-		heightFraction: LOW_WALL_HEIGHT_FRACTION,
-		segmentThicknessPx: SOLID_BARRIER_THICKNESS_PX,
-		segmentTopColor: LOW_WALL_TOP_COLOR,
-		segmentLeftColor: LOW_WALL_LEFT_FACE_COLOR,
-		segmentRightColor: LOW_WALL_RIGHT_FACE_COLOR,
-		segmentAlpha: 1,
-		connectorHalfPx: SOLID_CONNECTOR_HALF_PX,
-		connectorTopColor: LOW_WALL_TOP_COLOR,
-		connectorLeftColor: LOW_WALL_LEFT_FACE_COLOR,
-		connectorRightColor: LOW_WALL_RIGHT_FACE_COLOR,
-		connectorAlpha: 1,
-	},
-};
-
-function styleFor(barrier: RH.EdgeBarrier): BarrierStyle {
-	return BARRIER_STYLES[barrier] ?? BARRIER_STYLES[RH.EdgeBarrier.FullWall];
-}
-
-/**
- * One GridVertex may be touched by different barrier types.
- *
- * We render ONE connector there, so mixed joins need a deterministic
- * visual owner rather than whichever edge happened to be iterated
- * first.
- *
- * Higher number wins.
- */
-function connectorPriorityFor(barrier: RH.EdgeBarrier): number {
-	switch (barrier) {
-		case RH.EdgeBarrier.FullWall:
-			return 50;
-		case RH.EdgeBarrier.Door:
-			return 40;
-		case RH.EdgeBarrier.Glass:
-			return 30;
-		case RH.EdgeBarrier.Fence:
-			return 20;
-		case RH.EdgeBarrier.LowWall:
-			return 10;
-		default:
-			return 0;
-	}
 }
 
 /** What a piece of the map should draw as, combining room-focus and fog-of-war into
@@ -285,7 +103,7 @@ interface BarrierSegmentSkeleton {
  * wall-topology resolver.
  */
 export class MapRenderer {
-	private ownedWorldGraphics: Graphics[] = [];
+	private ownedWorldViews: Container[] = [];
 
 	constructor(
 		private groundContainer: Container,
@@ -295,14 +113,16 @@ export class MapRenderer {
 		this.worldDepthContainer.sortableChildren = true;
 	}
 
-	private clearOwnedWorldGraphics(): void {
-		for (const graphic of this.ownedWorldGraphics) {
-			if (graphic.parent === this.worldDepthContainer) {
-				this.worldDepthContainer.removeChild(graphic);
+	private clearOwnedWorldViews(): void {
+		for (const view of this.ownedWorldViews) {
+			if (view.parent === this.worldDepthContainer) {
+				this.worldDepthContainer.removeChild(view);
 			}
-			graphic.destroy();
+
+			view.destroy({ children: true });
 		}
-		this.ownedWorldGraphics = [];
+
+		this.ownedWorldViews = [];
 	}
 
 	private clearForRebuild(): void {
@@ -318,10 +138,10 @@ export class MapRenderer {
 		 */
 		if (this.groundContainer === this.worldDepthContainer) {
 			for (const child of this.groundContainer.removeChildren()) {
-				child.destroy();
+				child.destroy({ children: true });
 			}
 
-			this.ownedWorldGraphics = [];
+			this.ownedWorldViews = [];
 			return;
 		}
 		/**
@@ -331,13 +151,13 @@ export class MapRenderer {
 		 * can be removed.
 		 */
 		for (const child of this.groundContainer.removeChildren()) {
-			child.destroy();
+			child.destroy({ children: true });
 		}
 		/**
 		 * worldDepthContainer is shared with hunters, monsters and chests,
 		 * so only remove Graphics created by this MapRenderer.
 		 */
-		this.clearOwnedWorldGraphics();
+		this.clearOwnedWorldViews();
 	}
 
 	/**
@@ -741,10 +561,10 @@ export class MapRenderer {
 		}
 
 		for (const drawable of worldDrawables) {
-			const graphic = drawable.draw();
-			graphic.zIndex = drawable.depth;
-			this.worldDepthContainer.addChild(graphic);
-			this.ownedWorldGraphics.push(graphic);
+			const view = drawable.draw();
+			view.zIndex = drawable.depth;
+			this.worldDepthContainer.addChild(view);
+			this.ownedWorldViews.push(view);
 		}
 	}
 
@@ -946,7 +766,7 @@ export class MapRenderer {
 	 * existing ownedWorldGraphics lifecycle.
 	 */
 	private applyInverseWorldMask(
-		view: Graphics,
+		view: Container,
 		polygons: readonly number[][],
 	): void {
 		if (polygons.length === 0) {
@@ -968,7 +788,7 @@ export class MapRenderer {
 		 */
 		this.worldDepthContainer.addChild(mask);
 
-		this.ownedWorldGraphics.push(mask);
+		this.ownedWorldViews.push(mask);
 
 		view.setMask({
 			mask,
@@ -1141,26 +961,165 @@ export class MapRenderer {
 		};
 	}
 
-	private fillBarrierPolygon(
-		g: Graphics,
-		polygon: number[],
-		texture: import("pixi.js").Texture | undefined,
-		fallbackColor: number,
-		alpha: number,
-	): void {
-		g.poly(polygon);
-		if (texture) {
-			g.fill({
-				texture,
-				textureSpace: "local",
-				alpha,
-			});
-			return;
+	private barrierEdgeUv(
+		edge: RH.StructuralEdgeRef,
+		profile: BarrierRenderProfile,
+	): readonly [number, number] {
+		const edgeAxis = edge.orientation === "north" ? edge.x : edge.y;
+
+		return [
+			edgeAxis * profile.faceUvPerEdge,
+			(edgeAxis + 1) * profile.faceUvPerEdge,
+		];
+	}
+
+	private centerTopPoint(
+		nearTop: ScreenPoint,
+		farTop: ScreenPoint,
+	): ScreenPoint {
+		return {
+			x: (nearTop.x + farTop.x) / 2,
+			y: (nearTop.y + farTop.y) / 2,
+		};
+	}
+
+	/**
+	 * Builds one barrier segment using properties from BarrierRenderProfile.
+	 *
+	 * No semantic type checks live here. A solid wall, low wall, door,
+	 * fence, glass panel, or future barrier reaches this method through
+	 * the same geometry pipeline and differs only by profile data.
+	 */
+	private barrierSegmentView(
+		edge: RH.StructuralEdgeRef,
+		skeleton: BarrierSegmentSkeleton,
+		profile: BarrierRenderProfile,
+		material: ResolvedBarrierMaterial,
+		state: VisualState,
+	): Container {
+		const view = new Container();
+		const [u1, u2] = this.barrierEdgeUv(edge, profile);
+
+		if (profile.geometryKind === "panel") {
+			const top1 = this.centerTopPoint(skeleton.nearTop1, skeleton.farTop1);
+			const top2 = this.centerTopPoint(skeleton.nearTop2, skeleton.farTop2);
+
+			const bottom1 = profile.extendSegmentToFoundation
+				? skeleton.foundationCenter1
+				: skeleton.centerBase1;
+			const bottom2 = profile.extendSegmentToFoundation
+				? skeleton.foundationCenter2
+				: skeleton.centerBase2;
+
+			const face: BarrierSurfaceQuad = [top1, top2, bottom2, bottom1];
+
+			const v1 =
+				(Math.max(1, bottom1.y - top1.y) / WALL_HEIGHT_PX) *
+				profile.faceUvPerStorey;
+			const v2 =
+				(Math.max(1, bottom2.y - top2.y) / WALL_HEIGHT_PX) *
+				profile.faceUvPerStorey;
+
+			const fallbackColor =
+				edge.orientation === "north"
+					? profile.segmentLeftColor
+					: profile.segmentRightColor;
+
+			addBarrierQuadSurface(
+				view,
+				face,
+				material.segmentFaceTexture,
+				fallbackColor,
+				profile.segmentAlpha,
+				[u1, 0, u2, 0, u2, v2, u1, v1],
+			);
+
+			if (state === "washed") {
+				addBarrierQuadOverlay(view, face, WASH_COLOR, WASH_ALPHA);
+			}
+
+			return view;
 		}
-		g.fill({
-			color: fallbackColor,
-			alpha,
-		});
+
+		/**
+		 * Solid barriers are prisms around the authored structural edge.
+		 * near/far are opposing long sides, so only the camera-facing side
+		 * is rendered. Drawing both produces the doubled wall we were seeing.
+		 */
+		const nearDepth = (skeleton.nearBase1.y + skeleton.nearBase2.y) / 2;
+		const farDepth = (skeleton.farBase1.y + skeleton.farBase2.y) / 2;
+		const frontIsNear = nearDepth >= farDepth;
+
+		const frontBase1 = frontIsNear ? skeleton.nearBase1 : skeleton.farBase1;
+		const frontBase2 = frontIsNear ? skeleton.nearBase2 : skeleton.farBase2;
+		const frontTop1 = frontIsNear ? skeleton.nearTop1 : skeleton.farTop1;
+		const frontTop2 = frontIsNear ? skeleton.nearTop2 : skeleton.farTop2;
+		const frontFoundation1 = frontIsNear
+			? skeleton.foundationNear1
+			: skeleton.foundationFar1;
+		const frontFoundation2 = frontIsNear
+			? skeleton.foundationNear2
+			: skeleton.foundationFar2;
+
+		const frontBottom1 =
+			profile.extendSegmentToFoundation && skeleton.hasFoundation
+				? frontFoundation1
+				: frontBase1;
+		const frontBottom2 =
+			profile.extendSegmentToFoundation && skeleton.hasFoundation
+				? frontFoundation2
+				: frontBase2;
+
+		const frontFace: BarrierSurfaceQuad = [
+			frontTop1,
+			frontTop2,
+			frontBottom2,
+			frontBottom1,
+		];
+
+		const frontV1 =
+			(Math.max(1, frontBottom1.y - frontTop1.y) / WALL_HEIGHT_PX) *
+			profile.faceUvPerStorey;
+		const frontV2 =
+			(Math.max(1, frontBottom2.y - frontTop2.y) / WALL_HEIGHT_PX) *
+			profile.faceUvPerStorey;
+
+		addBarrierQuadSurface(
+			view,
+			frontFace,
+			material.segmentFaceTexture,
+			frontIsNear ? profile.segmentLeftColor : profile.segmentRightColor,
+			profile.segmentAlpha,
+			[u1, 0, u2, 0, u2, frontV2, u1, frontV1],
+		);
+
+		if (profile.showSegmentTop) {
+			const topFace: BarrierSurfaceQuad = [
+				skeleton.nearTop1,
+				skeleton.nearTop2,
+				skeleton.farTop2,
+				skeleton.farTop1,
+			];
+
+			addBarrierQuadSurface(
+				view,
+				topFace,
+				material.segmentTopTexture,
+				profile.segmentTopColor,
+				profile.segmentAlpha,
+				[u1, 0, u2, 0, u2, 1, u1, 1],
+			);
+
+			if (state === "washed") {
+				addBarrierQuadOverlay(view, topFace, WASH_COLOR, WASH_ALPHA);
+			}
+		}
+
+		if (state === "washed") {
+			addBarrierQuadOverlay(view, frontFace, WASH_COLOR, WASH_ALPHA);
+		}
+
+		return view;
 	}
 
 	private barrierSegmentDrawable(
@@ -1181,7 +1140,7 @@ export class MapRenderer {
 			occluderPolygon?: number[],
 		) => void,
 	): Drawable {
-		const style = styleFor(barrier);
+		const profile = barrierRenderProfileFor(barrier);
 		const material = resolveBarrierMaterial(barrier);
 		const isFocusedBoundary =
 			focusBoundaryKeys?.has(this.edgeDedupeKey(coord, other)) ?? false;
@@ -1199,24 +1158,22 @@ export class MapRenderer {
 				? stateAtCoord
 				: stateAtOther;
 
-		const isTileOccludedBarrier =
-			barrier === RH.EdgeBarrier.Fence || barrier === RH.EdgeBarrier.Glass;
-
 		/**
-		 * `other` is the loop<s `b` coordinate: with the current fixed
-		 * isometric camera this is the camera-front tile on this edge.
+		 * The barrier loops always pass `other` as the +x/+y tile. With the
+		 * current fixed isometric camera that is the camera-front tile.
+		 * The profile decides whether this barrier needs tile-top occlusion.
 		 */
 		const frontElevation = this.elevationAt(compiled, other);
-
 		const occluderPolygon =
-			isTileOccludedBarrier &&
+			profile.terrainOcclusion === "front-tile" &&
 			frontElevation !== undefined &&
 			Number.isFinite(frontElevation) &&
 			stateAtOther !== "hidden"
 				? this.tileTopOcclusionPolygon(other, frontElevation)
 				: undefined;
 
-		const baseHeight = WALL_HEIGHT_PX * style.heightFraction * wallHeightScale;
+		const baseHeight =
+			WALL_HEIGHT_PX * profile.heightFraction * wallHeightScale;
 		const height = isFocusedBoundary
 			? baseHeight * FOCUSED_WALL_HEIGHT_FRACTION
 			: baseHeight;
@@ -1234,28 +1191,30 @@ export class MapRenderer {
 			edge,
 			compiled,
 			height,
-			style.segmentThicknessPx,
+			profile.segmentThicknessPx,
 		);
 
-		registerConnector(
-			skeleton.startVertex,
-			skeleton.centerBase1,
-			height,
-			skeleton.foundationCenter1.y,
-			state,
-			barrier,
-			occluderPolygon,
-		);
+		if (profile.showConnector) {
+			registerConnector(
+				skeleton.startVertex,
+				skeleton.centerBase1,
+				height,
+				skeleton.foundationCenter1.y,
+				state,
+				barrier,
+				occluderPolygon,
+			);
 
-		registerConnector(
-			skeleton.endVertex,
-			skeleton.centerBase2,
-			height,
-			skeleton.foundationCenter2.y,
-			state,
-			barrier,
-			occluderPolygon,
-		);
+			registerConnector(
+				skeleton.endVertex,
+				skeleton.centerBase2,
+				height,
+				skeleton.foundationCenter2.y,
+				state,
+				barrier,
+				occluderPolygon,
+			);
+		}
 
 		if (state === "hidden") {
 			return {
@@ -1267,120 +1226,21 @@ export class MapRenderer {
 
 		return {
 			layer: "world",
-
 			depth: skeleton.depth + WORLD_DEPTH_BIAS.barrierSegment,
-
 			draw: () => {
-				const g = new Graphics();
+				const view = this.barrierSegmentView(
+					edge,
+					skeleton,
+					profile,
+					material,
+					state,
+				);
 
-				const leftFace = [
-					skeleton.nearBase1.x,
-					skeleton.nearBase1.y,
-					skeleton.nearBase2.x,
-					skeleton.nearBase2.y,
-					skeleton.nearTop2.x,
-					skeleton.nearTop2.y,
-					skeleton.nearTop1.x,
-					skeleton.nearTop1.y,
-				];
-				const rightFace = [
-					skeleton.farBase1.x,
-					skeleton.farBase1.y,
-					skeleton.farBase2.x,
-					skeleton.farBase2.y,
-					skeleton.farTop2.x,
-					skeleton.farTop2.y,
-					skeleton.farTop1.x,
-					skeleton.farTop1.y,
-				];
-				const topFace = [
-					skeleton.nearTop1.x,
-					skeleton.nearTop1.y,
-					skeleton.farTop1.x,
-					skeleton.farTop1.y,
-					skeleton.farTop2.x,
-					skeleton.farTop2.y,
-					skeleton.nearTop2.x,
-					skeleton.nearTop2.y,
-				];
-				const foundationLeft = [
-					skeleton.foundationNear1.x,
-					skeleton.foundationNear1.y,
-					skeleton.foundationNear2.x,
-					skeleton.foundationNear2.y,
-					skeleton.nearBase2.x,
-					skeleton.nearBase2.y,
-					skeleton.nearBase1.x,
-					skeleton.nearBase1.y,
-				];
-				const foundationRight = [
-					skeleton.foundationFar1.x,
-					skeleton.foundationFar1.y,
-					skeleton.foundationFar2.x,
-					skeleton.foundationFar2.y,
-					skeleton.farBase2.x,
-					skeleton.farBase2.y,
-					skeleton.farBase1.x,
-					skeleton.farBase1.y,
-				];
-
-				if (skeleton.hasFoundation) {
-					this.fillBarrierPolygon(
-						g,
-						foundationLeft,
-						material.segmentFaceTexture,
-						style.segmentLeftColor,
-						style.segmentAlpha,
-					);
-
-					this.fillBarrierPolygon(
-						g,
-						foundationRight,
-						material.segmentFaceTexture,
-						style.segmentRightColor,
-						style.segmentAlpha,
-					);
+				if (occluderPolygon) {
+					this.applyInverseWorldMask(view, [occluderPolygon]);
 				}
 
-				this.fillBarrierPolygon(
-					g,
-					leftFace,
-					material.segmentFaceTexture,
-					style.segmentLeftColor,
-					style.segmentAlpha,
-				);
-
-				this.fillBarrierPolygon(
-					g,
-					rightFace,
-					material.segmentFaceTexture,
-					style.segmentRightColor,
-					style.segmentAlpha,
-				);
-
-				this.fillBarrierPolygon(
-					g,
-					topFace,
-					material.segmentTopTexture,
-					style.segmentTopColor,
-					style.segmentAlpha,
-				);
-
-				if (state === "washed") {
-					if (skeleton.hasFoundation) {
-						g.poly(foundationLeft);
-						g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
-						g.poly(foundationRight);
-						g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
-					}
-					g.poly(leftFace);
-					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
-					g.poly(rightFace);
-					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
-					g.poly(topFace);
-					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
-				}
-				return g;
+				return view;
 			},
 		};
 	}
@@ -1393,126 +1253,105 @@ export class MapRenderer {
 		barrier: RH.EdgeBarrier,
 		occluderPolygons: readonly number[][],
 	): Drawable {
-		const style = styleFor(barrier);
+		const profile = barrierRenderProfileFor(barrier);
 		const material = resolveBarrierMaterial(barrier);
 
 		const { x: cx, y: cy } = screenPos;
 		const foundationDrop = Math.max(0, foundationBottomY - cy);
-		const connectorHalfPx = style.connectorHalfPx;
-		const top = {
-			x: cx,
-			y: cy - connectorHalfPx,
-		};
-		const right = {
-			x: cx + connectorHalfPx,
-			y: cy,
-		};
-		const bottom = {
-			x: cx,
-			y: cy + connectorHalfPx,
-		};
-		const left = {
-			x: cx - connectorHalfPx,
-			y: cy,
-		};
+		const half = profile.connectorHalfPx;
+
+		const top = { x: cx, y: cy - half };
+		const right = { x: cx + half, y: cy };
+		const bottom = { x: cx, y: cy + half };
+		const left = { x: cx - half, y: cy };
 
 		const lowerRight = { x: right.x, y: right.y + foundationDrop };
 		const lowerBottom = { x: bottom.x, y: bottom.y + foundationDrop };
 		const lowerLeft = { x: left.x, y: left.y + foundationDrop };
-		const up = (p: ScreenPoint) => ({ x: p.x, y: p.y - height });
+		const up = (p: ScreenPoint): ScreenPoint => ({
+			x: p.x,
+			y: p.y - height,
+		});
 
-		/**
-		 * The connector sorts from its architectural ground-contact point.
-		 *
-		 * foundationBottomY affects geometry only; it must not pull the
-		 * entire post/pillar forward in painter order.
-		 */
 		const depth = cy + WORLD_DEPTH_BIAS.barrierConnector;
 
 		return {
 			layer: "world",
 			depth,
-
 			draw: () => {
-				const g = new Graphics();
+				const view = new Container();
 				const topU = up(top);
 				const rightU = up(right);
 				const bottomU = up(bottom);
 				const leftU = up(left);
 
-				const leftFace = [
-					lowerLeft.x,
-					lowerLeft.y,
-					lowerBottom.x,
-					lowerBottom.y,
-					bottomU.x,
-					bottomU.y,
-					leftU.x,
-					leftU.y,
+				const leftFace: BarrierSurfaceQuad = [
+					leftU,
+					bottomU,
+					lowerBottom,
+					lowerLeft,
 				];
-				const rightFace = [
-					lowerBottom.x,
-					lowerBottom.y,
-					lowerRight.x,
-					lowerRight.y,
-					rightU.x,
-					rightU.y,
-					bottomU.x,
-					bottomU.y,
+				const rightFace: BarrierSurfaceQuad = [
+					bottomU,
+					rightU,
+					lowerRight,
+					lowerBottom,
 				];
-				const topFace = [
-					topU.x,
-					topU.y,
-					rightU.x,
-					rightU.y,
-					bottomU.x,
-					bottomU.y,
-					leftU.x,
-					leftU.y,
-				];
+				const topFace: BarrierSurfaceQuad = [topU, rightU, bottomU, leftU];
 
-				this.fillBarrierPolygon(
-					g,
+				const faceTexture =
+					material.connectorFaceTexture ?? material.segmentFaceTexture;
+				const topTexture =
+					material.connectorTopTexture ?? material.segmentTopTexture;
+				const connectorV =
+					(Math.max(1, height + foundationDrop) / WALL_HEIGHT_PX) *
+					profile.faceUvPerStorey;
+
+				addBarrierQuadSurface(
+					view,
 					leftFace,
-					material.connectorFaceTexture,
-					style.connectorLeftColor,
-					style.connectorAlpha,
+					faceTexture,
+					profile.connectorLeftColor,
+					profile.connectorAlpha,
+					[0, 0, 1, 0, 1, connectorV, 0, connectorV],
 				);
 
-				this.fillBarrierPolygon(
-					g,
+				addBarrierQuadSurface(
+					view,
 					rightFace,
-					material.connectorFaceTexture,
-					style.connectorRightColor,
-					style.connectorAlpha,
+					faceTexture,
+					profile.connectorRightColor,
+					profile.connectorAlpha,
+					[0, 0, 1, 0, 1, connectorV, 0, connectorV],
 				);
 
-				this.fillBarrierPolygon(
-					g,
-					topFace,
-					material.connectorTopTexture,
-					style.connectorTopColor,
-					style.connectorAlpha,
-				);
+				if (profile.showConnectorTop) {
+					addBarrierQuadSurface(
+						view,
+						topFace,
+						topTexture,
+						profile.connectorTopColor,
+						profile.connectorAlpha,
+					);
+				}
 
 				if (washed) {
-					g.poly(leftFace);
-					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
-					g.poly(rightFace);
-					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
-					g.poly(topFace);
-					g.fill({ color: WASH_COLOR, alpha: WASH_ALPHA });
+					addBarrierQuadOverlay(view, leftFace, WASH_COLOR, WASH_ALPHA);
+					addBarrierQuadOverlay(view, rightFace, WASH_COLOR, WASH_ALPHA);
+
+					if (profile.showConnectorTop) {
+						addBarrierQuadOverlay(view, topFace, WASH_COLOR, WASH_ALPHA);
+					}
 				}
 
 				if (
-					(barrier === RH.EdgeBarrier.Fence ||
-						barrier === RH.EdgeBarrier.Glass) &&
+					profile.terrainOcclusion === "front-tile" &&
 					occluderPolygons.length > 0
 				) {
-					this.applyInverseWorldMask(g, occluderPolygons);
+					this.applyInverseWorldMask(view, occluderPolygons);
 				}
 
-				return g;
+				return view;
 			},
 		};
 	}

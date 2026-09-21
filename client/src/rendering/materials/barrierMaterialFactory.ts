@@ -86,6 +86,14 @@ export function preloadBarrierMaterials(): Promise<void> {
 		await Promise.all(
 			urls.map(async (url) => {
 				const texture = await Assets.load<Texture>(url);
+
+				/**
+				 * Generic barrier surfaces can deliberately use UVs outside
+				 * 0..1. Repeat sampling lets one material flow across long or
+				 * multi-storey geometry instead of stretching once.
+				 */
+				texture.source.wrapMode = "repeat";
+
 				textureCache.set(url, texture);
 			}),
 		);
@@ -98,7 +106,6 @@ export function resolveBarrierMaterial(
 	barrier: EdgeBarrier,
 ): ResolvedBarrierMaterial {
 	const family = BARRIER_TEXTURE_FAMILIES[barrier];
-
 	if (!family) return {};
 
 	return {
@@ -109,9 +116,7 @@ export function resolveBarrierMaterial(
 	};
 }
 
-function firstLoadedTexture(
-	urls: readonly string[],
-): Texture | undefined {
+function firstLoadedTexture(urls: readonly string[]): Texture | undefined {
 	for (const url of urls) {
 		const texture = textureCache.get(url);
 		if (texture) return texture;
