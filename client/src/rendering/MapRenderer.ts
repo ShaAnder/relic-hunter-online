@@ -2,11 +2,11 @@ import { Container, Graphics } from "pixi.js";
 import {
 	resolveTileMaterial,
 	type ResolvedTileMaterial,
-} from "./materials/mapMaterialFactory";
+} from "./engine/materials/mapMaterialFactory";
 import {
 	resolveBarrierMaterial,
 	type ResolvedBarrierMaterial,
-} from "./materials/barrierMaterialFactory";
+} from "./engine/materials/barrierMaterialFactory";
 import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
 import * as RH from "@relic-hunter/shared";
 import { fillForTileCode } from "./tileFills";
@@ -21,6 +21,7 @@ import {
 	addBarrierQuadSurface,
 	type BarrierSurfaceQuad,
 } from "./barrierQuadSurface";
+import { perf } from "@/perf/PerfMonitor";
 
 /** How much larger than its true footprint each ordinary tile is drawn. */
 const TILE_OVERSIZE = 1.09;
@@ -53,8 +54,12 @@ interface MapMaterialRenderContext {
 	floorIndex: number;
 }
 
-/** What a piece of the map should draw as, combining room-focus and fog-of-war into
- * one answer instead of two separately-applied effects. "hidden" wins over everything  */
+/**
+ * What a piece of the map should draw as, combining room-focus and
+ * fog-of-war into one answer instead of two separately-applied effects.
+ *
+ * "hidden" wins over everything.
+ */
 type VisualState = "hidden" | "washed" | "normal";
 
 /**
@@ -183,6 +188,9 @@ export class MapRenderer {
 		wallHeightScale = 1,
 		materialContext?: MapMaterialRenderContext,
 	): void {
+		const endPerf = perf.start("renderer.mapBuild");
+
+		perf.incrementCounter("renderer.fullBuilds");
 		this.clearForRebuild();
 
 		const drawables: Drawable[] = [];
@@ -566,6 +574,17 @@ export class MapRenderer {
 			this.worldDepthContainer.addChild(view);
 			this.ownedWorldViews.push(view);
 		}
+		perf.setCounter(
+			"renderer.groundChildren",
+			this.groundContainer.children.length,
+		);
+
+		perf.setCounter(
+			"renderer.worldChildren",
+			this.worldDepthContainer.children.length,
+		);
+
+		endPerf();
 	}
 
 	/** A direction-independent key for an edge, so a boundary edge stored as (a,b) matches the same edge encountered as (b,a) while iterating the grid the other way. */

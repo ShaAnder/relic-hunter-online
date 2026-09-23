@@ -3,6 +3,7 @@ import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
 import { CameraController } from "@/core/cameras/CameraController";
 import { MapRenderer } from "@/rendering/MapRenderer";
+import { EngineCompilerHarness } from "@/rendering/engine/EngineCompilerHarness";
 import {
 	gridToScreen,
 	gridToScreenElevated,
@@ -55,8 +56,9 @@ import type {
 	TutorialCombatGuide,
 } from "@/tutorial/tutorialPort";
 import type { DialogueLine } from "@/tutorial/dialogue";
-import { preloadMapMaterials } from "@/rendering/materials/mapMaterialFactory";
-import { preloadBarrierMaterials } from "@/rendering/materials/barrierMaterialFactory";
+import { preloadMapMaterials } from "@/rendering/engine/materials/mapMaterialFactory";
+import { preloadBarrierMaterials } from "@/rendering/engine/materials/barrierMaterialFactory";
+import { perf } from "@/perf/PerfMonitor";
 
 /**
  * Tactical map scene — grid, mercenary, AP turns, cards, chests, win condition.
@@ -86,9 +88,21 @@ export class MapScene implements Scene, TutorialPort {
 	private foregroundOverlayContainer = new Container();
 
 	// Systems
+	// Systems
 	private camera: CameraController;
 	private lowerFloorMapRenderer!: MapRenderer;
 	private mapRenderer!: MapRenderer;
+
+	/**
+
+	 * MapScene may refresh presentation frequently for fog, room focus or camera
+	 * changes, but those usually do not change the map's structural geometry.
+	 * The harness therefore reuses the existing CompiledFloorVisual when its
+	 * compiler inputs are unchanged, and recompiles only after structural change
+	 * or an explicit invalidation.
+	 */
+	private readonly engineCompiler = new EngineCompilerHarness();
+
 	private moveController: MoveController;
 
 	// Entities — one array, pilot type is the only thing distinguishing them
@@ -361,6 +375,8 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	private rebuildMapRenderWithFog(liveCoordOverride?: RH.GridCoord): void {
+		perf.incrementCounter("scene.legacyPresentationRebuilds");
+		const endPerf = perf.start("scene.rebuildMapRenderWithFog");
 		const viewedFloor = this.game.session.viewedFloor;
 
 		const compiled: RH.CompiledEdgeMap = this.game.session.mapFloors?.[
@@ -374,6 +390,18 @@ export class MapScene implements Scene, TutorialPort {
 			elevationSteps: new Map(),
 			elevation: this.game.session.mapElevation ?? new Map(),
 		};
+
+		/**
+		 * Compile the new engine's pure floor description beside the legacy
+		 * renderer. Repeated fog/focus refreshes should normally hit the harness
+		 * cache rather than recompiling the floor.
+		 *
+		 * Nothing from this result is drawn yet; Phase 2 begins consuming it.
+		 */
+		this.engineCompiler.compile(compiled, {
+			mapSeed: this.game.session.mapSeed ?? 0,
+			floorIndex: viewedFloor,
+		});
 
 		// Keep the floor immediately beneath an upper floor visible as
 		// muted structural context.
@@ -443,6 +471,7 @@ export class MapScene implements Scene, TutorialPort {
 			mapSeed: this.game.session.mapSeed ?? 0,
 			floorIndex: viewedFloor,
 		});
+		endPerf();
 	}
 
 	/**
@@ -1999,8 +2028,6 @@ export class MapScene implements Scene, TutorialPort {
 		this.hud.closeActionMenu();
 		this.localUnit.turnManager.endTurn();
 		this.turnsTaken++;
-
-		RH.pruneDecayedTiles(this.localUnit.state, this.turnsTaken);
 		this.refreshVisibility(this.localUnit.state, this.localUnit.state.coord);
 
 		this.tutorialConfig?.onTutorialEvent({ type: "turnEnded" });
@@ -3012,6 +3039,13 @@ export class MapScene implements Scene, TutorialPort {
 		this.game.session.generatedGrid = null;
 		this.cachedRooms = null;
 		this.grid = this.buildMap();
+
+		/**
+		 * buildMap() may replace the structural map data that produced the cached
+		 * CompiledFloorVisual. Discard that cache now so the next render rebuild
+		 * must compile against the new map instead of reusing stale geometry.
+		 */
+		this.engineCompiler.invalidate();
 
 		this.applyCameraBounds();
 

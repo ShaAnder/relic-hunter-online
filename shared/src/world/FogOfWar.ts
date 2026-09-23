@@ -7,12 +7,6 @@ import { getEdgeBetween, edgeBlocksVision } from "./edgeGrid";
 /** How far unit can see around itself in tiles */
 export const FOG_SIGHT_RANGE = 6;
 
-/**
- * How many turns an explored but currently out of range tile stays dimly
- * visible before re-fogging to fully unseen
- */
-export const FOG_DECAY_TURNS = 5;
-
 export type TileVisibility = "unseen" | "explored" | "visible";
 
 /**
@@ -164,27 +158,20 @@ export function getTileVisibility(
 	fog: HasFogOfWar,
 	coord: GridCoord,
 	_center: GridCoord,
-	currentTurn: number,
+	_currentTurn: number,
 	_range: number = FOG_SIGHT_RANGE,
-	decayTurns: number = FOG_DECAY_TURNS,
 ): TileVisibility {
 	const key = coordKey(coord);
-	if (fog.currentlyVisible[key]) return "visible";
 
-	const lastSeen = fog.exploredTiles[key];
-	if (lastSeen === undefined) return "unseen";
-	if (currentTurn - lastSeen >= decayTurns) return "unseen";
-
-	return "explored";
-}
-
-/** Remove tiles that have decayed past FOG DECAY */
-export function pruneDecayedTiles(fog: HasFogOfWar, currentTurn: number): void {
-	for (const key in fog.exploredTiles) {
-		if (currentTurn - fog.exploredTiles[key] >= FOG_DECAY_TURNS) {
-			delete fog.exploredTiles[key];
-		}
+	if (fog.currentlyVisible[key]) {
+		return "visible";
 	}
+
+	if (fog.exploredTiles[key] !== undefined) {
+		return "explored";
+	}
+
+	return "unseen";
 }
 
 /**

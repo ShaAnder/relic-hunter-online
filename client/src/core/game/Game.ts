@@ -4,6 +4,7 @@ import type { Scene } from "../scenes/Scene";
 import { GameSession } from "./GameSession";
 import { OverlayManager } from "../overlays/OverlayManager";
 import { AudioService } from "../audio/AudioService";
+import { perf } from "@/perf/PerfMonitor";
 
 /**
  * Central controller for the PixiJS client.
@@ -56,8 +57,12 @@ export class Game {
 
 		// main game loop
 		this.app.ticker.add((ticker) => {
+			perf.beginFrame();
+
 			this.sceneManager.update(ticker.deltaTime);
 			this.overlays.update(ticker.deltaTime);
+
+			perf.endFrame();
 		});
 
 		// handle browser window resizing
