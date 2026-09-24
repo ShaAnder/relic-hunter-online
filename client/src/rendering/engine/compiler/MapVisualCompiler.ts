@@ -1,28 +1,21 @@
 import * as RH from "@relic-hunter/shared";
-
 import { gridToScreen, TILE_HEIGHT, TILE_WIDTH } from "@/math/isoGridMath";
-
 import {
 	barrierRenderProfileFor,
 	connectorPriorityFor,
 	type BarrierRenderProfile,
 } from "@/rendering/barrierRenderProfile";
-
 import { fillForTileCode } from "@/rendering/tileFills";
-
 import {
 	DEFAULT_RENDER_CHUNK_SIZE,
 	renderChunkIdForTile,
 	type RenderChunkId,
 } from "../chunks/ChunkCoord";
-
 import {
 	tileVariantHash,
 	type VisualMaterialRef,
 } from "../materials/MaterialKey";
-
 import { WORLD_DEPTH_BIAS, worldDepthKey } from "../world/worldDepthKey";
-
 import {
 	renderEdgeIdFor,
 	type CompiledBarrierSurface,
@@ -37,26 +30,17 @@ import {
 	type VisualSurfaceId,
 	type VisualUvs,
 } from "./CompiledFloorVisual";
+import { compileTileTopology } from "./TileTopologyCompiler";
 
-/**
- * Preserve the exact ordinary-tile oversize currently used by
- * MapRenderer to hide coplanar seams.
- */
+// Preserve the exact ordinary-tile oversize currently
+// used by MapRenderer to hide coplanar seams.
 const TILE_OVERSIZE = 1.09;
-
-/**
- * One normal barrier storey in projected pixels.
- */
+// One normal barrier storey in projected pixels.
 const WALL_HEIGHT_PX = TILE_HEIGHT;
-
-/**
- * Current room-focus wall-height treatment.
- */
+// Current room-focus wall-height treatment.
 const FOCUSED_WALL_HEIGHT_FRACTION = 0.2;
-
 const FLOOR_COLOR = 0xc8c8c8;
 const TERRAIN_SIDE_COLOR = 0x4a4652;
-
 const EPSILON = 0.000001;
 
 /**
@@ -67,15 +51,12 @@ const EPSILON = 0.000001;
  * rendering is disabled.
  */
 const TILE_UVS: VisualUvs = [0.5, 0, 1, 0.5, 0.5, 1, 0, 0.5];
-
 const DEFAULT_QUAD_UVS: VisualUvs = [0, 0, 1, 0, 1, 1, 0, 1];
 
 export interface MapVisualCompileOptions {
 	mapSeed: number;
 	floorIndex: number;
-
 	chunkSize?: number;
-
 	/**
 	 * Active floor = 1.
 	 *
@@ -140,33 +121,21 @@ interface BarrierCompiledGeometry {
 
 interface MutableChunkVisual {
 	chunkId: RenderChunkId;
-
 	tiles: CompiledTileSurface[];
-
 	terrainSurfaces: CompiledTerrainSurface[];
-
 	barrierSurfaces: CompiledBarrierSurface[];
-
 	connectors: CompiledConnectorVisual[];
 }
 
 interface MutableConnector {
 	vertex: RH.GridVertex;
-
 	base: VisualPoint;
-
 	foundationBottomY: number;
-
 	barrier: RH.EdgeBarrier;
-
 	incidents: CompiledConnectorIncident[];
-
 	visibilityCoords: RH.GridCoord[];
-
 	visibilityCoordKeys: Set<string>;
-
 	occluderQuads: VisualQuad[];
-
 	occluderKeys: Set<string>;
 }
 
@@ -175,7 +144,6 @@ interface MutableConnector {
  * geometry.
  *
  * IMPORTANT:
- *
  * - no Pixi imports
  * - no Graphics
  * - no Mesh
@@ -191,60 +159,38 @@ export class MapVisualCompiler {
 		options: MapVisualCompileOptions,
 	): CompiledFloorVisual {
 		const chunkSize = options.chunkSize ?? DEFAULT_RENDER_CHUNK_SIZE;
-
 		const wallHeightScale = options.wallHeightScale ?? 1;
-
 		const tiles: CompiledTileSurface[] = [];
-
 		const terrainSurfaces: CompiledTerrainSurface[] = [];
-
 		const barrierSurfaces: CompiledBarrierSurface[] = [];
-
 		const connectors: CompiledConnectorVisual[] = [];
-
 		const mutableChunks = new Map<RenderChunkId, MutableChunkVisual>();
-
 		const connectorTouches = new Map<string, MutableConnector>();
-
 		const chunkFor = (chunkId: RenderChunkId): MutableChunkVisual => {
 			const existing = mutableChunks.get(chunkId);
-
 			if (existing) {
 				return existing;
 			}
-
 			const created: MutableChunkVisual = {
 				chunkId,
-
 				tiles: [],
-
 				terrainSurfaces: [],
-
 				barrierSurfaces: [],
-
 				connectors: [],
 			};
-
 			mutableChunks.set(chunkId, created);
-
 			return created;
 		};
-
 		const pushTile = (surface: CompiledTileSurface): void => {
 			tiles.push(surface);
-
 			chunkFor(surface.chunkId).tiles.push(surface);
 		};
-
 		const pushTerrain = (surface: CompiledTerrainSurface): void => {
 			terrainSurfaces.push(surface);
-
 			chunkFor(surface.chunkId).terrainSurfaces.push(surface);
 		};
-
 		const pushBarrier = (surface: CompiledBarrierSurface): void => {
 			barrierSurfaces.push(surface);
-
 			chunkFor(surface.chunkId).barrierSurfaces.push(surface);
 		};
 
@@ -260,7 +206,6 @@ export class MapVisualCompiler {
 				};
 
 				const key = RH.coordKey(coord);
-
 				const elevation = compiled.elevation.get(key) ?? 0;
 
 				/**
@@ -271,7 +216,6 @@ export class MapVisualCompiler {
 				}
 
 				const tileCode = compiled.tileCodes.get(key);
-
 				const trueFootprint = this.tileNeedsTrueFootprint(
 					compiled,
 					coord,
@@ -280,40 +224,32 @@ export class MapVisualCompiler {
 				);
 
 				const chunkId = renderChunkIdForTile(coord, chunkSize);
-
 				const id = `tile:${x},${y}` as VisualSurfaceId;
-
 				const fallbackColor = fillForTileCode(tileCode) ?? FLOOR_COLOR;
-
 				const surface: CompiledTileSurface = {
 					id,
-
 					coord,
-
 					chunkId,
-
 					quad: this.tileQuad(coord, elevation, trueFootprint),
-
 					uvs: TILE_UVS,
-
 					material: {
 						kind: "tile",
-
 						code: tileCode,
-
 						variantHash: tileVariantHash(
 							options.mapSeed,
 							options.floorIndex,
 							coord,
 							tileCode,
 						),
-
 						fallbackColor,
 					},
-
+					/**
+					 * Topology is structural data, so calculate it once while the floor is
+					 * compiled instead of repeatedly asking the same neighbour questions later.
+					 */
+					topology: compileTileTopology(compiled, coord),
 					visibilityCoords: [coord],
 				};
-
 				pushTile(surface);
 			}
 		}
@@ -328,9 +264,7 @@ export class MapVisualCompiler {
 			direction: "E" | "S",
 		): void => {
 			const aElevation = this.elevationAt(compiled, a);
-
 			const bElevation = this.elevationAt(compiled, b);
-
 			if (
 				aElevation === undefined ||
 				bElevation === undefined ||
@@ -350,50 +284,32 @@ export class MapVisualCompiler {
 			if (aElevation <= bElevation + EPSILON) {
 				return;
 			}
-
 			const aCorners = this.trueTileCorners(a, aElevation * TILE_HEIGHT);
-
 			const bCorners = this.trueTileCorners(b, bElevation * TILE_HEIGHT);
-
 			const [a1, a2, b1, b2] =
 				direction === "E"
 					? [aCorners.right, aCorners.bottom, bCorners.top, bCorners.left]
 					: [aCorners.bottom, aCorners.left, bCorners.right, bCorners.top];
-
 			const quad: VisualQuad = [a1, a2, b2, b1];
-
 			const depth =
 				Math.max(a1.y, a2.y, b1.y, b2.y) + WORLD_DEPTH_BIAS.terrainFace;
-
 			const chunkId = renderChunkIdForTile(a, chunkSize);
-
 			const surface: CompiledTerrainSurface = {
 				id: `terrain:${a.x},${a.y}:${direction}` as VisualSurfaceId,
-
 				chunkId,
-
 				a,
 				b,
-
 				direction,
-
 				quad,
-
 				uvs: DEFAULT_QUAD_UVS,
-
 				material: {
 					kind: "terrain",
-
 					fallbackColor: TERRAIN_SIDE_COLOR,
 				},
-
 				depth,
-
 				depthKey: worldDepthKey(depth),
-
 				visibilityCoords: [a, b],
 			};
-
 			pushTerrain(surface);
 		};
 
@@ -445,44 +361,34 @@ export class MapVisualCompiler {
 			}
 
 			const profile = barrierRenderProfileFor(barrier);
-
 			const edgeId = renderEdgeIdFor(edge);
-
 			const normalHeight =
 				WALL_HEIGHT_PX * profile.heightFraction * wallHeightScale;
-
 			const focusedHeight = normalHeight * FOCUSED_WALL_HEIGHT_FRACTION;
-
 			const normalSkeleton = this.buildBarrierSegmentSkeleton(
 				edge,
 				compiled,
 				normalHeight,
 				profile.segmentThicknessPx,
 			);
-
 			const focusedSkeleton = this.buildBarrierSegmentSkeleton(
 				edge,
 				compiled,
 				focusedHeight,
 				profile.segmentThicknessPx,
 			);
-
 			const normalGeometry = this.buildBarrierGeometry(
 				edge,
 				normalSkeleton,
 				profile,
 			);
-
 			const focusedGeometry = this.buildBarrierGeometry(
 				edge,
 				focusedSkeleton,
 				profile,
 			);
-
 			const depth = normalSkeleton.depth + WORLD_DEPTH_BIAS.barrierSegment;
-
 			const depthKey = worldDepthKey(depth);
-
 			const chunkId = renderChunkIdForTile(a, chunkSize);
 
 			/**
@@ -490,7 +396,6 @@ export class MapVisualCompiler {
 			 * +x/+y foreground tile used by the legacy inverse mask.
 			 */
 			const frontElevation = this.elevationAt(compiled, b);
-
 			const occluderQuad =
 				profile.terrainOcclusion === "front-tile" &&
 				frontElevation !== undefined &&
@@ -500,41 +405,26 @@ export class MapVisualCompiler {
 
 			const faceSurface: CompiledBarrierSurface = {
 				id: `barrier:${edgeId}:face` as VisualSurfaceId,
-
 				chunkId,
-
 				edgeId,
-
 				edge,
-
 				barrier,
-
 				surface: "segment-face",
-
 				normalQuad: normalGeometry.face,
-
 				focusedQuad: focusedGeometry.face,
-
 				normalUvs: normalGeometry.faceUvs,
-
 				focusedUvs: focusedGeometry.faceUvs,
-
 				material: this.barrierMaterial(
 					barrier,
 					"segment-face",
 					normalGeometry.faceFallbackColor,
 					profile.segmentAlpha,
 				),
-
 				depth,
-
 				depthKey,
-
 				visibilityCoords: [a, b],
-
 				occluderQuad,
 			};
-
 			pushBarrier(faceSurface);
 
 			if (
@@ -546,41 +436,26 @@ export class MapVisualCompiler {
 			) {
 				const topSurface: CompiledBarrierSurface = {
 					id: `barrier:${edgeId}:top` as VisualSurfaceId,
-
 					chunkId,
-
 					edgeId,
-
 					edge,
-
 					barrier,
-
 					surface: "segment-top",
-
 					normalQuad: normalGeometry.top,
-
 					focusedQuad: focusedGeometry.top,
-
 					normalUvs: normalGeometry.topUvs,
-
 					focusedUvs: focusedGeometry.topUvs,
-
 					material: this.barrierMaterial(
 						barrier,
 						"segment-top",
 						profile.segmentTopColor,
 						profile.segmentAlpha,
 					),
-
 					depth,
-
 					depthKey,
-
 					visibilityCoords: [a, b],
-
 					occluderQuad: null,
 				};
-
 				pushBarrier(topSurface);
 			}
 
@@ -673,12 +548,10 @@ export class MapVisualCompiler {
 
 		for (const connector of connectorTouches.values()) {
 			const profile = barrierRenderProfileFor(connector.barrier);
-
 			const depth = connector.base.y + WORLD_DEPTH_BIAS.barrierConnector;
 
 			const ownerCoord: RH.GridCoord = {
 				x: this.clamp(connector.vertex.x, 0, compiled.grid.width - 1),
-
 				y: this.clamp(connector.vertex.y, 0, compiled.grid.height - 1),
 			};
 
@@ -686,27 +559,16 @@ export class MapVisualCompiler {
 
 			const connectorVisual: CompiledConnectorVisual = {
 				id: `connector:${connector.vertex.x},${connector.vertex.y}` as VisualSurfaceId,
-
 				chunkId,
-
 				vertex: connector.vertex,
-
 				base: connector.base,
-
 				foundationBottomY: connector.foundationBottomY,
-
 				barrier: connector.barrier,
-
 				incidents: connector.incidents,
-
 				depth,
-
 				depthKey: worldDepthKey(depth),
-
 				visibilityCoords: connector.visibilityCoords,
-
 				occluderQuads: connector.occluderQuads,
-
 				leftMaterial: this.barrierMaterial(
 					connector.barrier,
 					"connector-face",
@@ -745,36 +607,23 @@ export class MapVisualCompiler {
 		for (const [chunkId, mutable] of mutableChunks) {
 			chunks.set(chunkId, {
 				chunkId,
-
 				tiles: mutable.tiles,
-
 				terrainSurfaces: mutable.terrainSurfaces,
-
 				barrierSurfaces: mutable.barrierSurfaces,
-
 				connectors: mutable.connectors,
 			});
 		}
 
 		return {
 			floorIndex: options.floorIndex,
-
 			mapSeed: options.mapSeed,
-
 			width: compiled.grid.width,
-
 			height: compiled.grid.height,
-
 			chunkSize,
-
 			tiles,
-
 			terrainSurfaces,
-
 			barrierSurfaces,
-
 			connectors,
-
 			chunks,
 		};
 	}
@@ -796,22 +645,18 @@ export class MapVisualCompiler {
 				x: base.x,
 				y: screenY - TILE_HEIGHT / 2,
 			},
-
 			right: {
 				x: base.x + TILE_WIDTH / 2,
 				y: screenY,
 			},
-
 			bottom: {
 				x: base.x,
 				y: screenY + TILE_HEIGHT / 2,
 			},
-
 			left: {
 				x: base.x - TILE_WIDTH / 2,
 				y: screenY,
 			},
-
 			center: {
 				x: base.x,
 				y: screenY,
@@ -821,7 +666,6 @@ export class MapVisualCompiler {
 
 	private trueTileQuad(coord: RH.GridCoord, elevation: number): VisualQuad {
 		const corners = this.trueTileCorners(coord, elevation * TILE_HEIGHT);
-
 		return [corners.top, corners.right, corners.bottom, corners.left];
 	}
 
@@ -835,11 +679,8 @@ export class MapVisualCompiler {
 		}
 
 		const corners = this.trueTileCorners(coord, elevation * TILE_HEIGHT);
-
 		const halfWidth = (TILE_WIDTH / 2) * TILE_OVERSIZE;
-
 		const halfHeight = (TILE_HEIGHT / 2) * TILE_OVERSIZE;
-
 		const center = corners.center;
 
 		return [
@@ -895,17 +736,14 @@ export class MapVisualCompiler {
 				x: coord.x + 1,
 				y: coord.y,
 			},
-
 			{
 				x: coord.x - 1,
 				y: coord.y,
 			},
-
 			{
 				x: coord.x,
 				y: coord.y + 1,
 			},
-
 			{
 				x: coord.x,
 				y: coord.y - 1,
@@ -921,13 +759,9 @@ export class MapVisualCompiler {
 			) {
 				continue;
 			}
-
 			const key = RH.coordKey(neighbour);
-
 			const otherElevation = compiled.elevation.get(key);
-
 			const otherCode = compiled.tileCodes.get(key);
-
 			if (
 				otherElevation !== undefined &&
 				Number.isFinite(otherElevation) &&
@@ -935,12 +769,10 @@ export class MapVisualCompiler {
 			) {
 				return true;
 			}
-
 			if (otherCode !== code) {
 				return true;
 			}
 		}
-
 		return false;
 	}
 
@@ -959,7 +791,6 @@ export class MapVisualCompiler {
 
 		return {
 			x: projected.x,
-
 			y: projected.y - TILE_HEIGHT / 2 - elevation * TILE_HEIGHT,
 		};
 	}
@@ -970,11 +801,8 @@ export class MapVisualCompiler {
 		distance: number,
 	): VisualPoint {
 		const dx = p2.x - p1.x;
-
 		const dy = p2.y - p1.y;
-
 		const length = Math.hypot(dx, dy);
-
 		if (length === 0) {
 			return {
 				x: 0,
@@ -984,7 +812,6 @@ export class MapVisualCompiler {
 
 		return {
 			x: (-dy / length) * distance,
-
 			y: (dx / length) * distance,
 		};
 	}
@@ -1014,14 +841,11 @@ export class MapVisualCompiler {
 			Math.min(startElevation, endElevation);
 
 		const centerBase1 = this.vertexScreenPoint(startVertex, startElevation);
-
 		const centerBase2 = this.vertexScreenPoint(endVertex, endElevation);
-
 		const foundationCenter1 = this.vertexScreenPoint(
 			startVertex,
 			foundationElevation,
 		);
-
 		const foundationCenter2 = this.vertexScreenPoint(
 			endVertex,
 			foundationElevation,
@@ -1033,95 +857,73 @@ export class MapVisualCompiler {
 		 * Terrain slope therefore cannot visually change barrier width.
 		 */
 		const raw1 = this.vertexScreenPoint(startVertex, 0);
-
 		const raw2 = this.vertexScreenPoint(endVertex, 0);
-
 		const offset = this.perpOffset(raw1, raw2, thicknessPx);
 
 		const nearBase1: VisualPoint = {
 			x: centerBase1.x + offset.x,
-
 			y: centerBase1.y + offset.y,
 		};
 
 		const nearBase2: VisualPoint = {
 			x: centerBase2.x + offset.x,
-
 			y: centerBase2.y + offset.y,
 		};
 
 		const farBase1: VisualPoint = {
 			x: centerBase1.x - offset.x,
-
 			y: centerBase1.y - offset.y,
 		};
 
 		const farBase2: VisualPoint = {
 			x: centerBase2.x - offset.x,
-
 			y: centerBase2.y - offset.y,
 		};
 
 		const foundationNear1: VisualPoint = {
 			x: foundationCenter1.x + offset.x,
-
 			y: foundationCenter1.y + offset.y,
 		};
 
 		const foundationNear2: VisualPoint = {
 			x: foundationCenter2.x + offset.x,
-
 			y: foundationCenter2.y + offset.y,
 		};
 
 		const foundationFar1: VisualPoint = {
 			x: foundationCenter1.x - offset.x,
-
 			y: foundationCenter1.y - offset.y,
 		};
 
 		const foundationFar2: VisualPoint = {
 			x: foundationCenter2.x - offset.x,
-
 			y: foundationCenter2.y - offset.y,
 		};
 
 		const up = (point: VisualPoint): VisualPoint => ({
 			x: point.x,
-
 			y: point.y - height,
 		});
 
 		return {
 			startVertex,
 			endVertex,
-
 			centerBase1,
 			centerBase2,
-
 			foundationCenter1,
 			foundationCenter2,
-
 			nearBase1,
 			nearBase2,
-
 			farBase1,
 			farBase2,
-
 			nearTop1: up(nearBase1),
-
 			nearTop2: up(nearBase2),
-
 			farTop1: up(farBase1),
-
 			farTop2: up(farBase2),
-
 			foundationNear1,
 			foundationNear2,
-
 			foundationFar1,
 			foundationFar2,
-
 			hasFoundation:
 				Math.abs(foundationCenter1.y - centerBase1.y) > EPSILON ||
 				Math.abs(foundationCenter2.y - centerBase2.y) > EPSILON,
@@ -1144,7 +946,6 @@ export class MapVisualCompiler {
 
 		return [
 			edgeAxis * profile.faceUvPerEdge,
-
 			(edgeAxis + 1) * profile.faceUvPerEdge,
 		];
 	}
@@ -1155,7 +956,6 @@ export class MapVisualCompiler {
 	): VisualPoint {
 		return {
 			x: (nearTop.x + farTop.x) / 2,
-
 			y: (nearTop.y + farTop.y) / 2,
 		};
 	}
@@ -1169,13 +969,10 @@ export class MapVisualCompiler {
 
 		if (profile.geometryKind === "panel") {
 			const top1 = this.centerTopPoint(skeleton.nearTop1, skeleton.farTop1);
-
 			const top2 = this.centerTopPoint(skeleton.nearTop2, skeleton.farTop2);
-
 			const bottom1 = profile.extendSegmentToFoundation
 				? skeleton.foundationCenter1
 				: skeleton.centerBase1;
-
 			const bottom2 = profile.extendSegmentToFoundation
 				? skeleton.foundationCenter2
 				: skeleton.centerBase2;
@@ -1192,16 +989,12 @@ export class MapVisualCompiler {
 
 			return {
 				face,
-
 				faceUvs: [u1, 0, u2, 0, u2, v2, u1, v1],
-
 				faceFallbackColor:
 					edge.orientation === "north"
 						? profile.segmentLeftColor
 						: profile.segmentRightColor,
-
 				top: null,
-
 				topUvs: null,
 			};
 		}
@@ -1213,19 +1006,12 @@ export class MapVisualCompiler {
 		 * renderer and avoiding doubled wall faces.
 		 */
 		const nearDepth = (skeleton.nearBase1.y + skeleton.nearBase2.y) / 2;
-
 		const farDepth = (skeleton.farBase1.y + skeleton.farBase2.y) / 2;
-
 		const frontIsNear = nearDepth >= farDepth;
-
 		const frontBase1 = frontIsNear ? skeleton.nearBase1 : skeleton.farBase1;
-
 		const frontBase2 = frontIsNear ? skeleton.nearBase2 : skeleton.farBase2;
-
 		const frontTop1 = frontIsNear ? skeleton.nearTop1 : skeleton.farTop1;
-
 		const frontTop2 = frontIsNear ? skeleton.nearTop2 : skeleton.farTop2;
-
 		const frontFoundation1 = frontIsNear
 			? skeleton.foundationNear1
 			: skeleton.foundationFar1;
@@ -1263,15 +1049,11 @@ export class MapVisualCompiler {
 
 		return {
 			face,
-
 			faceUvs: [u1, 0, u2, 0, u2, v2, u1, v1],
-
 			faceFallbackColor: frontIsNear
 				? profile.segmentLeftColor
 				: profile.segmentRightColor,
-
 			top: profile.showSegmentTop ? top : null,
-
 			topUvs: profile.showSegmentTop ? [u1, 0, u2, 0, u2, 1, u1, 1] : null,
 		};
 	}
@@ -1282,52 +1064,32 @@ export class MapVisualCompiler {
 
 	private registerConnector(
 		connectors: Map<string, MutableConnector>,
-
 		vertex: RH.GridVertex,
-
 		base: VisualPoint,
-
 		foundationBottomY: number,
-
 		edgeId: string,
-
 		barrier: RH.EdgeBarrier,
-
 		a: RH.GridCoord,
-
 		b: RH.GridCoord,
-
 		normalHeight: number,
-
 		focusedHeight: number,
-
 		occluderQuad: VisualQuad | null,
 	): void {
 		const vertexKey = `${vertex.x},${vertex.y}`;
-
 		let connector = connectors.get(vertexKey);
 
 		if (!connector) {
 			connector = {
 				vertex,
-
 				base,
-
 				foundationBottomY,
-
 				barrier,
-
 				incidents: [],
-
 				visibilityCoords: [],
-
 				visibilityCoordKeys: new Set<string>(),
-
 				occluderQuads: [],
-
 				occluderKeys: new Set<string>(),
 			};
-
 			connectors.set(vertexKey, connector);
 		}
 
@@ -1344,20 +1106,13 @@ export class MapVisualCompiler {
 
 		const incident: CompiledConnectorIncident = {
 			edgeId,
-
 			barrier,
-
 			visibilityCoords: [a, b],
-
 			normalHeight,
-
 			focusedHeight,
 		};
-
 		connector.incidents.push(incident);
-
 		this.addConnectorVisibilityCoord(connector, a);
-
 		this.addConnectorVisibilityCoord(connector, b);
 
 		if (occluderQuad) {
@@ -1366,10 +1121,8 @@ export class MapVisualCompiler {
 			 * barrier iteration.
 			 */
 			const occluderKey = RH.coordKey(b);
-
 			if (!connector.occluderKeys.has(occluderKey)) {
 				connector.occluderKeys.add(occluderKey);
-
 				connector.occluderQuads.push(occluderQuad);
 			}
 		}
@@ -1380,13 +1133,10 @@ export class MapVisualCompiler {
 		coord: RH.GridCoord,
 	): void {
 		const key = RH.coordKey(coord);
-
 		if (connector.visibilityCoordKeys.has(key)) {
 			return;
 		}
-
 		connector.visibilityCoordKeys.add(key);
-
 		connector.visibilityCoords.push(coord);
 	}
 
@@ -1406,13 +1156,9 @@ export class MapVisualCompiler {
 	): VisualMaterialRef {
 		return {
 			kind: "barrier",
-
 			barrier,
-
 			surface,
-
 			fallbackColor,
-
 			alpha,
 		};
 	}

@@ -64,12 +64,18 @@ export function createVisualCompilerSnapshot(
 	// WE use a set to store distinct depth strata
 	const depthKeys = new Set<number>();
 
-	// ONLY if they are not ground tile tops
 	for (const surface of compiled.terrainSurfaces) {
 		depthKeys.add(surface.depthKey);
 	}
 
-	// we do the same for connectors
+	/**
+	 * Barrier faces and tops also participate in global world-depth ordering,
+	 * so their strata must be included in the unique-depth diagnostic.
+	 */
+	for (const surface of compiled.barrierSurfaces) {
+		depthKeys.add(surface.depthKey);
+	}
+
 	for (const connector of compiled.connectors) {
 		depthKeys.add(connector.depthKey);
 	}

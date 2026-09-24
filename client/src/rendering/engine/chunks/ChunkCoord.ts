@@ -26,5 +26,5 @@ export function renderChunkIdForTile(
 	chunkSize = DEFAULT_RENDER_CHUNK_SIZE,
 ): RenderChunkId {
 	const chunk = renderChunkCoordFor(coord, chunkSize);
-	return `${chunk.x}, ${chunk.y}` as RenderChunkId;
+	return `${chunk.x},${chunk.y}` as RenderChunkId;
 }

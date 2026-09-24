@@ -3,17 +3,12 @@ import type * as RH from "@relic-hunter/shared";
 import type { RenderChunkId } from "../chunks/ChunkCoord";
 import type { VisualMaterialRef } from "../materials/MaterialKey";
 import type { VisualDepthKey } from "../world/worldDepthKey";
+import { CompiledTileTopology } from "./TileTopologyCompiler";
 
 /**
  * One point in projected screen/world space.
- *
- * The gameplay grid might say:
- *
- *     { x: 10, y: 12 }
- *
- * while the projected renderer position is something like:
- *
- *     { x: -80, y: 440 }
+ * The gameplay grid might say:{ x: 10, y: 12 }
+ * while the projected renderer position is something like: { x: -80, y: 440 }
  */
 export interface VisualPoint {
 	x: number;
@@ -59,16 +54,19 @@ export type VisualSurfaceId = string & {
  */
 export interface CompiledTileSurface {
 	id: VisualSurfaceId;
-
 	coord: RH.GridCoord;
-
 	chunkId: RenderChunkId;
-
 	quad: VisualQuad;
 	uvs: VisualUvs;
-
 	material: VisualMaterialRef;
 
+	/**
+	 * Precomputed N/E/S/W relationships for this tile.
+	 *
+	 * Later render systems can build shorelines, road edges, grass joins and
+	 * similar procedural decoration without rescanning neighbouring tiles.
+	 */
+	topology: CompiledTileTopology;
 	visibilityCoords: readonly RH.GridCoord[];
 }
 

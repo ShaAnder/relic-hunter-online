@@ -24,6 +24,11 @@ export interface ResolvedTileMaterial {
 	overlays: readonly ResolvedTileOverlay[];
 }
 
+export interface ResolvedTileVariant {
+	texture: Texture | undefined;
+	variantIndex: number;
+}
+
 export interface TileMaterialResolveContext {
 	code: EdgeMapTileCode | undefined;
 	coord: GridCoord;
@@ -79,27 +84,58 @@ export function preloadMapMaterials(): Promise<void> {
 	return preLoadPromise;
 }
 
+/**
+ * GPU-side resolution of a variant already selected deterministically by the
+ * pure compiler.
+ *
+ * The compiler owns the stable hash; this function only knows which loaded
+ * texture resource corresponds to that hash.
+ */
+export function resolveTileVariant(
+	code: EdgeMapTileCode | undefined,
+	variantHash: number,
+): ResolvedTileVariant {
+	if (code === undefined) {
+		return {
+			texture: undefined,
+			variantIndex: -1,
+		};
+	}
+
+	const family = TILE_TEXTURE_FAMILIES[code];
+	if (!family || family.urls.length === 0) {
+		return {
+			texture: undefined,
+			variantIndex: -1,
+		};
+	}
+
+	const variantIndex = variantHash % family.urls.length;
+	const url = family.urls[variantIndex];
+
+	return {
+		texture: textureCache.get(url),
+		variantIndex,
+	};
+}
+
 export function resolveTileMaterial(
 	context: TileMaterialResolveContext,
 ): ResolvedTileMaterial {
 	const { code, coord, mapSeed, floorIndex } = context;
+
 	if (code === undefined) {
 		return {
 			baseTexture: undefined,
 			overlays: [],
 		};
 	}
-	const family = TILE_TEXTURE_FAMILIES[code];
-	if (!family || family.urls.length === 0) {
-		return {
-			baseTexture: undefined,
-			overlays: [],
-		};
-	}
+
 	const hash = hashTile(mapSeed, floorIndex, coord.x, coord.y, code);
-	const url = family.urls[hash % family.urls.length];
+	const variant = resolveTileVariant(code, hash);
+
 	return {
-		baseTexture: textureCache.get(url),
+		baseTexture: variant.texture,
 		// Reserved for future:
 		// cracks, dust, markings, etc.
 		overlays: [],

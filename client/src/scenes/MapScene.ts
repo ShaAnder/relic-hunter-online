@@ -88,7 +88,6 @@ export class MapScene implements Scene, TutorialPort {
 	private foregroundOverlayContainer = new Container();
 
 	// Systems
-	// Systems
 	private camera: CameraController;
 	private lowerFloorMapRenderer!: MapRenderer;
 	private mapRenderer!: MapRenderer;
