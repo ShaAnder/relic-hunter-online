@@ -79,7 +79,14 @@ void main() {
 }
 `;
 
-export interface StaticGroundMesHandle {
+/**
+ * Owns the Pixi/GPU objects created for one static ground mesh batch.
+ *
+ * The renderer keeps this handle so it can render the mesh, update only its
+ * presentation buffer when visibility changes, and explicitly destroy GPU
+ * resources when the chunk is unloaded.
+ */
+export interface StaticGroundMeshHandle {
 	mesh: Mesh<MeshGeometry, Shader>;
 	geometry: MeshGeometry;
 	shader: Shader;
@@ -98,7 +105,8 @@ export interface StaticGroundMesHandle {
 export function createStaticGroundMesh(
 	data: MeshBatchData,
 	material: ResolvedGroundGpuMaterial,
-): StaticGroundMesHandle {
+): StaticGroundMeshHandle {
+	// Upload the finalized vertex positions, UVs and triangle indices into Pixi geometry.
 	const geometry = new MeshGeometry({
 		positions: data.positions,
 		uvs: data.uvs,
@@ -106,48 +114,52 @@ export function createStaticGroundMesh(
 		topology: "triangle-list",
 	});
 
+	// Add RHOSs per-vertex presentation state as a custom GPU attribute.
+	// The shader reads this as aPresentation to decide Hidden / Washed / Normal.
 	geometry.addAttribute("aPrsentation", {
 		buffer: data.presentation,
 		format: "float32",
 	});
 
-	/**
-	 * Position/UV/index data is structural. Presentation is intentionally
-	 * dynamic because visibility can change without changing geometry.
-	 */
+	// Ground structure rarely changes, so tell Pixi these buffers are effectively immutable.
 	geometry.getBuffer("aPosition").static = true;
 	geometry.getBuffer("aUV").static = true;
 	geometry.getIndex().static = true;
 
+	// Keep a direct reference to the presentation buffer because fog/focus can update it later.
 	const presentationBuffer = geometry.getBuffer("aPresentation");
 
+	// Presentation is intentionally dynamic even though the underlying geometry is static.
 	presentationBuffer.static = false;
+	// Keep the dynamic buffer capacity stable rather than resizing it during repeated updates.
 	presentationBuffer.shrinkToFit = false;
 	const shader = Shader.from({
+		// Compile/create the GPU shader and connect RHO material values to its uniforms.
 		gl: {
 			vertex: GROUND_VERTEX_SHADER,
 			fragment: GROUND_FRAGMENT_SHADER,
 		},
-
+		// Bind the resolved material texture so the fragment shader can sample it through uSampler.
 		resources: {
 			uSampler: material.texture.source,
 
+			// Convert the TypeScript boolean into the numeric 1/0 value expected by the shader.
 			groundUniforms: {
 				uUseTexture: {
 					value: material.usesTexture ? 1 : 0,
 					type: "f32",
 				},
-
+				// Supply the material's fallback RGB colour for ground that has no actual texture.
 				uFallbackColor: {
 					value: colorToVec3(material.fallbackColor),
 					type: "vec3<f32>",
 				},
-
+				// Control how strongly the normal ground colour is blended toward the wash colour.
 				uWashColor: {
 					value: colorToVec3(WASH_COLOR),
 					type: "vec3<f32>",
 				},
-
+				// Supply the material's fallback RGB colour for ground that has no actual texture.
 				uWashAlpha: {
 					value: WASH_ALPHA,
 					type: "f32",
@@ -156,6 +168,7 @@ export function createStaticGroundMesh(
 		},
 	});
 
+	// Combine geometry and shader into the actual Pixi object that can enter the scene graph.
 	const mesh = new Mesh({
 		geometry,
 		shader,
@@ -167,7 +180,7 @@ export function createStaticGroundMesh(
 		shader,
 		presentationBuffer,
 		data,
-
+		// Explicitly detach and release the Pixi/GPU resources owned by this ground mesh.
 		destroy: () => {
 			mesh.removeFromParent();
 			mesh.destroy();
@@ -177,6 +190,12 @@ export function createStaticGroundMesh(
 	};
 }
 
+/**
+ * Convert a packed JavaScript 0xRRGGBB colour into normalized GPU RGB values.
+ *
+ * Each 0–255 colour channel becomes a floating-point value from 0.0–1.0,
+ * which is the format expected by the shader's vec3 colour uniforms.
+ */
 function colorToVec3(color: number): Float32Array {
 	return new Float32Array([
 		((color >> 16) & 0xff) / 255,
@@ -186,3 +205,12 @@ function colorToVec3(color: number): Float32Array {
 		(color & 0xff) / 255,
 	]);
 }
+
+/**
+ * LEARNING NOTE:
+ * StaticMeshFactory converts a finalized ground batch into a Pixi mesh,
+ * uploads structural geometry as static GPU data, keeps presentation
+ * state dynamic for cheap fog updates, binds the material resources
+ * required by the custom shader, and exposes explicit lifetime management
+ * for the resulting rendering resources.
+ */

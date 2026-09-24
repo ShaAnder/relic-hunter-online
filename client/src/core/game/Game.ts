@@ -84,6 +84,14 @@ export class Game {
 			resizeTo: container,
 			backgroundColor: 0x1a1a1a,
 			antialias: true,
+
+			/**
+			 * The renderer refactor intentionally stays on the stable WebGL backend.
+			 * Phase 2 introduces a small GLSL ground-presentation shader; backend
+			 * abstraction is handled later instead of turning this refactor into a
+			 * simultaneous WebGPU migration.
+			 */
+			preference: "webgl",
 		});
 
 		container.appendChild(app.canvas);

@@ -54,6 +54,10 @@ interface MapMaterialRenderContext {
 	floorIndex: number;
 }
 
+interface MapRendererBuildOptions {
+	renderGround?: boolean;
+}
+
 /**
  * What a piece of the map should draw as, combining room-focus and
  * fog-of-war into one answer instead of two separately-applied effects.
@@ -187,6 +191,7 @@ export class MapRenderer {
 		forceWashed = false,
 		wallHeightScale = 1,
 		materialContext?: MapMaterialRenderContext,
+		options: MapRendererBuildOptions = {},
 	): void {
 		const endPerf = perf.start("renderer.mapBuild");
 
@@ -241,51 +246,53 @@ export class MapRenderer {
 		// TILE TOPS
 		// ------------------------------------------------------------
 
-		for (let y = 0; y < compiled.grid.height; y++) {
-			for (let x = 0; x < compiled.grid.width; x++) {
-				const coord: RH.GridCoord = {
-					x,
-					y,
-				};
+		if (options.renderGround ?? true) {
+			for (let y = 0; y < compiled.grid.height; y++) {
+				for (let x = 0; x < compiled.grid.width; x++) {
+					const coord: RH.GridCoord = {
+						x,
+						y,
+					};
 
-				const key = `${x},${y}`;
-				const elevation = compiled.elevation.get(key) ?? 0;
+					const key = `${x},${y}`;
+					const elevation = compiled.elevation.get(key) ?? 0;
 
-				// Void / non-renderable tile.
-				if (!Number.isFinite(elevation)) {
-					continue;
-				}
+					// Void / non-renderable tile.
+					if (!Number.isFinite(elevation)) {
+						continue;
+					}
 
-				const roomFocused = focusCellKeys !== null && !focusCellKeys.has(key);
-				const state = visualStateAt(coord, roomFocused);
+					const roomFocused = focusCellKeys !== null && !focusCellKeys.has(key);
+					const state = visualStateAt(coord, roomFocused);
 
-				if (state === "hidden") {
-					continue;
-				}
+					if (state === "hidden") {
+						continue;
+					}
 
-				const tileCode = compiled.tileCodes.get(key);
-				const material = materialContext
-					? resolveTileMaterial({
-							code: tileCode,
+					const tileCode = compiled.tileCodes.get(key);
+					const material = materialContext
+						? resolveTileMaterial({
+								code: tileCode,
+								coord,
+								compiled,
+								mapSeed: materialContext.mapSeed,
+								floorIndex: materialContext.floorIndex,
+							})
+						: undefined;
+
+					drawables.push(
+						this.tileDrawable(
 							coord,
-							compiled,
-							mapSeed: materialContext.mapSeed,
-							floorIndex: materialContext.floorIndex,
-						})
-					: undefined;
+							elevation,
+							state === "washed",
+							fillForTileCode(tileCode),
 
-				drawables.push(
-					this.tileDrawable(
-						coord,
-						elevation,
-						state === "washed",
-						fillForTileCode(tileCode),
+							this.tileNeedsTrueFootprint(compiled, coord, elevation, tileCode),
 
-						this.tileNeedsTrueFootprint(compiled, coord, elevation, tileCode),
-
-						material,
-					),
-				);
+							material,
+						),
+					);
+				}
 			}
 		}
 

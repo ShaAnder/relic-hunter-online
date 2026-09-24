@@ -59,6 +59,7 @@ import type { DialogueLine } from "@/tutorial/dialogue";
 import { preloadMapMaterials } from "@/rendering/engine/materials/mapMaterialFactory";
 import { preloadBarrierMaterials } from "@/rendering/engine/materials/barrierMaterialFactory";
 import { perf } from "@/perf/PerfMonitor";
+import { FloorRenderer } from "@/rendering/engine/floor/FloorRenderer";
 
 /**
  * Tactical map scene — grid, mercenary, AP turns, cards, chests, win condition.
@@ -74,16 +75,16 @@ export class MapScene implements Scene, TutorialPort {
 	private grid: RH.Grid;
 	private boardContainer = new Container();
 
-	/**
-	 * When viewing an upper floor, the immediately-lower floor is rendered
-	 * here as a muted visual underlay.
-	 *
-	 * Gameplay, hit-testing and entities still belong exclusively to the
-	 * active floor.
-	 */
 	private lowerFloorTilesContainer = new Container();
+	/**
+	 * Ground rendered by the new chunk-mesh backend. It is separate from the
+	 * legacy tile container so MapRenderer can clear its own children without
+	 * accidentally destroying engine-owned GPU meshes.
+	 */
+	private engineGroundContainer = new Container();
 	private tilesContainer = new Container();
 	private groundOverlayContainer = new Container();
+
 	private worldDepthContainer = new Container();
 	private foregroundOverlayContainer = new Container();
 
@@ -102,11 +103,26 @@ export class MapScene implements Scene, TutorialPort {
 	 */
 	private readonly engineCompiler = new EngineCompilerHarness();
 
-	private moveController: MoveController;
+	/**
+	 * Opt-in migration flag. Use `?engineGround=1` while Phase 2 is being proven.
+	 * Removing the query parameter keeps the known-good legacy ground renderer.
+	 */
+	private readonly useEngineGround =
+		typeof window !== "undefined" &&
+		new URLSearchParams(window.location.search).has("engineGround");
 
+	/**
+	 * Constructor-time floor setup can run before material preload finishes.
+	 * Do not mount engine meshes until their texture resources are resident.
+	 */
+	private renderMaterialsReady = false;
+	private readonly floorRenderer = new FloorRenderer(
+		this.engineGroundContainer,
+	);
+
+	private moveController: MoveController;
 	// Entities — one array, pilot type is the only thing distinguishing them
 	private units: PilotedMercenary[] = [];
-
 	private mapController!: MapController;
 
 	// True during the Exit card's two-flight teleport sequence — blocks
@@ -114,46 +130,35 @@ export class MapScene implements Scene, TutorialPort {
 	// mercenary.isAnimating plays for normal moves.
 	private exitCardInProgress = false;
 	private turnsTaken = 0;
-
 	// Targeting mode — active while choosing which enemy to attack
 	private targetingActive = false;
-
 	private targetingVisuals = new TargetingVisuals();
-
 	private movePointerDragging = false;
 	private suppressNextClick = false;
-
 	/** Owns wheel/drag arbitration between HUD panels and the camera — see docs/16, section 15. */
 	private gestureRouter = new GestureRouter();
 	private activeDragSurface: ScrollSurface | null = null;
 	private cameraDragActive = false;
 	private lastDragScreenPos: { x: number; y: number } | null = null;
-
 	private aiTurnController!: AiTurnController;
-
 	// UI
 	private hud!: MapHud;
-
 	// Item pickup popup — floats above the mercenary's head, placeholder
 	// icon until real item sprites exist
 	private itemPopup = new Container();
 	private itemPopupIcon = new Graphics();
 	private itemPopupText: Text;
 	private itemPopupTimer = 0;
-
 	// Cards
 	private hand: Hand;
 	private playZone: PlayZone;
-
 	private cardDrawQueue!: CardDrawQueue;
 	private drawLayer = new Container();
-
 	// Map config — dimensions and seed come from GameSession (set by
 	// LoadingScene) rather than being hardcoded, so mission map size
 	// selection actually does something.
 	private mapWidth: number;
 	private mapHeight: number;
-
 	private tutorialConfig: TutorialConfig | null;
 	/** Lazily constructed — only tutorials ever need dialogue. */
 	private dialogueOverlay: DialogueOverlay | null = null;
@@ -161,11 +166,8 @@ export class MapScene implements Scene, TutorialPort {
 	private pendingMoveUsedCard = false;
 	/** The one controlled, killable monster a combat tutorial spawns */
 	private tutorialMonster: MonsterEntity | null = null;
-
 	private tutorialMarkers = new TutorialMarkers();
-
 	private matchController: MatchController;
-
 	private fpsAccumulator = 0;
 
 	/** The one human-piloted unit. Assumes exactly one exists */
@@ -397,8 +399,9 @@ export class MapScene implements Scene, TutorialPort {
 		 *
 		 * Nothing from this result is drawn yet; Phase 2 begins consuming it.
 		 */
-		this.engineCompiler.compile(compiled, {
+		const compiledVisual = this.engineCompiler.compile(compiled, {
 			mapSeed: this.game.session.mapSeed ?? 0,
+
 			floorIndex: viewedFloor,
 		});
 
@@ -466,10 +469,42 @@ export class MapScene implements Scene, TutorialPort {
 					}
 				: null;
 
-		this.mapRenderer.build(compiled, focus, fog, false, 1, {
-			mapSeed: this.game.session.mapSeed ?? 0,
-			floorIndex: viewedFloor,
-		});
+		const engineGroundActive =
+			this.useEngineGround && this.renderMaterialsReady;
+
+		this.engineGroundContainer.visible = engineGroundActive;
+
+		if (engineGroundActive) {
+			this.floorRenderer.mount(compiledVisual);
+
+			this.floorRenderer.updatePresentation({
+				fog,
+				focusRoom: focus,
+				forceWashed: false,
+			});
+		}
+
+		this.mapRenderer.build(
+			compiled,
+			focus,
+			fog,
+			false,
+			1,
+			{
+				mapSeed: this.game.session.mapSeed ?? 0,
+
+				floorIndex: viewedFloor,
+			},
+			{
+				/**
+				 * During Phase 2 legacy rendering still owns terrain/barriers/connectors,
+				 * but it must stop creating duplicate tile-top Graphics when the engine
+				 * ground backend is active.
+				 */
+				renderGround: !engineGroundActive,
+			},
+		);
+
 		endPerf();
 	}
 
@@ -584,6 +619,7 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.boardContainer.addChild(
 			this.lowerFloorTilesContainer,
+			this.engineGroundContainer,
 			this.tilesContainer,
 			this.groundOverlayContainer,
 			this.worldDepthContainer,
@@ -821,6 +857,7 @@ export class MapScene implements Scene, TutorialPort {
 	/** Render the map, center the camera, and wire up input. */
 	async onEnter(): Promise<void> {
 		await Promise.all([preloadMapMaterials(), preloadBarrierMaterials()]);
+		this.renderMaterialsReady = true;
 
 		this.game.audio.playMusic("map");
 		this.rebuildMapRenderWithFog();
@@ -857,6 +894,7 @@ export class MapScene implements Scene, TutorialPort {
 
 	/** Tear down visuals and input listeners. */
 	onExit(): void {
+		this.floorRenderer.destroy();
 		this.moveController.exit();
 		this.hud.closeActionMenu();
 		this.boardContainer.removeChildren();
