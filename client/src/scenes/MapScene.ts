@@ -112,12 +112,23 @@ export class MapScene implements Scene, TutorialPort {
 		new URLSearchParams(window.location.search).has("engineGround");
 
 	/**
+	 * Phase 3 migration flag.
+	 *
+	 * `engineWorld` implies engine ground because testing the new static world
+	 * against the legacy tile-top path would create a misleading mixed backend.
+	 */
+	private readonly useEngineWorld =
+		typeof window !== "undefined" &&
+		new URLSearchParams(window.location.search).has("engineWorld");
+
+	/**
 	 * Constructor-time floor setup can run before material preload finishes.
 	 * Do not mount engine meshes until their texture resources are resident.
 	 */
 	private renderMaterialsReady = false;
 	private readonly floorRenderer = new FloorRenderer(
 		this.engineGroundContainer,
+		this.worldDepthContainer,
 	);
 
 	private moveController: MoveController;
@@ -469,8 +480,10 @@ export class MapScene implements Scene, TutorialPort {
 					}
 				: null;
 
+		const engineWorldActive = this.renderMaterialsReady && this.useEngineWorld;
+
 		const engineGroundActive =
-			this.useEngineGround && this.renderMaterialsReady;
+			this.renderMaterialsReady && (this.useEngineGround || engineWorldActive);
 
 		this.engineGroundContainer.visible = engineGroundActive;
 
@@ -484,26 +497,25 @@ export class MapScene implements Scene, TutorialPort {
 			});
 		}
 
-		this.mapRenderer.build(
-			compiled,
-			focus,
-			fog,
-			false,
-			1,
-			{
-				mapSeed: this.game.session.mapSeed ?? 0,
+		if (!engineWorldActive) {
+			this.mapRenderer.build(
+				compiled,
+				focus,
+				fog,
+				false,
+				1,
+				{
+					mapSeed: this.game.session.mapSeed ?? 0,
 
-				floorIndex: viewedFloor,
-			},
-			{
-				/**
-				 * During Phase 2 legacy rendering still owns terrain/barriers/connectors,
-				 * but it must stop creating duplicate tile-top Graphics when the engine
-				 * ground backend is active.
-				 */
-				renderGround: !engineGroundActive,
-			},
-		);
+					floorIndex: viewedFloor,
+				},
+				{
+					renderGround: !engineGroundActive,
+
+					renderWorld: true,
+				},
+			);
+		}
 
 		endPerf();
 	}

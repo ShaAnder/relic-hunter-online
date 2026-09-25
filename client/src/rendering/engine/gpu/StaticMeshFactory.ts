@@ -116,7 +116,7 @@ export function createStaticGroundMesh(
 
 	// Add RHOSs per-vertex presentation state as a custom GPU attribute.
 	// The shader reads this as aPresentation to decide Hidden / Washed / Normal.
-	geometry.addAttribute("aPrsentation", {
+	geometry.addAttribute("aPresentation", {
 		buffer: data.presentation,
 		format: "float32",
 	});

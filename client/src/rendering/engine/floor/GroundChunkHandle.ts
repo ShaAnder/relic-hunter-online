@@ -75,11 +75,10 @@ export class GroundChunkHandle {
 					batch.data.presentation[vertexIndex] = next;
 					changed = true;
 				}
-
-				// Synchronize the dynamic presentation buffer only when this batch actually changed.
-				if (changed) {
-					updateGpuBuffer(batch.presentationBuffer);
-				}
+			}
+			// Synchronize the dynamic presentation buffer only when this batch actually changed.
+			if (changed) {
+				updateGpuBuffer(batch.presentationBuffer);
 			}
 		}
 	}

@@ -25,13 +25,10 @@ import { perf } from "@/perf/PerfMonitor";
 
 /** How much larger than its true footprint each ordinary tile is drawn. */
 const TILE_OVERSIZE = 1.09;
-
 /** One normal full-height barrier storey in projected pixels. */
 const WALL_HEIGHT_PX = TILE_HEIGHT;
-
 /** How short a room's own boundary barriers become while the player is inside it. */
 const FOCUSED_WALL_HEIGHT_FRACTION = 0.2;
-
 /** Shared wash used by room focus and explored fog. */
 const WASH_COLOR = 0x14141e;
 const WASH_ALPHA = 0.72;
@@ -56,6 +53,7 @@ interface MapMaterialRenderContext {
 
 interface MapRendererBuildOptions {
 	renderGround?: boolean;
+	renderWorld?: boolean;
 }
 
 /**
@@ -199,6 +197,7 @@ export class MapRenderer {
 		this.clearForRebuild();
 
 		const drawables: Drawable[] = [];
+		const renderWorld = options.renderWorld ?? true;
 		const focusCellKeys = focusRoom
 			? new Set(focusRoom.cells.map((c) => `${c.x},${c.y}`))
 			: null;
@@ -303,260 +302,262 @@ export class MapRenderer {
 		// Vertical terrain faces between two horizontally/vertically
 		// adjacent tiles with different elevation - the actual
 		// curb/cliff skeleton for a raised or sunken tile.
-		const pushTerrainFace = (
-			a: RH.GridCoord,
-			b: RH.GridCoord,
-			dir: "E" | "S",
-		): void => {
-			const aElevation = this.elevationAt(compiled, a);
-			const bElevation = this.elevationAt(compiled, b);
+		if (renderWorld) {
+			const pushTerrainFace = (
+				a: RH.GridCoord,
+				b: RH.GridCoord,
+				dir: "E" | "S",
+			): void => {
+				const aElevation = this.elevationAt(compiled, a);
+				const bElevation = this.elevationAt(compiled, b);
 
-			if (
-				aElevation === undefined ||
-				bElevation === undefined ||
-				!Number.isFinite(aElevation) ||
-				!Number.isFinite(bElevation) ||
-				Math.abs(aElevation - bElevation) < 0.000001
-			) {
-				return;
+				if (
+					aElevation === undefined ||
+					bElevation === undefined ||
+					!Number.isFinite(aElevation) ||
+					!Number.isFinite(bElevation) ||
+					Math.abs(aElevation - bElevation) < 0.000001
+				) {
+					return;
+				}
+
+				if (aElevation <= bElevation + 0.000001) {
+					return;
+				}
+
+				const aOutsideFocus =
+					focusCellKeys !== null && !focusCellKeys.has(RH.coordKey(a));
+				const bOutsideFocus =
+					focusCellKeys !== null && !focusCellKeys.has(RH.coordKey(b));
+				const aState = visualStateAt(a, aOutsideFocus);
+				const bState = visualStateAt(b, bOutsideFocus);
+
+				if (aState === "hidden" && bState === "hidden") {
+					return;
+				}
+
+				drawables.push(
+					this.terrainFaceDrawable(
+						a,
+						b,
+						dir,
+						aElevation,
+						bElevation,
+						aState !== "normal" && bState !== "normal",
+					),
+				);
+			};
+
+			for (let y = 0; y < compiled.grid.height; y++) {
+				for (let x = 0; x < compiled.grid.width - 1; x++) {
+					pushTerrainFace(
+						{
+							x,
+							y,
+						},
+						{
+							x: x + 1,
+							y,
+						},
+						"E",
+					);
+				}
 			}
 
-			if (aElevation <= bElevation + 0.000001) {
-				return;
+			for (let y = 0; y < compiled.grid.height - 1; y++) {
+				for (let x = 0; x < compiled.grid.width; x++) {
+					pushTerrainFace(
+						{
+							x,
+							y,
+						},
+						{
+							x,
+							y: y + 1,
+						},
+						"S",
+					);
+				}
 			}
 
-			const aOutsideFocus =
-				focusCellKeys !== null && !focusCellKeys.has(RH.coordKey(a));
-			const bOutsideFocus =
-				focusCellKeys !== null && !focusCellKeys.has(RH.coordKey(b));
-			const aState = visualStateAt(a, aOutsideFocus);
-			const bState = visualStateAt(b, bOutsideFocus);
+			// ------------------------------------------------------------
+			// BARRIER CONNECTOR COLLECTION
+			// ------------------------------------------------------------
 
-			if (aState === "hidden" && bState === "hidden") {
-				return;
-			}
+			// Corners are keyed by real topology (vertex), not rounded screen
+			// position - every wall touching the same logical vertex agrees
+			// exactly, since they all resolve through the same topology
+			// function.
+			const STATE_RANK: Record<VisualState, number> = {
+				hidden: 0,
+				washed: 1,
+				normal: 2,
+			};
 
-			drawables.push(
-				this.terrainFaceDrawable(
-					a,
-					b,
-					dir,
-					aElevation,
-					bElevation,
-					aState !== "normal" && bState !== "normal",
-				),
-			);
-		};
+			const connectorTouches = new Map<
+				string,
+				{
+					base: ScreenPoint;
+					foundationBottomY: number;
+					height: number;
+					state: VisualState;
+					barrier: RH.EdgeBarrier;
 
-		for (let y = 0; y < compiled.grid.height; y++) {
-			for (let x = 0; x < compiled.grid.width - 1; x++) {
-				pushTerrainFace(
-					{
+					/**
+					 * Foreground tile tops that may visually cover this shared
+					 * Fence/Glass connector.
+					 */
+					occluderPolygons: number[][];
+				}
+			>();
+
+			const registerConnector = (
+				vertex: RH.GridVertex,
+				base: ScreenPoint,
+				height: number,
+				foundationBottomY: number,
+				state: VisualState,
+				barrier: RH.EdgeBarrier,
+				occluderPolygon?: number[],
+			): void => {
+				const key = `${vertex.x},${vertex.y}`;
+				const existing = connectorTouches.get(key);
+				const nextHeight = Math.max(existing?.height ?? 0, height);
+				const nextFoundationBottomY = Math.max(
+					existing?.foundationBottomY ?? base.y,
+					foundationBottomY,
+				);
+				const nextState: VisualState =
+					!existing || STATE_RANK[state] > STATE_RANK[existing.state]
+						? state
+						: existing.state;
+				const nextOccluderPolygons = existing
+					? [...existing.occluderPolygons]
+					: [];
+				if (occluderPolygon) {
+					nextOccluderPolygons.push(occluderPolygon);
+				}
+
+				connectorTouches.set(key, {
+					// Every connected wall resolves this vertex through
+					// the same topology function, so these bases should
+					// agree exactly.
+					base: existing?.base ?? base,
+					foundationBottomY: nextFoundationBottomY,
+					height: nextHeight,
+					state: nextState,
+					occluderPolygons: nextOccluderPolygons,
+					barrier:
+						!existing ||
+						connectorPriorityFor(barrier) >
+							connectorPriorityFor(existing.barrier)
+							? barrier
+							: existing.barrier,
+				});
+			};
+
+			// ------------------------------------------------------------
+			// EAST/WEST BARRIER SEGMENTS
+			// ------------------------------------------------------------
+
+			for (let y = 0; y < compiled.grid.height; y++) {
+				for (let x = 0; x < compiled.grid.width - 1; x++) {
+					const a: RH.GridCoord = {
 						x,
 						y,
-					},
-					{
+					};
+
+					const b: RH.GridCoord = {
 						x: x + 1,
 						y,
-					},
-					"E",
-				);
-			}
-		}
+					};
 
-		for (let y = 0; y < compiled.grid.height - 1; y++) {
-			for (let x = 0; x < compiled.grid.width; x++) {
-				pushTerrainFace(
-					{
+					const barrier = RH.getEdgeBetween(compiled.edges, a, b);
+
+					if (barrier === RH.EdgeBarrier.None) {
+						continue;
+					}
+
+					drawables.push(
+						this.barrierSegmentDrawable(
+							a,
+							b,
+							barrier,
+							compiled,
+							focusBoundaryKeys,
+							visualStateAt,
+							wallHeightScale,
+							registerConnector,
+						),
+					);
+				}
+			}
+
+			// ------------------------------------------------------------
+			// NORTH/SOUTH BARRIER SEGMENTS
+			// ------------------------------------------------------------
+
+			for (let y = 0; y < compiled.grid.height - 1; y++) {
+				for (let x = 0; x < compiled.grid.width; x++) {
+					const a: RH.GridCoord = {
 						x,
 						y,
-					},
-					{
+					};
+
+					const b: RH.GridCoord = {
 						x,
 						y: y + 1,
-					},
-					"S",
-				);
+					};
+
+					const barrier = RH.getEdgeBetween(compiled.edges, a, b);
+
+					if (barrier === RH.EdgeBarrier.None) {
+						continue;
+					}
+
+					drawables.push(
+						this.barrierSegmentDrawable(
+							a,
+							b,
+							barrier,
+							compiled,
+							focusBoundaryKeys,
+							visualStateAt,
+							wallHeightScale,
+							registerConnector,
+						),
+					);
+				}
 			}
-		}
 
-		// ------------------------------------------------------------
-		// BARRIER CONNECTOR COLLECTION
-		// ------------------------------------------------------------
+			// ------------------------------------------------------------
+			// BARRIER CONNECTORS / POSTS
+			// ------------------------------------------------------------
 
-		// Corners are keyed by real topology (vertex), not rounded screen
-		// position - every wall touching the same logical vertex agrees
-		// exactly, since they all resolve through the same topology
-		// function.
-		const STATE_RANK: Record<VisualState, number> = {
-			hidden: 0,
-			washed: 1,
-			normal: 2,
-		};
-
-		const connectorTouches = new Map<
-			string,
-			{
-				base: ScreenPoint;
-				foundationBottomY: number;
-				height: number;
-				state: VisualState;
-				barrier: RH.EdgeBarrier;
-
-				/**
-				 * Foreground tile tops that may visually cover this shared
-				 * Fence/Glass connector.
-				 */
-				occluderPolygons: number[][];
-			}
-		>();
-
-		const registerConnector = (
-			vertex: RH.GridVertex,
-			base: ScreenPoint,
-			height: number,
-			foundationBottomY: number,
-			state: VisualState,
-			barrier: RH.EdgeBarrier,
-			occluderPolygon?: number[],
-		): void => {
-			const key = `${vertex.x},${vertex.y}`;
-			const existing = connectorTouches.get(key);
-			const nextHeight = Math.max(existing?.height ?? 0, height);
-			const nextFoundationBottomY = Math.max(
-				existing?.foundationBottomY ?? base.y,
+			for (const {
+				base,
 				foundationBottomY,
-			);
-			const nextState: VisualState =
-				!existing || STATE_RANK[state] > STATE_RANK[existing.state]
-					? state
-					: existing.state;
-			const nextOccluderPolygons = existing
-				? [...existing.occluderPolygons]
-				: [];
-			if (occluderPolygon) {
-				nextOccluderPolygons.push(occluderPolygon);
-			}
-
-			connectorTouches.set(key, {
-				// Every connected wall resolves this vertex through
-				// the same topology function, so these bases should
-				// agree exactly.
-				base: existing?.base ?? base,
-				foundationBottomY: nextFoundationBottomY,
-				height: nextHeight,
-				state: nextState,
-				occluderPolygons: nextOccluderPolygons,
-				barrier:
-					!existing ||
-					connectorPriorityFor(barrier) > connectorPriorityFor(existing.barrier)
-						? barrier
-						: existing.barrier,
-			});
-		};
-
-		// ------------------------------------------------------------
-		// EAST/WEST BARRIER SEGMENTS
-		// ------------------------------------------------------------
-
-		for (let y = 0; y < compiled.grid.height; y++) {
-			for (let x = 0; x < compiled.grid.width - 1; x++) {
-				const a: RH.GridCoord = {
-					x,
-					y,
-				};
-
-				const b: RH.GridCoord = {
-					x: x + 1,
-					y,
-				};
-
-				const barrier = RH.getEdgeBetween(compiled.edges, a, b);
-
-				if (barrier === RH.EdgeBarrier.None) {
+				height,
+				state,
+				barrier,
+				occluderPolygons,
+			} of connectorTouches.values()) {
+				if (state === "hidden") {
 					continue;
 				}
 
 				drawables.push(
-					this.barrierSegmentDrawable(
-						a,
-						b,
+					this.barrierConnectorDrawable(
+						base,
+						height,
+						foundationBottomY,
+						state === "washed",
 						barrier,
-						compiled,
-						focusBoundaryKeys,
-						visualStateAt,
-						wallHeightScale,
-						registerConnector,
+						occluderPolygons,
 					),
 				);
 			}
 		}
-
-		// ------------------------------------------------------------
-		// NORTH/SOUTH BARRIER SEGMENTS
-		// ------------------------------------------------------------
-
-		for (let y = 0; y < compiled.grid.height - 1; y++) {
-			for (let x = 0; x < compiled.grid.width; x++) {
-				const a: RH.GridCoord = {
-					x,
-					y,
-				};
-
-				const b: RH.GridCoord = {
-					x,
-					y: y + 1,
-				};
-
-				const barrier = RH.getEdgeBetween(compiled.edges, a, b);
-
-				if (barrier === RH.EdgeBarrier.None) {
-					continue;
-				}
-
-				drawables.push(
-					this.barrierSegmentDrawable(
-						a,
-						b,
-						barrier,
-						compiled,
-						focusBoundaryKeys,
-						visualStateAt,
-						wallHeightScale,
-						registerConnector,
-					),
-				);
-			}
-		}
-
-		// ------------------------------------------------------------
-		// BARRIER CONNECTORS / POSTS
-		// ------------------------------------------------------------
-
-		for (const {
-			base,
-			foundationBottomY,
-			height,
-			state,
-			barrier,
-			occluderPolygons,
-		} of connectorTouches.values()) {
-			if (state === "hidden") {
-				continue;
-			}
-
-			drawables.push(
-				this.barrierConnectorDrawable(
-					base,
-					height,
-					foundationBottomY,
-					state === "washed",
-					barrier,
-					occluderPolygons,
-				),
-			);
-		}
-
 		// ------------------------------------------------------------
 		// FINAL DEPTH SORT + DRAW
 		// ------------------------------------------------------------

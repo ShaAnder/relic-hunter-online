@@ -6,12 +6,21 @@ import {
 	materialBatchKey,
 	type MaterialBatchKey,
 } from "../batching/MaterialBatchKey";
+import { resolveBarrierMaterial } from "../materials/barrierMaterialFactory";
 
 export interface ResolvedGroundGpuMaterial {
 	batchKey: MaterialBatchKey;
 	texture: PixiTexture;
 	usesTexture: boolean;
 	fallbackColor: number;
+}
+
+export interface ResolvedStaticWorldGpuMaterial {
+	batchKey: MaterialBatchKey;
+	texture: PixiTexture;
+	usesTexture: boolean;
+	fallbackColor: number;
+	alpha: number;
 }
 
 /**
@@ -25,6 +34,10 @@ export class GpuMaterialLibrary {
 	private readonly groundCache = new Map<
 		MaterialBatchKey,
 		ResolvedGroundGpuMaterial
+	>();
+	private readonly worldCache = new Map<
+		MaterialBatchKey,
+		ResolvedStaticWorldGpuMaterial
 	>();
 
 	resolveGround(material: VisualMaterialRef): ResolvedGroundGpuMaterial {
@@ -55,6 +68,78 @@ export class GpuMaterialLibrary {
 		};
 
 		this.groundCache.set(batchKey, resolved);
+
+		return resolved;
+	}
+
+	resolveWorld(material: VisualMaterialRef): ResolvedStaticWorldGpuMaterial {
+		if (material.kind === "tile") {
+			throw new Error(
+				"GpuMaterialLibrary.resolveWorld: tile material belongs to the ground renderer",
+			);
+		}
+
+		if (material.kind === "terrain") {
+			const batchKey = materialBatchKey(
+				`terrain:fallback:${material.fallbackColor}`,
+			);
+
+			const cached = this.worldCache.get(batchKey);
+
+			if (cached) {
+				return cached;
+			}
+
+			const resolved: ResolvedStaticWorldGpuMaterial = {
+				batchKey,
+				texture: Texture.WHITE,
+				usesTexture: false,
+				fallbackColor: material.fallbackColor,
+				alpha: 1,
+			};
+
+			this.worldCache.set(batchKey, resolved);
+			return resolved;
+		}
+
+		const family = resolveBarrierMaterial(material.barrier);
+		const texture =
+			material.surface === "segment-face"
+				? family.segmentFaceTexture
+				: material.surface === "segment-top"
+					? family.segmentTopTexture
+					: material.surface === "connector-face"
+						? (family.connectorFaceTexture ?? family.segmentFaceTexture)
+						: (family.connectorTopTexture ??
+							family.segmentTopTexture ??
+							family.connectorFaceTexture);
+
+		const usesTexture = texture !== undefined;
+		const batchKey = materialBatchKey(
+			[
+				"barrier",
+				material.barrier,
+				material.surface,
+				usesTexture ? "texture" : `fallback:${material.fallbackColor}`,
+				`alpha:${material.alpha}`,
+			].join(":"),
+		);
+
+		const cached = this.worldCache.get(batchKey);
+
+		if (cached) {
+			return cached;
+		}
+
+		const resolved: ResolvedStaticWorldGpuMaterial = {
+			batchKey,
+			texture: texture ?? Texture.WHITE,
+			usesTexture,
+			fallbackColor: material.fallbackColor,
+			alpha: material.alpha,
+		};
+
+		this.worldCache.set(batchKey, resolved);
 
 		return resolved;
 	}
