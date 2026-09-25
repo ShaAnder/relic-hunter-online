@@ -59,7 +59,14 @@ export interface CompiledTileSurface {
 	quad: VisualQuad;
 	uvs: VisualUvs;
 	material: VisualMaterialRef;
-
+	/**
+	 * Ground painter-order depth.
+	 *
+	 * Ground lives in its own renderer root, but overlapping projected tile tops
+	 * still need the same front-to-back order the legacy renderer used.
+	 */
+	depth: number;
+	depthKey: VisualDepthKey;
 	/**
 	 * Precomputed N/E/S/W relationships for this tile.
 	 *

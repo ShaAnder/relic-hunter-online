@@ -27,9 +27,7 @@ export class GroundChunkHandle {
 	 */
 	addBatch(batch: StaticGroundMeshHandle): void {
 		this.batches.push(batch);
-		this.view.addChild(batch.mesh);
 	}
-
 	/**
 	 * Recalculate Hidden / Washed / Normal presentation for this chunk.
 	 *

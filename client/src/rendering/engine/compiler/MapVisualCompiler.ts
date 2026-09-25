@@ -226,11 +226,23 @@ export class MapVisualCompiler {
 				const chunkId = renderChunkIdForTile(coord, chunkSize);
 				const id = `tile:${x},${y}` as VisualSurfaceId;
 				const fallbackColor = fillForTileCode(tileCode) ?? FLOOR_COLOR;
+				const quad = this.tileQuad(coord, elevation, trueFootprint);
+
+				/**
+				 * Match legacy ground painter order exactly.
+				 *
+				 * The -100_000 offset is not important relative to world geometry because
+				 * ground has its own root, but preserving it keeps the compiled semantic depth
+				 * identical to MapRenderer while migration is still in progress.
+				 */
+				const groundDepth =
+					this.trueTileCorners(coord, elevation * TILE_HEIGHT).bottom.y -
+					100_000;
 				const surface: CompiledTileSurface = {
 					id,
 					coord,
 					chunkId,
-					quad: this.tileQuad(coord, elevation, trueFootprint),
+					quad,
 					uvs: TILE_UVS,
 					material: {
 						kind: "tile",
@@ -243,6 +255,9 @@ export class MapVisualCompiler {
 						),
 						fallbackColor,
 					},
+					depth: groundDepth,
+
+					depthKey: worldDepthKey(groundDepth),
 					/**
 					 * Topology is structural data, so calculate it once while the floor is
 					 * compiled instead of repeatedly asking the same neighbour questions later.
