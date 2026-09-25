@@ -714,16 +714,12 @@ export class MapVisualCompiler {
 	}
 
 	/**
-	 * Preserve current MapRenderer behaviour.
+	 * Ordinary coplanar tiles may slightly overlap to hide raster seams.
 	 *
-	 * Ordinary coplanar tiles are oversized to hide seams.
-	 *
-	 * A tile touching:
-	 *
-	 * - a lower finite neighbour, or
-	 * - a different tile material
-	 *
-	 * uses its true authored footprint instead.
+	 * That overlap is only safe when the complete 3x3 neighbourhood is the same
+	 * finite elevation and material. At any authored boundary we use the exact
+	 * diamond footprint so the tile cannot bleed through terrain, void space or a
+	 * diagonally touching material/elevation region.
 	 */
 	private tileNeedsTrueFootprint(
 		compiled: RH.CompiledEdgeMap,
@@ -731,46 +727,43 @@ export class MapVisualCompiler {
 		elevation: number,
 		code: RH.EdgeMapTileCode | undefined,
 	): boolean {
-		const neighbours: RH.GridCoord[] = [
-			{
-				x: coord.x + 1,
-				y: coord.y,
-			},
-			{
-				x: coord.x - 1,
-				y: coord.y,
-			},
-			{
-				x: coord.x,
-				y: coord.y + 1,
-			},
-			{
-				x: coord.x,
-				y: coord.y - 1,
-			},
-		];
-
-		for (const neighbour of neighbours) {
-			if (
-				neighbour.x < 0 ||
-				neighbour.y < 0 ||
-				neighbour.x >= compiled.grid.width ||
-				neighbour.y >= compiled.grid.height
-			) {
-				continue;
-			}
-			const key = RH.coordKey(neighbour);
-			const otherElevation = compiled.elevation.get(key);
-			const otherCode = compiled.tileCodes.get(key);
-			if (
-				otherElevation !== undefined &&
-				Number.isFinite(otherElevation) &&
-				elevation - otherElevation > EPSILON
-			) {
-				return true;
-			}
-			if (otherCode !== code) {
-				return true;
+		for (let dy = -1; dy <= 1; dy++) {
+			for (let dx = -1; dx <= 1; dx++) {
+				if (dx === 0 && dy === 0) {
+					continue;
+				}
+				const neighbour: RH.GridCoord = {
+					x: coord.x + dx,
+					y: coord.y + dy,
+				};
+				/**
+				 * Never oversize through the authored map boundary.
+				 */
+				if (
+					neighbour.x < 0 ||
+					neighbour.y < 0 ||
+					neighbour.x >= compiled.grid.width ||
+					neighbour.y >= compiled.grid.height
+				) {
+					return true;
+				}
+				const key = RH.coordKey(neighbour);
+				const otherElevation = compiled.elevation.get(key);
+				/**
+				 * The edge-map compiler represents Void tiles with Infinity.
+				 * A renderable tile beside Void must stop exactly at its authored
+				 * footprint.
+				 */
+				if (otherElevation === undefined || !Number.isFinite(otherElevation)) {
+					return true;
+				}
+				if (Math.abs(elevation - otherElevation) > EPSILON) {
+					return true;
+				}
+				const otherCode = compiled.tileCodes.get(key);
+				if (otherCode !== code) {
+					return true;
+				}
 			}
 		}
 		return false;
