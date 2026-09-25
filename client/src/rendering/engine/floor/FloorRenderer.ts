@@ -16,6 +16,10 @@ export interface FloorPresentationInput {
 	forceWashed?: boolean;
 }
 
+export interface FloorMountOptions {
+	renderWorld: boolean;
+}
+
 /**
  * Runtime coordinator for one compiled floor.
  *
@@ -30,24 +34,37 @@ export class FloorRenderer {
 	private fog: FogPresentationBuffer | null = null;
 	private lastFocusRoomId: number | null = null;
 	private lastForceWashed = false;
+	private worldMounted = false;
 
 	constructor(groundRoot: Container, worldDepthRoot: Container) {
 		this.ground = new GroundChunkRenderer(groundRoot);
 		this.world = new StaticWorldRenderer(worldDepthRoot);
 	}
 
-	mount(compiled: CompiledFloorVisual): void {
-		/**
-		 * CompiledFloorVisual is treated as an immutable floor snapshot.
-		 * Reference identity therefore means these GPU resources are already
-		 * mounted for this exact compiled structure.
-		 */
-		if (this.compiled === compiled) {
+	mount(compiled: CompiledFloorVisual, options: FloorMountOptions): void {
+		const compiledChanged = this.compiled !== compiled;
+
+		if (!compiledChanged) {
+			if (options.renderWorld && !this.worldMounted) {
+				this.world.mount(compiled);
+				this.worldMounted = true;
+			} else if (!options.renderWorld && this.worldMounted) {
+				this.world.destroy();
+				this.worldMounted = false;
+			}
+
 			return;
 		}
-
 		this.ground.mount(compiled);
-		this.world.mount(compiled);
+
+		if (options.renderWorld) {
+			this.world.mount(compiled);
+			this.worldMounted = true;
+		} else {
+			this.world.destroy();
+			this.worldMounted = false;
+		}
+
 		this.compiled = compiled;
 		this.fog = new FogPresentationBuffer(compiled.width, compiled.height);
 		this.lastFocusRoomId = null;
@@ -96,12 +113,14 @@ export class FloorRenderer {
 		 * StaticWorldRenderer owns world-surface presentation and focus buffer
 		 * patches. FloorRenderer only supplies the already-resolved state.
 		 */
-		this.world.updatePresentation({
-			fog: this.fog,
-			mapWidth: this.compiled.width,
-			focusRoom: input.focusRoom,
-			forceWashed,
-		});
+		if (this.worldMounted) {
+			this.world.updatePresentation({
+				fog: this.fog,
+				mapWidth: this.compiled.width,
+				focusRoom: input.focusRoom,
+				forceWashed,
+			});
+		}
 		this.lastFocusRoomId = nextFocusRoomId;
 		this.lastForceWashed = forceWashed;
 		perf.setCounter("engine.fogDirtyChunks", dirty.size);
@@ -115,5 +134,6 @@ export class FloorRenderer {
 		this.fog = null;
 		this.lastFocusRoomId = null;
 		this.lastForceWashed = false;
+		this.worldMounted = false;
 	}
 }

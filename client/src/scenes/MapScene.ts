@@ -387,7 +387,6 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	private rebuildMapRenderWithFog(liveCoordOverride?: RH.GridCoord): void {
-		perf.incrementCounter("scene.legacyPresentationRebuilds");
 		const endPerf = perf.start("scene.rebuildMapRenderWithFog");
 		const viewedFloor = this.game.session.viewedFloor;
 
@@ -487,8 +486,26 @@ export class MapScene implements Scene, TutorialPort {
 
 		this.engineGroundContainer.visible = engineGroundActive;
 
+		/**
+		 * Legacy tile Graphics and Reactor ground meshes are alternative owners of
+		 * the active floor's ground. Never leave stale legacy tiles visible behind
+		 * the engine path.
+		 */
+		this.tilesContainer.visible = !engineGroundActive;
+
+		/**
+		 * MapRenderer can already have built the floor before material preload
+		 * finishes. Once Reactor owns the static world, explicitly remove those
+		 * legacy-owned world views instead of merely skipping future builds.
+		 */
+		if (engineWorldActive) {
+			this.mapRenderer.clear();
+		}
+
 		if (engineGroundActive) {
-			this.floorRenderer.mount(compiledVisual);
+			this.floorRenderer.mount(compiledVisual, {
+				renderWorld: engineWorldActive,
+			});
 
 			this.floorRenderer.updatePresentation({
 				fog,
@@ -498,6 +515,8 @@ export class MapScene implements Scene, TutorialPort {
 		}
 
 		if (!engineWorldActive) {
+			perf.incrementCounter("scene.legacyPresentationRebuilds");
+
 			this.mapRenderer.build(
 				compiled,
 				focus,

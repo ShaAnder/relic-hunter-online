@@ -168,6 +168,26 @@ export class MapRenderer {
 	}
 
 	/**
+	 * Remove only visual resources owned by the legacy map renderer.
+	 *
+	 * The active world-depth container is shared with actors and the Reactor
+	 * renderer, so this deliberately removes only MapRenderer-owned world views.
+	 *
+	 * Phase 3 uses this when switching rendering ownership from legacy MapRenderer
+	 * to Reactor without performing another legacy rebuild.
+	 */
+	clear(): void {
+		this.clearForRebuild();
+
+		perf.setCounter(
+			"renderer.groundChildren",
+			this.groundContainer.children.length,
+		);
+
+		perf.setCounter("renderer.legacyWorldViews", this.ownedWorldViews.length);
+	}
+
+	/**
 	 * @param focusRoom When set, this room's own boundary walls draw
 	 * visually shorter
 	 * @param fog When set, applies real fog-of-war on top of
@@ -591,6 +611,8 @@ export class MapRenderer {
 			"renderer.worldChildren",
 			this.worldDepthContainer.children.length,
 		);
+
+		perf.setCounter("renderer.legacyWorldViews", this.ownedWorldViews.length);
 
 		endPerf();
 	}
