@@ -94,6 +94,19 @@ export class MapScene implements Scene, TutorialPort {
 	private mapRenderer!: MapRenderer;
 
 	/**
+	 * The decorative lower-floor underlay is structural presentation.
+	 *
+	 * Fog, room focus and ordinary movement do not affect it, so remember the
+	 * exact source that produced the current underlay instead of rebuilding it
+	 * during every visibility refresh.
+	 */
+	private lowerFloorUnderlaySource: RH.CompiledEdgeMap | null = null;
+
+	private lowerFloorUnderlayIndex: number | null = null;
+
+	private lowerFloorUnderlayMapSeed: number | null = null;
+
+	/**
 
 	 * MapScene may refresh presentation frequently for fog, room focus or camera
 	 * changes, but those usually do not change the map's structural geometry.
@@ -336,40 +349,44 @@ export class MapScene implements Scene, TutorialPort {
 
 	private rebuildLowerFloorUnderlay(viewedFloor: number): void {
 		const floors = this.game.session.mapFloors;
-
 		const groundFloorIndex =
 			this.game.session.mapGroundFloorIndex ??
 			this.game.session.mapBundle?.groundFloorIndex ??
 			0;
-
 		/**
-		 * Only show an underlay when we're ABOVE ground.
+		 * Ground/basement views do not use a decorative lower-floor underlay.
 		 *
-		 * Ground floor does not suddenly display a basement underneath it.
-		 * Floor 2 shows Floor 1.
-		 * Floor 3 shows Floor 2.
+		 * Only clear when something is actually mounted. Visibility refreshes on
+		 * the same floor should otherwise be essentially free here.
 		 */
 		if (!floors || viewedFloor <= groundFloorIndex) {
-			this.lowerFloorTilesContainer.removeChildren();
-			this.lowerFloorTilesContainer.alpha = 1;
-			this.lowerFloorTilesContainer.y = 0;
+			this.clearLowerFloorUnderlay();
 			return;
 		}
 
 		const lowerFloorIndex = viewedFloor - 1;
 		const lowerFloor = floors[lowerFloorIndex];
-
 		if (!lowerFloor) {
-			this.lowerFloorTilesContainer.removeChildren();
+			this.clearLowerFloorUnderlay();
 			return;
 		}
-
+		const mapSeed = this.game.session.mapSeed ?? 0;
 		/**
-		 * This layer is presentation only.
+		 * The underlay ignores active fog and room focus, so these three structural
+		 * inputs are sufficient to tell whether the existing visual can be reused.
 		 *
-		 * Do NOT apply the active hunter's room focus or fog to it:
-		 * we're not pretending the player is physically looking through
-		 * the lower floor. It's simply muted structural context.
+		 * Most calls to rebuildMapRenderWithFog() should hit this path.
+		 */
+		const cacheMatches =
+			this.lowerFloorUnderlaySource === lowerFloor &&
+			this.lowerFloorUnderlayIndex === lowerFloorIndex &&
+			this.lowerFloorUnderlayMapSeed === mapSeed;
+		if (cacheMatches) {
+			return;
+		}
+		/**
+		 * MapRenderer.build() owns replacement/destruction of the previous underlay
+		 * contents, so only call it when the structural source genuinely changed.
 		 */
 		this.lowerFloorMapRenderer.build(
 			lowerFloor,
@@ -378,12 +395,39 @@ export class MapScene implements Scene, TutorialPort {
 			true,
 			MapScene.LOWER_FLOOR_WALL_HEIGHT_SCALE,
 			{
-				mapSeed: this.game.session.mapSeed ?? 0,
+				mapSeed,
 				floorIndex: lowerFloorIndex,
 			},
 		);
 		this.lowerFloorTilesContainer.alpha = MapScene.LOWER_FLOOR_ALPHA;
 		this.lowerFloorTilesContainer.y = MapScene.LOWER_FLOOR_Y_OFFSET;
+		this.lowerFloorUnderlaySource = lowerFloor;
+		this.lowerFloorUnderlayIndex = lowerFloorIndex;
+		this.lowerFloorUnderlayMapSeed = mapSeed;
+		perf.incrementCounter("scene.lowerFloorUnderlayBuilds");
+	}
+
+	/**
+	 * Remove a mounted decorative lower floor and invalidate its cache identity.
+	 */
+	private clearLowerFloorUnderlay(): void {
+		const hasCachedUnderlay =
+			this.lowerFloorUnderlaySource !== null ||
+			this.lowerFloorUnderlayIndex !== null ||
+			this.lowerFloorTilesContainer.children.length > 0;
+		if (hasCachedUnderlay) {
+			/**
+			 * Use MapRenderer.clear() rather than removeChildren() directly:
+			 * MapRenderer owns the Graphics/resources it created and therefore
+			 * needs to perform their destruction as well as detaching them.
+			 */
+			this.lowerFloorMapRenderer.clear();
+		}
+		this.lowerFloorUnderlaySource = null;
+		this.lowerFloorUnderlayIndex = null;
+		this.lowerFloorUnderlayMapSeed = null;
+		this.lowerFloorTilesContainer.alpha = 1;
+		this.lowerFloorTilesContainer.y = 0;
 	}
 
 	private rebuildMapRenderWithFog(liveCoordOverride?: RH.GridCoord): void {
@@ -926,6 +970,7 @@ export class MapScene implements Scene, TutorialPort {
 	/** Tear down visuals and input listeners. */
 	onExit(): void {
 		this.floorRenderer.destroy();
+		this.clearLowerFloorUnderlay();
 		this.moveController.exit();
 		this.hud.closeActionMenu();
 		this.boardContainer.removeChildren();
@@ -3114,6 +3159,7 @@ export class MapScene implements Scene, TutorialPort {
 		 * must compile against the new map instead of reusing stale geometry.
 		 */
 		this.engineCompiler.invalidate();
+		this.clearLowerFloorUnderlay();
 
 		this.applyCameraBounds();
 

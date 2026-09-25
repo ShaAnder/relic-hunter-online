@@ -7,8 +7,9 @@ import { QuadBatchBuilder } from "../batching/QuadBatchBuilder";
 import type { RenderChunkId } from "../chunks/ChunkCoord";
 
 import type {
-	CompiledChunkVisual,
 	CompiledFloorVisual,
+	CompiledTileSurface,
+	VisualUvs,
 } from "../compiler/CompiledFloorVisual";
 
 import {
@@ -22,204 +23,201 @@ import type { FogPresentationBuffer } from "../presentation/FogPresentationBuffe
 
 import { GroundPresentationCode } from "../presentation/PresentationDiff";
 
-import type { VisualDepthKey } from "../world/worldDepthKey";
-
 import { GroundChunkHandle } from "./GroundChunkHandle";
 
-import { GroundDepthStrata } from "./GroundDepthStrata";
+interface OrderedTile {
+	tile: CompiledTileSurface;
 
-/**
- * Temporary CPU-side state for one GPU-compatible ground batch.
- *
- * Depth is part of compatibility now: two tiles may share a material and
- * chunk, but they cannot share one mesh if another surface needs to sort
- * between their projected depths.
- */
-interface MutableGroundBatch {
-	depthKey: VisualDepthKey;
-
-	material: ResolvedGroundGpuMaterial;
-
-	builder: QuadBatchBuilder;
+	/**
+	 * Stable tie-breaker matching compiler insertion order when two tiles share
+	 * the same legacy painter depth.
+	 */
+	sourceOrder: number;
 }
 
 /**
- * Builds and owns the chunked ground rendering layer for one compiled floor.
+ * Builds the active floor's static ground as one globally ordered mesh.
  *
- * Chunks remain the structural ownership/culling unit, but painter order sits
- * above chunk ownership. Ground meshes are therefore mounted through exact
- * depth strata rather than through one scene-graph Container per chunk.
+ * The previous depth-strata fix restored visual correctness but turned painter
+ * depth into batch identity, producing hundreds of tiny meshes. Ground does not
+ * need to interleave with actors or walls because the entire ground root is
+ * already below the world-depth root. We can therefore preserve exact tile
+ * painter order inside one index buffer and submit the floor in one draw.
  */
 export class GroundChunkRenderer {
 	private readonly materialLibrary = new GpuMaterialLibrary();
 
-	private readonly chunks = new Map<RenderChunkId, GroundChunkHandle>();
+	private handle: GroundChunkHandle | null = null;
 
-	private readonly strata: GroundDepthStrata;
+	private readonly chunkIds = new Set<RenderChunkId>();
 
-	constructor(root: Container) {
-		this.strata = new GroundDepthStrata(root);
+	constructor(private readonly root: Container) {
+		/**
+		 * The ground root now contains a single ordered mesh, so child zIndex
+		 * sorting is unnecessary overhead.
+		 */
+		this.root.sortableChildren = false;
 	}
 
-	/**
-	 * Mounting replaces the currently rendered floor.
-	 */
 	mount(compiled: CompiledFloorVisual): void {
 		this.destroy();
 
+		if (compiled.tiles.length === 0) {
+			return;
+		}
+
 		for (const chunk of compiled.chunks.values()) {
-			if (chunk.tiles.length === 0) {
-				continue;
+			if (chunk.tiles.length > 0) {
+				this.chunkIds.add(chunk.chunkId);
 			}
-
-			const handle = this.buildChunk(chunk, compiled.width);
-
-			this.chunks.set(chunk.chunkId, handle);
 		}
 
-		let meshCount = 0;
-
-		let vertexCount = 0;
-
-		for (const chunk of this.chunks.values()) {
-			meshCount += chunk.meshCount;
-
-			vertexCount += chunk.vertexCount;
-		}
-
-		perf.setCounter("engine.groundChunkCount", this.chunks.size);
-
-		perf.setCounter("engine.groundMeshCount", meshCount);
-
-		perf.setCounter("engine.groundVertexCount", vertexCount);
-	}
-
-	updatePresentation(
-		dirtyChunkIds: ReadonlySet<RenderChunkId>,
-
-		mapWidth: number,
-
-		fog: FogPresentationBuffer,
-
-		focusCellKeys: ReadonlySet<string> | null,
-
-		forceWashed: boolean,
-	): void {
-		for (const chunkId of dirtyChunkIds) {
-			this.chunks
-				.get(chunkId)
-				?.updatePresentation(mapWidth, fog, focusCellKeys, forceWashed);
-		}
-	}
-
-	/**
-	 * Return a snapshot rather than exposing the renderer's internal Map.
-	 */
-	allChunkIds(): ReadonlySet<RenderChunkId> {
-		return new Set(this.chunks.keys());
-	}
-
-	/**
-	 * Release every owned ground mesh and its depth-stratum scene graph.
-	 */
-	destroy(): void {
-		/**
-		 * Handles own the actual GPU resources. Destroy them first so every
-		 * Mesh detaches itself from whichever depth stratum currently owns it.
-		 */
-		for (const chunk of this.chunks.values()) {
-			chunk.destroy();
-		}
-
-		this.chunks.clear();
+		const orderedTiles: OrderedTile[] = compiled.tiles.map(
+			(tile, sourceOrder) => ({
+				tile,
+				sourceOrder,
+			}),
+		);
 
 		/**
-		 * Strata own only the lightweight scene-graph Containers left behind
-		 * after the mesh resources have been destroyed.
+		 * Legacy ground used per-tile zIndex. A single mesh cannot use Pixi child
+		 * sorting between its quads, so encode the exact same painter order
+		 * directly into triangle submission order.
 		 */
-		this.strata.clear();
+		orderedTiles.sort(
+			(a, b) =>
+				a.tile.depth - b.tile.depth ||
+				a.sourceOrder - b.sourceOrder,
+		);
 
-		perf.setCounter("engine.groundChunkCount", 0);
+		const builder = new QuadBatchBuilder();
 
-		perf.setCounter("engine.groundMeshCount", 0);
+		let sharedMaterial: ResolvedGroundGpuMaterial | null = null;
 
-		perf.setCounter("engine.groundVertexCount", 0);
-	}
+		for (const entry of orderedTiles) {
+			const tile = entry.tile;
 
-	/**
-	 * Build all ground meshes belonging structurally to one render chunk.
-	 *
-	 * Batch compatibility is:
-	 *
-	 *     exact painter depth
-	 *     +
-	 *     GPU material
-	 *
-	 * Chunk identity is already supplied by the outer buildChunk call.
-	 */
-	private buildChunk(
-		chunk: CompiledChunkVisual,
-
-		mapWidth: number,
-	): GroundChunkHandle {
-		const batches = new Map<string, MutableGroundBatch>();
-
-		for (const tile of chunk.tiles) {
 			const material = this.materialLibrary.resolveGround(tile.material);
 
-			/**
-			 * Material compatibility alone is insufficient for an isometric
-			 * painter-order renderer. Once two depths are baked into one Mesh,
-			 * Pixi cannot insert another mesh between those tile surfaces.
-			 */
-			const batchKey = [tile.depthKey, material.batchKey].join("|");
-
-			let batch = batches.get(batchKey);
-
-			if (!batch) {
-				batch = {
-					depthKey: tile.depthKey,
-
-					material,
-
-					builder: new QuadBatchBuilder(),
-				};
-
-				batches.set(batchKey, batch);
+			if (!sharedMaterial) {
+				sharedMaterial = material;
+			} else if (
+				sharedMaterial.batchKey !== material.batchKey ||
+				sharedMaterial.texture.source !== material.texture.source
+			) {
+				throw new Error(
+					"GroundChunkRenderer: ground atlas contract produced incompatible GPU materials",
+				);
 			}
 
-			const tileIndex = tile.coord.y * mapWidth + tile.coord.x;
+			const tileIndex = tile.coord.y * compiled.width + tile.coord.x;
 
-			batch.builder.addQuad(
+			builder.addQuad(
 				tile.quad,
-				tile.uvs,
+				remapUvs(tile.uvs, material),
 				tileIndex,
 				GroundPresentationCode.Normal,
 			);
 		}
 
-		const handle = new GroundChunkHandle(chunk.chunkId);
-
-		for (const batch of batches.values()) {
-			const data = batch.builder.freeze();
-
-			const meshHandle = createStaticGroundMesh(data, batch.material);
-
-			/**
-			 * GroundChunkHandle owns lifetime/presentation for the GPU batch.
-			 */
-			handle.addBatch(meshHandle);
-
-			/**
-			 * GroundDepthStrata owns scene-graph placement.
-			 *
-			 * addBatch() currently attaches the Mesh to the handle's temporary
-			 * chunk Container first; Pixi re-parents it here into the correct
-			 * global depth stratum.
-			 */
-			this.strata.mount(batch.depthKey, chunk.chunkId, meshHandle.mesh);
+		if (!sharedMaterial) {
+			return;
 		}
 
-		return handle;
+		const data = builder.freeze();
+
+		const meshHandle = createStaticGroundMesh(data, sharedMaterial);
+
+		/**
+		 * One mesh means Pixi performs one ground submission while the index
+		 * buffer itself preserves exact tile painter order.
+		 */
+		this.root.addChild(meshHandle.mesh);
+
+		this.handle = new GroundChunkHandle(meshHandle, compiled.chunkSize);
+
+		perf.setCounter("engine.groundChunkCount", this.chunkIds.size);
+		perf.setCounter("engine.groundMeshCount", this.handle.meshCount);
+		perf.setCounter("engine.groundVertexCount", this.handle.vertexCount);
+	}
+
+	updatePresentation(
+		dirtyChunkIds: ReadonlySet<RenderChunkId>,
+		mapWidth: number,
+		fog: FogPresentationBuffer,
+		focusCellKeys: ReadonlySet<string> | null,
+		forceWashed: boolean,
+	): void {
+		this.handle?.updatePresentation(
+			dirtyChunkIds,
+			mapWidth,
+			fog,
+			focusCellKeys,
+			forceWashed,
+		);
+	}
+
+	allChunkIds(): ReadonlySet<RenderChunkId> {
+		return new Set(this.chunkIds);
+	}
+
+	destroy(): void {
+		this.handle?.destroy();
+		this.handle = null;
+
+		this.chunkIds.clear();
+
+		/**
+		 * engineGroundContainer is exclusively owned by this renderer. This also
+		 * cleans stale depth-strata Containers after switching to this corrected
+		 * batching path and performing a full page reload/remount.
+		 */
+		for (const child of this.root.removeChildren()) {
+			child.destroy({
+				children: true,
+			});
+		}
+
+		perf.setCounter("engine.groundChunkCount", 0);
+		perf.setCounter("engine.groundMeshCount", 0);
+		perf.setCounter("engine.groundVertexCount", 0);
 	}
 }
+
+/**
+ * Remap the compiler's ordinary 0..1 tile UVs into one region of the shared
+ * texture atlas.
+ */
+function remapUvs(
+	uvs: VisualUvs,
+	material: ResolvedGroundGpuMaterial,
+): VisualUvs {
+	const { u0, v0, u1, v1 } = material.uvRect;
+
+	const width = u1 - u0;
+	const height = v1 - v0;
+
+	return [
+		u0 + uvs[0] * width,
+		v0 + uvs[1] * height,
+
+		u0 + uvs[2] * width,
+		v0 + uvs[3] * height,
+
+		u0 + uvs[4] * width,
+		v0 + uvs[5] * height,
+
+		u0 + uvs[6] * width,
+		v0 + uvs[7] * height,
+	];
+}
+
+/**
+ * LEARNING NOTE:
+ *
+ * Painter order and batch identity are separate concepts. The failed strata
+ * version made every depth a different batch, which was visually correct but
+ * produced hundreds of Mesh objects. Here the index buffer itself stores the
+ * required tile order, while a texture atlas lets visually different tiles
+ * remain compatible with the same GPU material and therefore the same mesh.
+ */

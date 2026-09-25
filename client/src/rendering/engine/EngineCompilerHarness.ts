@@ -1,5 +1,7 @@
 import type * as RH from "@relic-hunter/shared";
 
+import { perf } from "@/perf/PerfMonitor";
+
 import { DEFAULT_RENDER_CHUNK_SIZE } from "./chunks/ChunkCoord";
 
 import type { CompiledFloorVisual } from "./compiler/CompiledFloorVisual";
@@ -14,113 +16,163 @@ import { createVisualCompilerSnapshot } from "./diagnostics/VisualCompilerDiagno
 /**
  * EngineCompilerHarness
  * ---------------------
- * This class sits between MapScene and MapVisualCompiler.
- * Its main responsibility is preventing unnecessary full-floor compiles.
- * MapScene may ask for compiled rendering data many times because fog,
- * focus, camera state or other presentation details change.
- * Most of those things do NOT change the underlying map geometry.
+ *
+ * Caches compiled floor geometry across presentation refreshes AND floor
+ * switches.
+ *
+ * The previous implementation kept only the most recently compiled floor.
+ * That worked for repeated fog/focus updates on one floor, but cross-floor AI
+ * caused the cache to alternate:
+ *
+ *     floor 1 -> floor 2 -> floor 1 -> floor 0 -> floor 1
+ *
+ * Every return to an older floor therefore performed another full compile.
+ *
+ * This cache is keyed first by the actual CompiledEdgeMap source object and
+ * then by the structural compiler options that can change generated geometry.
  */
 export class EngineCompilerHarness {
-	// One reusable compiler instance.
 	private readonly compiler = new MapVisualCompiler();
 
 	/**
-	 * The following fields describe the input that produced our currently
-	 * cached CompiledFloorVisual.
+	 * Source identity is the first cache boundary.
+	 *
+	 * WeakMap is useful here because it does not keep obsolete map objects alive
+	 * solely because they were once compiled. If a map is replaced and nothing
+	 * else references the old source, normal garbage collection may reclaim it.
 	 */
-	private cachedSource: RH.CompiledEdgeMap | null = null;
-	private cachedFloorIndex: number | null = null;
-	private cachedMapSeed: number | null = null;
-	private cachedWallHeightScale: number | null = null;
-	private cachedChunkSize: number | null = null;
-
-	// The expensive result we want to reuse.
-	private cachedResult: CompiledFloorVisual | null = null;
+	private cache = new WeakMap<
+		RH.CompiledEdgeMap,
+		Map<string, CompiledFloorVisual>
+	>();
 
 	/**
-	 * Compile a floor if necessary, otherwise return the already compiled
-	 * result.
+	 * WeakMap deliberately has no `.size`, so keep a diagnostic count of the
+	 * variants inserted into the current cache generation.
+	 */
+	private cachedVariantCount = 0;
+
+	/**
+	 * Compile a floor if this exact structural variant has not been seen before.
+	 *
+	 * Fog, room focus and other presentation-only state are intentionally not
+	 * part of this key because they do not change compiled geometry.
 	 */
 	compile(
 		source: RH.CompiledEdgeMap,
+
 		options: MapVisualCompileOptions,
 	): CompiledFloorVisual {
-		/**
-		 * MapVisualCompileOptions makes these two values optional:
-		 *
-		 * wallHeightScale?: number
-		 * chunkSize?: number
-		 */
 		const wallHeightScale = options.wallHeightScale ?? 1;
+
 		const chunkSize = options.chunkSize ?? DEFAULT_RENDER_CHUNK_SIZE;
 
-		/**
-		 * Check whether EVERY meaningful compiler input still matches
-		 * the input that produced cachedResult.
-		 */
-		const cacheMatches =
-			this.cachedResult !== null &&
-			this.cachedSource === source &&
-			this.cachedFloorIndex === options.floorIndex &&
-			this.cachedMapSeed === options.mapSeed &&
-			this.cachedWallHeightScale === wallHeightScale &&
-			this.cachedChunkSize === chunkSize;
-
-		/**
-		 * If nothing affecting compiled geometry has changed,
-		 * immediately return the old result.
-		 */
-		if (cacheMatches && this.cachedResult !== null) {
-			return this.cachedResult;
-		}
-
-		// perform a timed check on the compiler details and create a snapshot
-		const startedAt = performance.now();
-		const result = this.compiler.compile(source, {
-			...options,
+		const cacheKey = this.cacheKey(
+			options.floorIndex,
+			options.mapSeed,
 			wallHeightScale,
 			chunkSize,
+		);
+
+		const sourceCache = this.cache.get(source);
+
+		const cached = sourceCache?.get(cacheKey);
+
+		if (cached) {
+			perf.incrementCounter("engine.compilerCacheHits");
+
+			perf.setCounter("engine.compilerCachedVariants", this.cachedVariantCount);
+
+			return cached;
+		}
+
+		perf.incrementCounter("engine.compilerCacheMisses");
+
+		/**
+		 * Only genuine cache misses reach the expensive compiler.
+		 */
+		const startedAt = performance.now();
+
+		const result = this.compiler.compile(source, {
+			...options,
+
+			wallHeightScale,
+
+			chunkSize,
 		});
+
 		const durationMs = performance.now() - startedAt;
+
 		const snapshot = createVisualCompilerSnapshot(result);
 
 		/**
-		 * The compile succeeded, so this input/result combination now
-		 * becomes our cache.
+		 * Do not mutate the cache until compilation succeeds. A thrown compile
+		 * should never leave a half-valid cache entry behind.
 		 */
-		this.cachedSource = source;
-		this.cachedFloorIndex = options.floorIndex;
-		this.cachedMapSeed = options.mapSeed;
-		this.cachedWallHeightScale = wallHeightScale;
-		this.cachedChunkSize = chunkSize;
-		this.cachedResult = result;
+		let targetCache = sourceCache;
+
+		if (!targetCache) {
+			targetCache = new Map<string, CompiledFloorVisual>();
+
+			this.cache.set(source, targetCache);
+		}
+
+		targetCache.set(cacheKey, result);
+
+		this.cachedVariantCount += 1;
+
+		perf.setCounter("engine.compilerCachedVariants", this.cachedVariantCount);
 
 		/**
-		 * Only REAL compiles reach this point.
+		 * This log intentionally represents REAL compiler work only.
 		 *
-		 * Cache hits returned earlier, so normal fog/focus refreshes
-		 * should not spam this message.
+		 * A healthy cross-floor session should therefore log each stable floor
+		 * once after initial compilation rather than every time AI revisits it.
 		 */
 		console.info("[renderer.compiler]", {
 			floorIndex: result.floorIndex,
+
 			durationMs,
+
 			...snapshot,
 		});
+
 		return result;
 	}
 
 	/**
-	 * Explicitly throw away the cached result.
-	 * We use this when the underlying map structure has genuinely changed,
-	 * for example when MapScene regenerates the map.
-	 * The next call to compile() will therefore perform a real compile.
+	 * Throw away every compiled visual associated with the current structural
+	 * map generation.
+	 *
+	 * Map regeneration already calls this method, so replacing the authored
+	 * floor sources still gets a clean cache rather than reusing stale geometry.
 	 */
 	invalidate(): void {
-		this.cachedSource = null;
-		this.cachedFloorIndex = null;
-		this.cachedMapSeed = null;
-		this.cachedWallHeightScale = null;
-		this.cachedChunkSize = null;
-		this.cachedResult = null;
+		this.cache = new WeakMap<
+			RH.CompiledEdgeMap,
+			Map<string, CompiledFloorVisual>
+		>();
+
+		this.cachedVariantCount = 0;
+
+		perf.setCounter("engine.compilerCachedVariants", 0);
+	}
+
+	/**
+	 * Stable identity for every compile option that currently affects geometry.
+	 *
+	 * If MapVisualCompileOptions gains another structural option later, it must
+	 * be represented here as well.
+	 */
+	private cacheKey(
+		floorIndex: number,
+
+		mapSeed: number,
+
+		wallHeightScale: number,
+
+		chunkSize: number,
+	): string {
+		return JSON.stringify([floorIndex, mapSeed, wallHeightScale, chunkSize]);
 	}
 }

@@ -1,7 +1,10 @@
 import { Texture } from "pixi.js";
 import type { Texture as PixiTexture } from "pixi.js";
 import type { VisualMaterialRef } from "../materials/MaterialKey";
-import { resolveTileVariant } from "../materials/mapMaterialFactory";
+import {
+	resolveGroundAtlasRegion,
+	type GroundAtlasRegion,
+} from "../materials/mapMaterialFactory";
 import {
 	materialBatchKey,
 	type MaterialBatchKey,
@@ -13,6 +16,14 @@ export interface ResolvedGroundGpuMaterial {
 	texture: PixiTexture;
 	usesTexture: boolean;
 	fallbackColor: number;
+
+	/**
+	 * Per-tile atlas region.
+	 *
+	 * All ground materials share one TextureSource; only this UV rectangle
+	 * changes from tile to tile.
+	 */
+	uvRect: Pick<GroundAtlasRegion, "u0" | "v0" | "u1" | "v1">;
 }
 
 export interface ResolvedStaticWorldGpuMaterial {
@@ -31,10 +42,14 @@ export interface ResolvedStaticWorldGpuMaterial {
  * actual GPU resources.
  */
 export class GpuMaterialLibrary {
-	private readonly groundCache = new Map<
-		MaterialBatchKey,
-		ResolvedGroundGpuMaterial
-	>();
+	/**
+	 * Every ground tile now resolves into the same atlas-backed GPU material.
+	 * Texture variation is represented by UVs rather than separate batches.
+	 */
+	private readonly groundAtlasBatchKey = materialBatchKey(
+		"tile:shared-atlas:normal:ground",
+	);
+
 	private readonly worldCache = new Map<
 		MaterialBatchKey,
 		ResolvedStaticWorldGpuMaterial
@@ -47,29 +62,30 @@ export class GpuMaterialLibrary {
 			);
 		}
 
-		const variant = resolveTileVariant(material.code, material.variantHash);
-		const usesTexture = variant.texture !== undefined;
-		const batchKey = materialBatchKey(
-			usesTexture
-				? `tile:${material.code ?? "none"}:variant:${variant.variantIndex}:normal:ground`
-				: `tile:${material.code ?? "none"}:fallback:${material.fallbackColor}:normal:ground`,
+		const region = resolveGroundAtlasRegion(
+			material.code,
+			material.variantHash,
+			material.fallbackColor,
 		);
-		const cached = this.groundCache.get(batchKey);
 
-		if (cached) {
-			return cached;
-		}
+		return {
+			batchKey: this.groundAtlasBatchKey,
+			texture: region.texture,
+			usesTexture: true,
 
-		const resolved: ResolvedGroundGpuMaterial = {
-			batchKey,
-			texture: variant.texture ?? Texture.WHITE,
-			usesTexture,
-			fallbackColor: material.fallbackColor,
+			/**
+			 * Fallback colours are painted into atlas slots too, so the shader
+			 * always follows its texture path for the floor-wide ground mesh.
+			 */
+			fallbackColor: 0xffffff,
+
+			uvRect: {
+				u0: region.u0,
+				v0: region.v0,
+				u1: region.u1,
+				v1: region.v1,
+			},
 		};
-
-		this.groundCache.set(batchKey, resolved);
-
-		return resolved;
 	}
 
 	resolveWorld(material: VisualMaterialRef): ResolvedStaticWorldGpuMaterial {
@@ -99,28 +115,34 @@ export class GpuMaterialLibrary {
 			};
 
 			this.worldCache.set(batchKey, resolved);
+
 			return resolved;
 		}
 
 		const family = resolveBarrierMaterial(material.barrier);
+
 		const texture =
 			material.surface === "segment-face"
 				? family.segmentFaceTexture
 				: material.surface === "segment-top"
 					? family.segmentTopTexture
 					: material.surface === "connector-face"
-						? (family.connectorFaceTexture ?? family.segmentFaceTexture)
+						? (family.connectorFaceTexture ??
+							family.segmentFaceTexture)
 						: (family.connectorTopTexture ??
 							family.segmentTopTexture ??
 							family.connectorFaceTexture);
 
 		const usesTexture = texture !== undefined;
+
 		const batchKey = materialBatchKey(
 			[
 				"barrier",
 				material.barrier,
 				material.surface,
-				usesTexture ? "texture" : `fallback:${material.fallbackColor}`,
+				usesTexture
+					? "texture"
+					: `fallback:${material.fallbackColor}`,
 				`alpha:${material.alpha}`,
 			].join(":"),
 		);
