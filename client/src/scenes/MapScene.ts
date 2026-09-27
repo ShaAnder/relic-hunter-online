@@ -60,7 +60,8 @@ import { preloadMapMaterials } from "@/rendering/engine/materials/mapMaterialFac
 import { preloadBarrierMaterials } from "@/rendering/engine/materials/barrierMaterialFactory";
 import { perf } from "@/perf/PerfMonitor";
 import { FloorRenderer } from "@/rendering/engine/floor/FloorRenderer";
-
+import { DynamicWorldRenderer } from "@/rendering/engine/dynamic/DynamicWorldRenderer";
+import type { DynamicWorldSubject } from "@/rendering/engine/dynamic/DynamicWorldHandle";
 /**
  * Tactical map scene — grid, mercenary, AP turns, cards, chests, win condition.
  * Every unit on the map (local or AI-piloted) is a PilotedMercenary in one
@@ -88,6 +89,22 @@ export class MapScene implements Scene, TutorialPort {
 	private worldDepthContainer = new Container();
 	private foregroundOverlayContainer = new Container();
 
+	/**
+	 * During local movement, live visibility follows the interpolated tile the
+	 * sprite currently occupies rather than jumping immediately to state.coord,
+	 * which is committed before the walk animation finishes.
+	 */
+	private liveVisibilityObserverCoord: RH.GridCoord | null = null;
+
+	/**
+	 * Dynamic entities stay as individual Pixi views, but their scene attachment
+	 * and live visibility now flow through one event-driven renderer seam.
+	 */
+	private readonly dynamicWorld = new DynamicWorldRenderer(
+		this.worldDepthContainer,
+		(subject) => this.resolveDynamicWorldVisibility(subject),
+	);
+
 	// Systems
 	private camera: CameraController;
 	private lowerFloorMapRenderer!: MapRenderer;
@@ -101,9 +118,7 @@ export class MapScene implements Scene, TutorialPort {
 	 * during every visibility refresh.
 	 */
 	private lowerFloorUnderlaySource: RH.CompiledEdgeMap | null = null;
-
 	private lowerFloorUnderlayIndex: number | null = null;
-
 	private lowerFloorUnderlayMapSeed: number | null = null;
 
 	/**
@@ -241,6 +256,39 @@ export class MapScene implements Scene, TutorialPort {
 		return rooms;
 	}
 
+	/**
+	 * Preserve MapScene/shared visibility semantics while moving scheduling of
+	 * those checks into DynamicWorldRenderer.
+	 *
+	 * Renderer code decides WHEN to ask. This method still decides WHAT visible
+	 * means for the game.
+	 */
+	private resolveDynamicWorldVisibility(subject: DynamicWorldSubject): boolean {
+		const viewedFloor = this.game.session.viewedFloor;
+		if (subject.kind === "local-hunter") {
+			return subject.floorIndex === viewedFloor;
+		}
+		const isCrossFloorSpectatedAi =
+			subject.kind === "hunter" &&
+			this.aiTurnController.crossFloorSpectating &&
+			this.aiTurnController.activeAi?.state.id === subject.id &&
+			subject.floorIndex !== this.localUnit.state.floorIndex &&
+			viewedFloor === subject.floorIndex;
+		if (isCrossFloorSpectatedAi) {
+			/**
+			 * Preserve the existing special case: the actively spectated AI hunter
+			 * remains visible while the camera follows that cross-floor turn.
+			 */
+			return true;
+		}
+
+		return this.canLocalPlayerSeeCoord(
+			subject.floorIndex,
+			subject.coord,
+			this.liveVisibilityObserverCoord ?? this.localUnit.state.coord,
+		);
+	}
+
 	private canLocalPlayerSeeCoord(
 		floorIndex: number,
 		targetCoord: RH.GridCoord,
@@ -343,7 +391,7 @@ export class MapScene implements Scene, TutorialPort {
 		};
 
 		this.syncFloorVisibility();
-
+		this.dynamicWorld.observerChanged(floorIndex, observerCoord);
 		this.rebuildMapRenderWithFog();
 	}
 
@@ -718,32 +766,28 @@ export class MapScene implements Scene, TutorialPort {
 		this.mapWidth = this.grid.width;
 		this.mapHeight = this.grid.height;
 
-		this.mapController = new MapController(
-			this.game,
-			this.worldDepthContainer,
-			{
-				showFeedback: (message) => this.showFeedback(message),
-				showItemPopup: (item, isTarget) => this.showItemPopup(item, isTarget),
-				getUnitLabel: (unit) => this.getUnitLabel(unit),
-				teleportEntity: (state, mercenary) =>
-					this.teleportEntity(state, mercenary as Mercenary),
-				syncUI: () => this.syncUI(),
-				onTutorialEvent: (event) => this.tutorialConfig?.onTutorialEvent(event),
-				getLocalUnit: () => this.localUnit,
-				getUnits: () => this.units,
-				getGrid: () => this.grid,
-				rebuildMapRender: () => {
-					this.syncFloorVisibility();
-					this.rebuildMapRenderWithFog();
-				},
-				revealExitArea: () => this.revealExitArea(),
-				exitTargetingMode: () => this.exitTargetingMode(),
-				pickEnemySpawnTile: (used) => this.pickEnemySpawnTile(used),
-				delay: (ms) => this.delay(ms),
-				triggerWin: () => this.triggerWin(),
-				triggerLoss: (winner) => this.triggerLoss(winner),
+		this.mapController = new MapController(this.game, this.dynamicWorld, {
+			showFeedback: (message) => this.showFeedback(message),
+			showItemPopup: (item, isTarget) => this.showItemPopup(item, isTarget),
+			getUnitLabel: (unit) => this.getUnitLabel(unit),
+			teleportEntity: (state, mercenary) =>
+				this.teleportEntity(state, mercenary as Mercenary),
+			syncUI: () => this.syncUI(),
+			onTutorialEvent: (event) => this.tutorialConfig?.onTutorialEvent(event),
+			getLocalUnit: () => this.localUnit,
+			getUnits: () => this.units,
+			getGrid: () => this.grid,
+			rebuildMapRender: () => {
+				this.syncFloorVisibility();
+				this.rebuildMapRenderWithFog();
 			},
-		);
+			revealExitArea: () => this.revealExitArea(),
+			exitTargetingMode: () => this.exitTargetingMode(),
+			pickEnemySpawnTile: (used) => this.pickEnemySpawnTile(used),
+			delay: (ms) => this.delay(ms),
+			triggerWin: () => this.triggerWin(),
+			triggerLoss: (winner) => this.triggerLoss(winner),
+		});
 
 		{
 			const sw = this.game.app.screen.width;
@@ -970,6 +1014,7 @@ export class MapScene implements Scene, TutorialPort {
 	/** Tear down visuals and input listeners. */
 	onExit(): void {
 		this.floorRenderer.destroy();
+		this.dynamicWorld.clear();
 		this.clearLowerFloorUnderlay();
 		this.moveController.exit();
 		this.hud.closeActionMenu();
@@ -1025,64 +1070,38 @@ export class MapScene implements Scene, TutorialPort {
 				)
 			: this.localUnit.state.coord;
 
-		// Hunters
+		/**
+		 * Incapacitated animation + downed presentation are character state, not
+		 * visibility scheduling. Four hunters are cheap to update here and this does
+		 * not perform LOS/fog/privacy queries.
+		 */
 		for (const unit of this.units) {
-			const downedAlpha = unit.state.currentHp <= 0 ? 0.4 : 1;
-
-			const isCrossFloorSpectatedAi =
-				this.aiTurnController.crossFloorSpectating &&
-				this.aiTurnController.activeAi === unit &&
-				unit.state.floorIndex !== this.localUnit.state.floorIndex &&
-				this.game.session.viewedFloor === unit.state.floorIndex;
-
-			const visible =
-				unit.pilot === "local" ||
-				isCrossFloorSpectatedAi ||
-				this.canLocalPlayerSeeCoord(
-					unit.state.floorIndex,
-					unit.state.coord,
-					localVisionCoord,
-				);
-
-			unit.mercenary.view.alpha = visible ? downedAlpha : 0;
-
+			unit.mercenary.view.alpha = unit.state.currentHp <= 0 ? 0.4 : 1;
 			unit.mercenary.setIncapacitated(
 				unit.state.currentHp <= 0 || unit.state.stunnedTurnsRemaining > 0,
 			);
 		}
 
-		// Monsters
-		for (const monster of this.mapController.monsterSystem.all) {
-			const visible = this.canLocalPlayerSeeCoord(
-				monster.state.floorIndex,
-				monster.state.coord,
-				localVisionCoord,
-			);
-
-			monster.token.view.alpha = visible ? 1 : 0;
-		}
-
-		// Chests
-		for (const chest of this.mapController.chestSystem.all) {
-			const visible = this.canLocalPlayerSeeCoord(
-				chest.floorIndex,
-				chest.coord,
-				localVisionCoord,
-			);
-
-			chest.entity.view.alpha = visible ? 1 : 0;
-		}
-
+		/**
+		 * While the local hunter animates, dynamic live visibility only needs a global
+		 * recompute when the interpolated observer crosses into a different logical
+		 * tile. Idle animation frames perform zero visibility scans.
+		 */
 		if (this.localUnit.mercenary.isAnimating) {
 			const liveCoordKey = RH.coordKey(localVisionCoord);
-
 			if (liveCoordKey !== this.lastLiveVisibilityCoordKey) {
 				this.lastLiveVisibilityCoordKey = liveCoordKey;
-
-				// this.refreshVisibility(this.localUnit.state, localVisionCoord);
+				this.liveVisibilityObserverCoord = {
+					...localVisionCoord,
+				};
+				this.dynamicWorld.observerChanged(
+					this.localUnit.state.floorIndex,
+					localVisionCoord,
+				);
 			}
 		} else {
 			this.lastLiveVisibilityCoordKey = null;
+			this.liveVisibilityObserverCoord = null;
 		}
 
 		this.hand.update(deltaTime);
@@ -1655,6 +1674,18 @@ export class MapScene implements Scene, TutorialPort {
 		"balanced",
 	];
 
+	private registerHunterDynamicWorld(unit: PilotedMercenary): void {
+		this.dynamicWorld.register({
+			id: unit.state.id,
+			kind: unit.pilot === "local" ? "local-hunter" : "hunter",
+			view: unit.mercenary.view,
+			renderKind: "sprite",
+			lifetime: "stateful",
+			getFloorIndex: () => unit.state.floorIndex,
+			getCoord: () => unit.state.coord,
+		});
+	}
+
 	private spawnLocalUnit(): void {
 		const state = this.spawnMercenary();
 		if (this.tutorialConfig?.playerMovement !== undefined) {
@@ -1675,8 +1706,6 @@ export class MapScene implements Scene, TutorialPort {
 			this.game.session.mapElevation ?? undefined,
 			this.game.session.mapStaircaseClusters,
 		);
-		this.worldDepthContainer.addChild(mercenary.view);
-
 		const turnManager = new TurnManager(
 			() => state,
 			() =>
@@ -1685,8 +1714,14 @@ export class MapScene implements Scene, TutorialPort {
 				)),
 			() => this.syncUI(),
 		);
-
-		this.units.push({ pilot: "local", state, mercenary, turnManager });
+		const unit: PilotedMercenary = {
+			pilot: "local",
+			state,
+			mercenary,
+			turnManager,
+		};
+		this.units.push(unit);
+		this.registerHunterDynamicWorld(unit);
 	}
 
 	private pickEnemySpawnPoint(
@@ -1771,14 +1806,10 @@ export class MapScene implements Scene, TutorialPort {
 
 	private spawnEnemyHunters(): void {
 		this.units = this.units.filter((u) => u.pilot === "local");
-
 		const floors = this.game.session.mapFloors;
 		if (!floors?.length) return;
-
 		const rng = this.game.session.rng;
-
 		const used = new Set<string>();
-
 		// Reserve the player's actual floor + coordinate.
 		used.add(
 			`${this.localUnit.state.floorIndex}:${RH.coordKey(
@@ -1802,18 +1833,12 @@ export class MapScene implements Scene, TutorialPort {
 
 		for (let i = 0; i < MapScene.ENEMY_ARCHETYPES.length; i++) {
 			const archetype = MapScene.ENEMY_ARCHETYPES[i];
-
 			const spawn = this.pickEnemySpawnPoint(used);
 			if (!spawn) continue;
-
 			const floor = floors[spawn.floorIndex];
-
 			used.add(`${spawn.floorIndex}:${RH.coordKey(spawn.coord)}`);
-
 			const aiClass = RH.ALL_CLASSES[Math.floor(rng() * RH.ALL_CLASSES.length)];
-
 			const aiName = RH.generateHunterName();
-
 			const state = RH.createMercenary(
 				`enemy_${archetype}_${i}`,
 				spawn.coord,
@@ -1857,14 +1882,16 @@ export class MapScene implements Scene, TutorialPort {
 				() => {},
 			);
 
-			this.units.push({
+			const unit: PilotedMercenary = {
 				pilot: "ai",
 				state,
 				mercenary,
 				turnManager,
 				archetype,
 				memory: RH.createAiMemory(),
-			});
+			};
+			this.units.push(unit);
+			this.registerHunterDynamicWorld(unit);
 		}
 
 		this.syncFloorVisibility();
@@ -2479,6 +2506,7 @@ export class MapScene implements Scene, TutorialPort {
 				this.game.session.mapStaircaseClusters,
 			),
 		);
+		this.dynamicWorld.notifyEntityMoved(unit.state.id);
 	}
 
 	/**
@@ -2519,6 +2547,7 @@ export class MapScene implements Scene, TutorialPort {
 		monster.token.setPositionInstant(
 			gridToScreenElevated(monster.state.coord, floors[next].elevation),
 		);
+		this.dynamicWorld.notifyEntityMoved(monster.state.id);
 	}
 
 	private applyFloor(floorIndex: number): void {
@@ -2547,19 +2576,7 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	private syncFloorVisibility(): void {
-		const here = this.game.session.viewedFloor;
-
-		for (const chest of this.mapController.chestSystem.all) {
-			chest.entity.view.visible = chest.floorIndex === here;
-		}
-
-		for (const monster of this.mapController.monsterSystem.all) {
-			monster.token.view.visible = monster.state.floorIndex === here;
-		}
-
-		for (const unit of this.units) {
-			unit.mercenary.view.visible = unit.state.floorIndex === here;
-		}
+		this.dynamicWorld.setViewedFloor(this.game.session.viewedFloor);
 	}
 
 	/**
@@ -2983,21 +3000,16 @@ export class MapScene implements Scene, TutorialPort {
 		mercenary: Mercenary,
 	): Promise<void> {
 		const destination = this.randomTeleportDestination(state);
-
 		if (!destination) return;
 
 		const floor = this.game.session.mapFloors?.[destination.floorIndex];
-
 		if (!floor) return;
 
 		const isLocal = state === this.localUnit.state;
-
 		state.floorIndex = destination.floorIndex;
 		state.coord = destination.coord;
-
 		if (isLocal) {
 			this.game.session.localPlayerFloor = destination.floorIndex;
-
 			this.applyFloor(destination.floorIndex);
 		} else {
 			this.syncFloorVisibility();
@@ -3010,6 +3022,8 @@ export class MapScene implements Scene, TutorialPort {
 		);
 
 		mercenary.setPositionInstant(screenPos);
+
+		this.dynamicWorld.notifyEntityMoved(state.id);
 
 		if (isLocal) {
 			this.refreshVisibility(state, destination.coord);
@@ -3135,6 +3149,13 @@ export class MapScene implements Scene, TutorialPort {
 
 		// ALWAYS recompute room focus/privacy.
 		this.rebuildMapRenderWithFog(coord);
+		this.liveVisibilityObserverCoord = null;
+
+		/**
+		 * Local observer/fog/privacy changed. Any dynamic entity can genuinely become
+		 * visible/hidden, so this is one of the valid global visibility invalidations.
+		 */
+		this.dynamicWorld.observerChanged(this.game.session.viewedFloor, coord);
 	}
 
 	/** [R] dev shortcut: resets chests/units/hands locally without a LoadingScene round-trip. */
@@ -3171,15 +3192,15 @@ export class MapScene implements Scene, TutorialPort {
 		 * MapRenderer-owned terrain/wall Graphics.
 		 */
 		for (const unit of this.units) {
+			this.dynamicWorld.unregister(unit.state.id);
 			unit.mercenary.view.removeFromParent();
 		}
-
-		for (const monster of this.mapController.monsterSystem.all) {
-			monster.token.view.removeFromParent();
-		}
-
 		this.units = [];
+		/**
+		 * MonsterSystem now unregisters and destroys its own dynamic views.
+		 */
 		this.mapController.monsterSystem.reset();
+
 		this.spawnLocalUnit();
 		this.localUnit.mercenary.view.addChild(this.itemPopup);
 		this.itemPopup.visible = false;

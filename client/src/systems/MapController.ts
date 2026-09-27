@@ -1,4 +1,3 @@
-import type { Container } from "pixi.js";
 import * as RH from "@relic-hunter/shared";
 import type { Game } from "@/core/game/Game";
 import { BattleHost, type BattleHostResult } from "@/combat/BattleHost";
@@ -20,6 +19,7 @@ import type {
 	MovableToken,
 	MonsterEntity,
 } from "@/types/entities";
+import type { DynamicWorldRenderer } from "@/rendering/engine/dynamic/DynamicWorldRenderer";
 
 /**
  * Callbacks MapController needs back into MapScene — presentation
@@ -77,11 +77,11 @@ export class MapController {
 
 	constructor(
 		private game: Game,
-		worldDepthContainer: Container,
+		private readonly dynamicWorld: DynamicWorldRenderer,
 		private cb: MapControllerCallbacks,
 	) {
-		this.chestSystem = new ChestSystem(worldDepthContainer);
-		this.monsterSystem = new MonsterSystem(worldDepthContainer);
+		this.chestSystem = new ChestSystem(this.dynamicWorld);
+		this.monsterSystem = new MonsterSystem(this.dynamicWorld);
 		this.battleHost = new BattleHost(this.game);
 	}
 
@@ -253,6 +253,14 @@ export class MapController {
 		if (tier) {
 			this.cb.showFeedback(`👹 A ${tier} monster appears!`);
 		}
+	}
+
+	/**
+	 * Explicit dynamic-visibility invalidation for movement paths that bypass the
+	 * normal zone-strike movement helper.
+	 */
+	notifyEntityMoved(entityId: string): void {
+		this.dynamicWorld.notifyEntityMoved(entityId);
 	}
 
 	// ---------- Combat triggering ----------
@@ -564,6 +572,7 @@ export class MapController {
 		if (remaining.length > 0) {
 			await entity.token.moveAlongPath(remaining);
 		}
+		this.dynamicWorld.notifyEntityMoved(entity.state.id);
 	}
 
 	// ---------- Traps ----------

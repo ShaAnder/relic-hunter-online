@@ -29,6 +29,7 @@ import {
 	type VisualQuad,
 	type VisualSurfaceId,
 	type VisualUvs,
+	type CompiledDynamicBarrierAnchor,
 } from "./CompiledFloorVisual";
 import { compileTileTopology } from "./TileTopologyCompiler";
 
@@ -125,6 +126,7 @@ interface MutableChunkVisual {
 	terrainSurfaces: CompiledTerrainSurface[];
 	barrierSurfaces: CompiledBarrierSurface[];
 	connectors: CompiledConnectorVisual[];
+	dynamicBarriers: CompiledDynamicBarrierAnchor[];
 }
 
 interface MutableConnector {
@@ -164,6 +166,8 @@ export class MapVisualCompiler {
 		const terrainSurfaces: CompiledTerrainSurface[] = [];
 		const barrierSurfaces: CompiledBarrierSurface[] = [];
 		const connectors: CompiledConnectorVisual[] = [];
+		const dynamicBarriers: CompiledDynamicBarrierAnchor[] = [];
+
 		const mutableChunks = new Map<RenderChunkId, MutableChunkVisual>();
 		const connectorTouches = new Map<string, MutableConnector>();
 		const chunkFor = (chunkId: RenderChunkId): MutableChunkVisual => {
@@ -177,6 +181,7 @@ export class MapVisualCompiler {
 				terrainSurfaces: [],
 				barrierSurfaces: [],
 				connectors: [],
+				dynamicBarriers: [],
 			};
 			mutableChunks.set(chunkId, created);
 			return created;
@@ -192,6 +197,11 @@ export class MapVisualCompiler {
 		const pushBarrier = (surface: CompiledBarrierSurface): void => {
 			barrierSurfaces.push(surface);
 			chunkFor(surface.chunkId).barrierSurfaces.push(surface);
+		};
+
+		const pushDynamicBarrier = (anchor: CompiledDynamicBarrierAnchor): void => {
+			dynamicBarriers.push(anchor);
+			chunkFor(anchor.chunkId).dynamicBarriers.push(anchor);
 		};
 
 		// ------------------------------------------------------------
@@ -418,60 +428,103 @@ export class MapVisualCompiler {
 					? this.trueTileQuad(b, frontElevation)
 					: null;
 
-			const faceSurface: CompiledBarrierSurface = {
-				id: `barrier:${edgeId}:face` as VisualSurfaceId,
-				chunkId,
-				edgeId,
-				edge,
+			const faceMaterial = this.barrierMaterial(
 				barrier,
-				surface: "segment-face",
-				normalQuad: normalGeometry.face,
-				focusedQuad: focusedGeometry.face,
-				normalUvs: normalGeometry.faceUvs,
-				focusedUvs: focusedGeometry.faceUvs,
-				material: this.barrierMaterial(
-					barrier,
-					"segment-face",
-					normalGeometry.faceFallbackColor,
-					profile.segmentAlpha,
-				),
-				depth,
-				depthKey,
-				visibilityCoords: [a, b],
-				occluderQuad,
-			};
-			pushBarrier(faceSurface);
+				"segment-face",
+				normalGeometry.faceFallbackColor,
+				profile.segmentAlpha,
+			);
 
-			if (
+			const hasTop =
 				profile.showSegmentTop &&
-				normalGeometry.top &&
-				focusedGeometry.top &&
-				normalGeometry.topUvs &&
-				focusedGeometry.topUvs
-			) {
-				const topSurface: CompiledBarrierSurface = {
-					id: `barrier:${edgeId}:top` as VisualSurfaceId,
-					chunkId,
-					edgeId,
-					edge,
-					barrier,
-					surface: "segment-top",
-					normalQuad: normalGeometry.top,
-					focusedQuad: focusedGeometry.top,
-					normalUvs: normalGeometry.topUvs,
-					focusedUvs: focusedGeometry.topUvs,
-					material: this.barrierMaterial(
+				normalGeometry.top !== null &&
+				focusedGeometry.top !== null &&
+				normalGeometry.topUvs !== null &&
+				focusedGeometry.topUvs !== null;
+
+			const topMaterial = hasTop
+				? this.barrierMaterial(
 						barrier,
 						"segment-top",
 						profile.segmentTopColor,
 						profile.segmentAlpha,
-					),
+					)
+				: null;
+
+			/**
+			 * Doors are stateful world objects from Phase 4 onward.
+			 *
+			 * Their structural geometry is still compiled here, but the segment itself is
+			 * not inserted into StaticWorldRenderer batches. DynamicBarrierRenderer owns
+			 * the runtime view/state.
+			 *
+			 * Connector registration below remains shared/static so neighboring wall
+			 * junction topology is unchanged.
+			 */
+			if (barrier === RH.EdgeBarrier.Door) {
+				const anchor: CompiledDynamicBarrierAnchor = {
+					id: `dynamic-barrier:${edgeId}` as VisualSurfaceId,
+					chunkId,
+					edgeId,
+					edge,
+					barrier: RH.EdgeBarrier.Door,
 					depth,
 					depthKey,
 					visibilityCoords: [a, b],
-					occluderQuad: null,
+					normalFace: normalGeometry.face,
+					focusedFace: focusedGeometry.face,
+					normalFaceUvs: normalGeometry.faceUvs,
+					focusedFaceUvs: focusedGeometry.faceUvs,
+					faceMaterial,
+					normalTop: hasTop ? normalGeometry.top : null,
+					focusedTop: hasTop ? focusedGeometry.top : null,
+					normalTopUvs: hasTop ? normalGeometry.topUvs : null,
+					focusedTopUvs: hasTop ? focusedGeometry.topUvs : null,
+					topMaterial,
 				};
-				pushBarrier(topSurface);
+
+				pushDynamicBarrier(anchor);
+			} else {
+				const faceSurface: CompiledBarrierSurface = {
+					id: `barrier:${edgeId}:face` as VisualSurfaceId,
+					chunkId,
+					edgeId,
+					edge,
+					barrier,
+					surface: "segment-face",
+					normalQuad: normalGeometry.face,
+					focusedQuad: focusedGeometry.face,
+					normalUvs: normalGeometry.faceUvs,
+					focusedUvs: focusedGeometry.faceUvs,
+					material: faceMaterial,
+					depth,
+					depthKey,
+					visibilityCoords: [a, b],
+					occluderQuad,
+				};
+
+				pushBarrier(faceSurface);
+
+				if (hasTop) {
+					const topSurface: CompiledBarrierSurface = {
+						id: `barrier:${edgeId}:top` as VisualSurfaceId,
+						chunkId,
+						edgeId,
+						edge,
+						barrier,
+						surface: "segment-top",
+						normalQuad: normalGeometry.top!,
+						focusedQuad: focusedGeometry.top!,
+						normalUvs: normalGeometry.topUvs!,
+						focusedUvs: focusedGeometry.topUvs!,
+						material: topMaterial!,
+						depth,
+						depthKey,
+						visibilityCoords: [a, b],
+						occluderQuad: null,
+					};
+					pushBarrier(topSurface);
+				}
 			}
 
 			if (!profile.showConnector) {
@@ -523,11 +576,9 @@ export class MapVisualCompiler {
 				};
 
 				const barrier = RH.getEdgeBetween(compiled.edges, a, b);
-
 				if (barrier === RH.EdgeBarrier.None) {
 					continue;
 				}
-
 				compileBarrierSegment(a, b, barrier);
 			}
 		}
@@ -548,11 +599,9 @@ export class MapVisualCompiler {
 				};
 
 				const barrier = RH.getEdgeBetween(compiled.edges, a, b);
-
 				if (barrier === RH.EdgeBarrier.None) {
 					continue;
 				}
-
 				compileBarrierSegment(a, b, barrier);
 			}
 		}
@@ -625,6 +674,8 @@ export class MapVisualCompiler {
 				tiles: mutable.tiles,
 				terrainSurfaces: mutable.terrainSurfaces,
 				barrierSurfaces: mutable.barrierSurfaces,
+				// Stateful barrier anchors owned by this logical chunk.
+				dynamicBarriers: mutable.dynamicBarriers,
 				connectors: mutable.connectors,
 			});
 		}
@@ -638,6 +689,8 @@ export class MapVisualCompiler {
 			tiles,
 			terrainSurfaces,
 			barrierSurfaces,
+			// Floor-wide collection of dynamic barrier anchors.
+			dynamicBarriers,
 			connectors,
 			chunks,
 		};

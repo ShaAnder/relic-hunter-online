@@ -25,6 +25,7 @@ export interface VisualCompilerSnapshot {
 	depthKeys: number;
 	estimatedVertices: number;
 	estimatedTriangles: number;
+	dynamicBarriers: number;
 }
 
 /**
@@ -76,6 +77,10 @@ export function createVisualCompilerSnapshot(
 		depthKeys.add(surface.depthKey);
 	}
 
+	for (const anchor of compiled.dynamicBarriers) {
+		depthKeys.add(anchor.depthKey);
+	}
+
 	for (const connector of compiled.connectors) {
 		depthKeys.add(connector.depthKey);
 	}
@@ -87,6 +92,16 @@ export function createVisualCompilerSnapshot(
 	const tileQuadCount = compiled.tiles.length;
 	const terrainQuadCount = compiled.terrainSurfaces.length;
 	const barrierQuadCount = compiled.barrierSurfaces.length;
+
+	let dynamicBarrierQuadCount = 0;
+
+	for (const anchor of compiled.dynamicBarriers) {
+		dynamicBarrierQuadCount += 1;
+
+		if (anchor.topMaterial !== null) {
+			dynamicBarrierQuadCount += 1;
+		}
+	}
 
 	/**
 	 * Connectors are slightly different.
@@ -117,7 +132,11 @@ export function createVisualCompilerSnapshot(
 
 	// Total estimated number of quads the current compiled floor describes.
 	const estimatedQuads =
-		tileQuadCount + terrainQuadCount + barrierQuadCount + connectorQuadCount;
+		tileQuadCount +
+		terrainQuadCount +
+		barrierQuadCount +
+		dynamicBarrierQuadCount +
+		connectorQuadCount;
 
 	/**
 	 * Convert our quad estimate into vertex/triangle estimates
@@ -135,13 +154,12 @@ export function createVisualCompilerSnapshot(
 		tiles: compiled.tiles.length,
 		terrainSurfaces: compiled.terrainSurfaces.length,
 		barrierSurfaces: compiled.barrierSurfaces.length,
+		dynamicBarriers: compiled.dynamicBarriers.length,
 		connectors: compiled.connectors.length,
-
 		// get the number of chunks we have in our map
 		chunks: compiled.chunks.size,
 		// Set.size gives the number of UNIQUE depth keys collected above.
 		depthKeys: depthKeys.size,
-
 		estimatedVertices,
 		estimatedTriangles,
 	};

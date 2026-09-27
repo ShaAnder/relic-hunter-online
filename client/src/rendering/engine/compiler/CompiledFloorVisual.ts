@@ -1,5 +1,4 @@
 import type * as RH from "@relic-hunter/shared";
-
 import type { RenderChunkId } from "../chunks/ChunkCoord";
 import type { VisualMaterialRef } from "../materials/MaterialKey";
 import type { VisualDepthKey } from "../world/worldDepthKey";
@@ -82,29 +81,21 @@ export interface CompiledTileSurface {
  */
 export interface CompiledTerrainSurface {
 	id: VisualSurfaceId;
-
 	chunkId: RenderChunkId;
-
 	a: RH.GridCoord;
 	b: RH.GridCoord;
-
 	direction: "E" | "S";
-
 	quad: VisualQuad;
 	uvs: VisualUvs;
-
 	material: VisualMaterialRef;
-
 	/**
 	 * Exact legacy-compatible zIndex depth.
 	 */
 	depth: number;
-
 	/**
 	 * Quantized batching/grouping identity derived from depth.
 	 */
 	depthKey: VisualDepthKey;
-
 	visibilityCoords: readonly RH.GridCoord[];
 }
 
@@ -116,7 +107,6 @@ export interface CompiledTerrainSurface {
  */
 export interface CompiledBarrierSurface {
 	id: VisualSurfaceId;
-
 	chunkId: RenderChunkId;
 
 	/**
@@ -126,10 +116,8 @@ export interface CompiledBarrierSurface {
 	 * barrier type is a mutation of the same structural edge slot.
 	 */
 	edgeId: string;
-
 	edge: RH.StructuralEdgeRef;
 	barrier: RH.EdgeBarrier;
-
 	surface: "segment-face" | "segment-top";
 
 	/**
@@ -148,12 +136,9 @@ export interface CompiledBarrierSurface {
 	 */
 	normalUvs: VisualUvs;
 	focusedUvs: VisualUvs;
-
 	material: VisualMaterialRef;
-
 	depth: number;
 	depthKey: VisualDepthKey;
-
 	visibilityCoords: readonly RH.GridCoord[];
 
 	/**
@@ -166,6 +151,34 @@ export interface CompiledBarrierSurface {
 }
 
 /**
+ * One stateful barrier segment that must remain outside static world batches.
+ *
+ * Phase 4 currently uses this for Door. Both normal and focused geometry are
+ * still compiled up front; the runtime door renderer only chooses which
+ * prepared variant/state to display.
+ */
+export interface CompiledDynamicBarrierAnchor {
+	id: VisualSurfaceId;
+	chunkId: RenderChunkId;
+	edgeId: string;
+	edge: RH.StructuralEdgeRef;
+	barrier: RH.EdgeBarrier.Door;
+	depth: number;
+	depthKey: VisualDepthKey;
+	visibilityCoords: readonly RH.GridCoord[];
+	normalFace: VisualQuad;
+	focusedFace: VisualQuad;
+	normalFaceUvs: VisualUvs;
+	focusedFaceUvs: VisualUvs;
+	faceMaterial: VisualMaterialRef;
+	normalTop: VisualQuad | null;
+	focusedTop: VisualQuad | null;
+	normalTopUvs: VisualUvs | null;
+	focusedTopUvs: VisualUvs | null;
+	topMaterial: VisualMaterialRef | null;
+}
+
+/**
  * Contribution from one structural edge to a shared connector/post.
  *
  * Connector height is dynamic under room focus because different incident
@@ -173,11 +186,8 @@ export interface CompiledBarrierSurface {
  */
 export interface CompiledConnectorIncident {
 	edgeId: string;
-
 	barrier: RH.EdgeBarrier;
-
 	visibilityCoords: readonly RH.GridCoord[];
-
 	normalHeight: number;
 	focusedHeight: number;
 }
@@ -187,18 +197,14 @@ export interface CompiledConnectorIncident {
  */
 export interface CompiledConnectorVisual {
 	id: VisualSurfaceId;
-
 	chunkId: RenderChunkId;
-
 	vertex: RH.GridVertex;
-
 	base: VisualPoint;
 
 	/**
 	 * Lowest visible foundation position required by any incident edge.
 	 */
 	foundationBottomY: number;
-
 	/**
 	 * Highest-priority connector profile touching this vertex.
 	 */
@@ -211,10 +217,8 @@ export interface CompiledConnectorVisual {
 	 * room focus changes.
 	 */
 	incidents: readonly CompiledConnectorIncident[];
-
 	depth: number;
 	depthKey: VisualDepthKey;
-
 	visibilityCoords: readonly RH.GridCoord[];
 
 	/**
@@ -222,10 +226,8 @@ export interface CompiledConnectorVisual {
 	 * connector geometry.
 	 */
 	occluderQuads: readonly VisualQuad[];
-
 	leftMaterial: VisualMaterialRef;
 	rightMaterial: VisualMaterialRef;
-
 	topMaterial: VisualMaterialRef | null;
 }
 
@@ -234,14 +236,11 @@ export interface CompiledConnectorVisual {
  */
 export interface CompiledChunkVisual {
 	chunkId: RenderChunkId;
-
 	tiles: readonly CompiledTileSurface[];
-
 	terrainSurfaces: readonly CompiledTerrainSurface[];
-
 	barrierSurfaces: readonly CompiledBarrierSurface[];
-
 	connectors: readonly CompiledConnectorVisual[];
+	dynamicBarriers: readonly CompiledDynamicBarrierAnchor[];
 }
 
 /**
@@ -253,30 +252,22 @@ export interface CompiledChunkVisual {
 export interface CompiledFloorVisual {
 	floorIndex: number;
 	mapSeed: number;
-
 	width: number;
 	height: number;
-
 	chunkSize: number;
-
 	tiles: readonly CompiledTileSurface[];
-
 	terrainSurfaces: readonly CompiledTerrainSurface[];
-
 	barrierSurfaces: readonly CompiledBarrierSurface[];
-
 	connectors: readonly CompiledConnectorVisual[];
-
 	chunks: ReadonlyMap<RenderChunkId, CompiledChunkVisual>;
+	dynamicBarriers: readonly CompiledDynamicBarrierAnchor[];
 }
 
 /**
  * Stable structural edge identity.
  *
  * Barrier type is deliberately excluded:
- *
  *     north:4,6
- *
  * remains the same edge even if FullWall becomes Door, Fence, etc.
  */
 export function renderEdgeIdFor(edge: RH.StructuralEdgeRef): string {

@@ -1,20 +1,25 @@
 import type { Container } from "pixi.js";
-
+import { DynamicDepthController } from "@/rendering/engine/dynamic/DynamicDepthController";
 export { WORLD_DEPTH_BIAS } from "@/rendering/engine/world/worldDepthKey";
 
 /**
- * Legacy runtime helper.
+ * Compatibility shim for existing dynamic entities.
  *
- * The pure compiler does NOT import this module because this file depends
- * on Pixi.
- *
- * Existing dynamic entities may continue using it until their Phase 4
- * persistent depth handling replaces repeated zIndex writes.
+ * Each Pixi Container receives one persistent DynamicDepthController through a
+ * WeakMap. This lets Phase 4 improve dynamic depth behavior without forcing an
+ * unrelated rewrite of every entity class at the same time.
  */
+const controllers = new WeakMap<Container, DynamicDepthController>();
+
 export function setWorldDepth(
 	view: Container,
 	groundY: number,
 	bias = 0,
 ): void {
-	view.zIndex = groundY + bias;
+	let controller = controllers.get(view);
+	if (!controller) {
+		controller = new DynamicDepthController();
+		controllers.set(view, controller);
+	}
+	controller.update(view, groundY, bias);
 }

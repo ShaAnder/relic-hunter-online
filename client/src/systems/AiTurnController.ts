@@ -1117,6 +1117,7 @@ export class AiTurnController {
 					RH.recordFlee(unit.memory, retreatFrom, retreatTile);
 					// No applyZoneStrikes — Disengage is ZoC-immune, that's its whole point.
 					await unit.mercenary.moveAlongPath(retreatPath);
+					this.mapController.notifyEntityMoved(unit.state.id);
 					await this.cb.trySwitchFloor(unit, false);
 				}
 			}

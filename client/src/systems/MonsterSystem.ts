@@ -1,20 +1,17 @@
-import type { Container } from "pixi.js";
 import * as RH from "@relic-hunter/shared";
 import { MonsterToken } from "@/entities/Monster";
+import type { DynamicWorldRenderer } from "@/rendering/engine/dynamic/DynamicWorldRenderer";
 import type { MonsterEntity } from "@/types/entities";
 
 /**
- * Owns monster lifecycle — spawning, the boss, removal on death. Takes
- * an already-chosen spawn coord rather than picking one itself, since
- * that positioning logic is shared with hunter/boss spawning elsewhere
- * on MapScene, not monster-specific.
- * @author ShaAnder
+ * Owns monster gameplay/visual lifetime.
+ *
+ * DynamicWorldRenderer owns scene attachment + visibility registration.
  */
 export class MonsterSystem {
 	private monsters: MonsterEntity[] = [];
 	private boss: MonsterEntity | null = null;
 	private monsterSpawnIndex = 0;
-
 	private static readonly MONSTER_TIERS: RH.MonsterTier[] = [
 		"light",
 		"medium",
@@ -22,7 +19,7 @@ export class MonsterSystem {
 	];
 
 	constructor(
-		private worldDepthContainer: Container,
+		private readonly dynamicWorld: DynamicWorldRenderer,
 		private elevation?: Map<string, number>,
 	) {}
 
@@ -30,53 +27,48 @@ export class MonsterSystem {
 		return this.monsters;
 	}
 
-	/**
-	 * Clears the roster for a fresh map — caller (regenerateMap) already
-	 * wipes the visual container separately, this just resets the data
-	 * so shouldSpawn() doesn't stay permanently capped from a previous
-	 * map's monster count.
-	 */
 	reset(): void {
+		for (const monster of this.monsters) {
+			this.dynamicWorld.unregister(monster.state.id);
+			monster.token.view.destroy({
+				children: true,
+			});
+		}
 		this.monsters = [];
 		this.boss = null;
 		this.monsterSpawnIndex = 0;
 	}
-
 	get bossEntity(): MonsterEntity | null {
 		return this.boss;
 	}
 
 	livingMonsters(): MonsterEntity[] {
-		return this.monsters.filter((m) => m.state.currentHp > 0);
+		return this.monsters.filter((monster) => monster.state.currentHp > 0);
 	}
-
 	livingMonsterCoords(): RH.GridCoord[] {
-		return this.livingMonsters().map((m) => m.state.coord);
+		return this.livingMonsters().map((monster) => monster.state.coord);
 	}
-
-	/** Every monster's coord, living or not — for spawn-tile exclusion sets. */
 	occupiedCoordKeys(): string[] {
-		return this.monsters.map((m) => RH.coordKey(m.state.coord));
+		return this.monsters.map((monster) => RH.coordKey(monster.state.coord));
 	}
-
-	/** Cheap pre-check — call before doing any expensive spawn-tile search. */
 	shouldSpawn(rng: RH.RandomFn): boolean {
 		return RH.shouldSpawnMonster(this.monsters.length, rng);
 	}
 
-	/** Spawns the next-tier monster at coord. Returns the tier spawned, or null if shouldSpawn() would now say no. */
 	trySpawn(
 		coord: RH.GridCoord,
 		rng: RH.RandomFn,
-		floorIndex: number = 0,
+		floorIndex = 0,
 	): RH.MonsterTier | null {
-		if (!this.shouldSpawn(rng)) return null;
+		if (!this.shouldSpawn(rng)) {
+			return null;
+		}
 
 		const tier =
 			MonsterSystem.MONSTER_TIERS[
 				this.monsterSpawnIndex % MonsterSystem.MONSTER_TIERS.length
 			];
-		this.monsterSpawnIndex++;
+		this.monsterSpawnIndex += 1;
 
 		const state = RH.createMonster(
 			`monster_${Date.now()}_${this.monsterSpawnIndex}`,
@@ -85,15 +77,16 @@ export class MonsterSystem {
 			floorIndex,
 		);
 		const token = new MonsterToken(coord, tier, this.elevation);
-		this.worldDepthContainer.addChild(token.view);
-
-		const entity: MonsterEntity = { state, token };
+		const entity: MonsterEntity = {
+			state,
+			token,
+		};
 		this.monsters.push(entity);
+		this.registerDynamicMonster(entity);
 		return tier;
 	}
 
-	/** Spawns the boss at coord — always succeeds, no shouldSpawn gate (checkDeckExhaustion decides when this fires). */
-	spawnBoss(coord: RH.GridCoord, floorIndex: number = 0): MonsterEntity {
+	spawnBoss(coord: RH.GridCoord, floorIndex = 0): MonsterEntity {
 		const state = RH.createMonster(
 			`boss_${Date.now()}`,
 			"boss",
@@ -101,38 +94,56 @@ export class MonsterSystem {
 			floorIndex,
 		);
 		const token = new MonsterToken(coord, "boss", this.elevation);
-		this.worldDepthContainer.addChild(token.view);
-
-		const entity: MonsterEntity = { state, token };
+		const entity: MonsterEntity = {
+			state,
+			token,
+		};
 		this.boss = entity;
 		this.monsters.push(entity);
+		this.registerDynamicMonster(entity);
 		return entity;
 	}
 
-	/** Always-succeeds spawn with an explicit id/tier — the tutorial's single, controlled monster, not part of the normal rotation. */
 	spawnSpecific(
 		id: string,
 		tier: RH.MonsterTier,
 		coord: RH.GridCoord,
-		floorIndex: number = 0,
+		floorIndex = 0,
 	): MonsterEntity {
 		const state = RH.createMonster(id, tier, coord, floorIndex);
 		const token = new MonsterToken(coord, tier, this.elevation);
-		this.worldDepthContainer.addChild(token.view);
-
-		const entity: MonsterEntity = { state, token };
+		const entity: MonsterEntity = {
+			state,
+			token,
+		};
 		this.monsters.push(entity);
+		this.registerDynamicMonster(entity);
 		return entity;
 	}
 
-	/** Removes a dead monster from the board entirely — array entry and visual token both, not just letting HP sit at 0 forever. */
 	remove(monster: MonsterEntity): void {
 		const index = this.monsters.indexOf(monster);
-		if (index !== -1) this.monsters.splice(index, 1);
-		if (monster === this.boss) this.boss = null;
-		monster.token.view.removeFromParent();
+		if (index !== -1) {
+			this.monsters.splice(index, 1);
+		}
+		if (monster === this.boss) {
+			this.boss = null;
+		}
+		this.dynamicWorld.unregister(monster.state.id);
 		monster.token.view.destroy({
 			children: true,
+		});
+	}
+
+	private registerDynamicMonster(entity: MonsterEntity): void {
+		this.dynamicWorld.register({
+			id: entity.state.id,
+			kind: "monster",
+			view: entity.token.view,
+			renderKind: "procedural",
+			lifetime: "stateful",
+			getFloorIndex: () => entity.state.floorIndex,
+			getCoord: () => entity.state.coord,
 		});
 	}
 }
