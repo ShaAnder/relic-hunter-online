@@ -558,6 +558,7 @@ export class MapVisualCompiler {
 				b,
 				normalHeight,
 				focusedHeight,
+				depth,
 				occluderQuad,
 			);
 
@@ -572,6 +573,7 @@ export class MapVisualCompiler {
 				b,
 				normalHeight,
 				focusedHeight,
+				depth,
 				occluderQuad,
 			);
 		};
@@ -628,7 +630,19 @@ export class MapVisualCompiler {
 
 		for (const connector of connectorTouches.values()) {
 			const profile = barrierRenderProfileFor(connector.barrier);
-			const depth = connector.base.y + WORLD_DEPTH_BIAS.barrierConnector;
+			/**
+			 * A shared connector visually belongs to the barrier segments meeting here.
+			 *
+			 * Use the foreground-most incident boundary so the opaque post cannot fall
+			 * behind an actor while its attached fence/wall segment is in front.
+			 */
+			const incidentDepth = Math.max(
+				...connector.incidents.map((incident) => incident.depth),
+			);
+
+			const depth =
+				incidentDepth +
+				(WORLD_DEPTH_BIAS.barrierConnector - WORLD_DEPTH_BIAS.barrierSegment);
 
 			const ownerCoord: RH.GridCoord = {
 				x: this.clamp(connector.vertex.x, 0, compiled.grid.width - 1),
@@ -1166,6 +1180,7 @@ export class MapVisualCompiler {
 		b: RH.GridCoord,
 		normalHeight: number,
 		focusedHeight: number,
+		depth: number,
 		occluderQuad: VisualQuad | null,
 	): void {
 		const vertexKey = `${vertex.x},${vertex.y}`;
@@ -1203,6 +1218,7 @@ export class MapVisualCompiler {
 			visibilityCoords: [a, b],
 			normalHeight,
 			focusedHeight,
+			depth,
 		};
 		connector.incidents.push(incident);
 		this.addConnectorVisibilityCoord(connector, a);

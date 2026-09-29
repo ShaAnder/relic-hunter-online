@@ -1361,9 +1361,28 @@ export class MapScene implements Scene, TutorialPort {
 	}
 
 	private async beginPlayerTurn(): Promise<void> {
+		const returningToSameViewedFloor =
+			this.game.session.viewedFloor === this.localUnit.state.floorIndex;
+
 		this.spectatorObserver = null;
 
 		this.applyFloor(this.localUnit.state.floorIndex);
+
+		/**
+		 * Ending AI spectating changes the global visibility observer even when
+		 * the viewed floor itself did not change.
+		 *
+		 * A genuine floor change already invalidates all dynamic visibility through
+		 * setViewedFloor(). On the same floor we must explicitly invalidate because
+		 * setViewedFloor() correctly early-returns.
+		 */
+		if (returningToSameViewedFloor) {
+			this.dynamicWorld.observerChanged(
+				this.localUnit.state.floorIndex,
+				this.localUnit.state.coord,
+			);
+		}
+
 		this.camera.unlock();
 
 		if (this.localUnit.state.stunnedTurnsRemaining > 0) {

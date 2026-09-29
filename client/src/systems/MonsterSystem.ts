@@ -86,14 +86,22 @@ export class MonsterSystem {
 		return tier;
 	}
 
-	spawnBoss(coord: RH.GridCoord, floorIndex = 0): MonsterEntity {
+	spawnBoss(
+		coord: RH.GridCoord,
+		floorIndex = 0,
+		elevation?: Map<string, number>,
+	): MonsterEntity {
 		const state = RH.createMonster(
 			`boss_${Date.now()}`,
 			"boss",
 			coord,
 			floorIndex,
 		);
-		const token = new MonsterToken(coord, "boss", this.elevation);
+		/**
+		 * Bosses can spawn on any floor, so use that floor's elevation map rather
+		 * than assuming the MonsterSystem was constructed for the active floor.
+		 */
+		const token = new MonsterToken(coord, "boss", elevation ?? this.elevation);
 		const entity: MonsterEntity = {
 			state,
 			token,

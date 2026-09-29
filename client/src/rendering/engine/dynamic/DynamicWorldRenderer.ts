@@ -29,6 +29,7 @@ export class DynamicWorldRenderer {
 	private readonly visibility = new EntityVisibilitySystem();
 	// renderers currently selected floor
 	private viewedFloor = 0;
+	private readonly visibilityOverrides = new Map<string, boolean>();
 
 	constructor(
 		// pixi parent
@@ -51,7 +52,10 @@ export class DynamicWorldRenderer {
 		this.root.addChild(handle.view);
 		this.visibility.register({
 			id: handle.id,
-			evaluate: () => this.resolveVisibility(handle.snapshot()),
+			evaluate: () => {
+				const override = this.visibilityOverrides.get(handle.id);
+				return override ?? this.resolveVisibility(handle.snapshot());
+			},
 			apply: (visible) => {
 				handle.view.visible = visible;
 			},
@@ -64,6 +68,7 @@ export class DynamicWorldRenderer {
 	}
 
 	unregister(entityId: string): void {
+		this.visibilityOverrides.delete(entityId);
 		this.visibility.unregister(entityId);
 		const handle = this.registry.remove(entityId);
 		handle?.view.removeFromParent();
@@ -120,9 +125,26 @@ export class DynamicWorldRenderer {
 			entityId,
 		});
 	}
+	/**
+	 * Temporary presentation override for scripted reveals/cinematics.
+	 * null restores ordinary gameplay visibility immediately.
+	 */
+	setVisibilityOverride(entityId: string, visible: boolean | null): void {
+		if (!this.registry.get(entityId)) {
+			return;
+		}
+		if (visible === null) {
+			this.visibilityOverrides.delete(entityId);
+		} else {
+			this.visibilityOverrides.set(entityId, visible);
+		}
+
+		this.notifyEntityStateChanged(entityId);
+	}
 
 	clear(): void {
 		this.visibility.clear();
+		this.visibilityOverrides.clear();
 		for (const handle of this.registry.values()) {
 			handle.view.removeFromParent();
 		}

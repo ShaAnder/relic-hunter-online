@@ -193,6 +193,14 @@ export interface CompiledConnectorIncident {
 	visibilityCoords: readonly RH.GridCoord[];
 	normalHeight: number;
 	focusedHeight: number;
+
+	/**
+	 * Painter depth of the barrier segment this connector belongs to.
+	 *
+	 * Shared posts use their incident segment depths so they stay visually
+	 * attached to the barriers rather than sorting as unrelated point objects.
+	 */
+	depth: number;
 }
 
 /**

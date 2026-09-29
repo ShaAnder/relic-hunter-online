@@ -263,6 +263,10 @@ export class MapController {
 		this.dynamicWorld.notifyEntityMoved(entityId);
 	}
 
+	setEntityVisibilityOverride(entityId: string, visible: boolean | null): void {
+		this.dynamicWorld.setVisibilityOverride(entityId, visible);
+	}
+
 	// ---------- Combat triggering ----------
 
 	async monsterAttack(

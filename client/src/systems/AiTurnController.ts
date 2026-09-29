@@ -1125,22 +1125,122 @@ export class AiTurnController {
 	}
 
 	/**
-	 * Fires exactly once, the first round the shared deck genuinely
-	 * runs dry — warning, screen shake, then the boss spawns far from
-	 * every living hunter.
+	 * Fires exactly once, the first round the shared deck genuinely runs dry.
+	 *
+	 * The boss chooses a floor first, then a free spawn tile on that floor.
+	 * Choosing the floor first prevents larger floors from becoming more likely
+	 * simply because they contain more walkable tiles.
 	 */
 	private async checkDeckExhaustion(): Promise<void> {
 		if (this.cb.isTutorial()) return;
 		if (this.game.session.bossSpawned) return;
 		if ((this.game.session.sharedDeck?.length ?? 1) > 0) return;
 
-		this.game.session.bossSpawned = true;
+		const floors = this.game.session.mapFloors;
 
+		if (!floors?.length) {
+			return;
+		}
+
+		const rng = this.game.session.rng;
+
+		/**
+		 * Entity coordinates are only unique within a floor, so include the floor
+		 * in the occupancy key.
+		 */
+		const occupied = new Set<string>();
+
+		for (const unit of this.cb.getUnits()) {
+			if (unit.state.currentHp <= 0) continue;
+
+			occupied.add(`${unit.state.floorIndex}:${RH.coordKey(unit.state.coord)}`);
+		}
+
+		for (const monster of this.mapController.monsterSystem.all) {
+			if (monster.state.currentHp <= 0) continue;
+
+			occupied.add(
+				`${monster.state.floorIndex}:${RH.coordKey(monster.state.coord)}`,
+			);
+		}
+
+		/**
+		 * Build candidates separately for every floor.
+		 *
+		 * We prefer tiles at least four Manhattan steps from every living hunter
+		 * already on that floor. A floor with no hunters naturally treats every
+		 * free walkable tile as preferred.
+		 */
+		const candidatesByFloor = floors
+			.map((floor, floorIndex) => {
+				const preferred: RH.GridCoord[] = [];
+				const fallback: RH.GridCoord[] = [];
+				const huntersOnFloor = this.cb
+					.getUnits()
+					.filter(
+						(unit) =>
+							unit.state.currentHp > 0 && unit.state.floorIndex === floorIndex,
+					);
+				for (let y = 0; y < floor.grid.height; y++) {
+					for (let x = 0; x < floor.grid.width; x++) {
+						const coord: RH.GridCoord = {
+							x,
+							y,
+						};
+						if (!floor.grid.isWalkable(coord)) {
+							continue;
+						}
+						if (occupied.has(`${floorIndex}:${RH.coordKey(coord)}`)) {
+							continue;
+						}
+						fallback.push(coord);
+						const farFromEveryHunter = huntersOnFloor.every((unit) => {
+							const distance =
+								Math.abs(coord.x - unit.state.coord.x) +
+								Math.abs(coord.y - unit.state.coord.y);
+							return distance >= 4;
+						});
+						if (farFromEveryHunter) {
+							preferred.push(coord);
+						}
+					}
+				}
+				const coords = preferred.length > 0 ? preferred : fallback;
+				return {
+					floorIndex,
+					floor,
+					coords,
+				};
+			})
+			.filter((entry) => entry.coords.length > 0);
+
+		/**
+		 * If no floor has a valid free tile, don't mark the boss as spawned.
+		 * That leaves a future turn able to retry instead of permanently losing
+		 * the boss because one spawn attempt had nowhere legal to go.
+		 */
+		if (candidatesByFloor.length === 0) {
+			return;
+		}
+
+		/**
+		 * Pick the floor first so every eligible floor has equal probability.
+		 */
+		const selectedFloor =
+			candidatesByFloor[Math.floor(rng() * candidatesByFloor.length)];
+		const coord =
+			selectedFloor.coords[Math.floor(rng() * selectedFloor.coords.length)];
+		const bossFloorIndex = selectedFloor.floorIndex;
+
+		/**
+		 * From here onward the spawn is committed.
+		 */
+		this.game.session.bossSpawned = true;
 		this.cb.showFeedback(
 			"⚠️ The deck is exhausted — something massive has arrived.",
 		);
-		this.cb.playBossAudio();
 
+		this.cb.playBossAudio();
 		const SHAKE_MS = 5000;
 		await Promise.all([
 			this.cb.showBossAlert(SHAKE_MS),
@@ -1150,29 +1250,73 @@ export class AiTurnController {
 			]),
 		]);
 
-		const used = new Set<string>(
-			this.cb.getUnits().map((u) => RH.coordKey(u.state.coord)),
+		/**
+		 * The boss reveal is a scripted spectator moment even when ordinary
+		 * cross-floor enemy spectating is disabled by fog.
+		 *
+		 * Preserve the previous AI-turn policy so the cinematic cannot permanently
+		 * change normal enemy-turn visibility rules.
+		 */
+		const wasCrossFloorSpectating = this.crossFloorSpectating;
+		this.crossFloorSpectating = true;
+
+		/**
+		 * Switch the rendered floor before registering the boss so its scene
+		 * attachment and presentation are evaluated against the floor on which
+		 * it actually exists.
+		 */
+		this.cb.viewFloorForSpectating(bossFloorIndex, coord);
+		const boss = this.mapController.monsterSystem.spawnBoss(
+			coord,
+			bossFloorIndex,
+			selectedFloor.floor.elevation,
 		);
-		for (const key of this.mapController.monsterSystem.occupiedCoordKeys())
-			used.add(key);
-		const coord = this.cb.pickEnemySpawnTile(used);
-		if (!coord) return;
 
-		const boss = this.mapController.monsterSystem.spawnBoss(coord);
-		this.cb.showFeedback("👹 The boss has entered the map.");
+		/**
+		 * The reveal is intentionally stronger than ordinary fog/privacy.
+		 *
+		 * Registration normally evaluates gameplay visibility immediately, which
+		 * is correct for ordinary monster spawns. The boss cinematic explicitly
+		 * promises to show this entity, so temporarily override only this token.
+		 */
+		this.mapController.setEntityVisibilityOverride(boss.state.id, true);
+		try {
+			this.cb.showFeedback("👹 The boss has entered the map.");
+			const PAN_MS = 900;
 
-		const PAN_MS = 900;
-		await Promise.race([
-			this.camera.panTo(
-				{ x: boss.token.view.x, y: boss.token.view.y },
-				PAN_MS,
-				this.screenSize.width,
-				this.screenSize.height,
-			),
-			this.cb.delay(PAN_MS + 500),
-		]);
+			await Promise.race([
+				this.camera.panTo(
+					{
+						x: boss.token.view.x,
+						y: boss.token.view.y,
+					},
+					PAN_MS,
+					this.screenSize.width,
+					this.screenSize.height,
+				),
+				this.cb.delay(PAN_MS + 500),
+			]);
 
-		await this.cb.delay(1000);
+			await this.cb.delay(1000);
+		} finally {
+			/**
+			 * Cinematic visibility is temporary. The boss now returns to the same
+			 * normal visibility rules as every other monster.
+			 */
+			this.mapController.setEntityVisibilityOverride(boss.state.id, null);
+			this.crossFloorSpectating = wasCrossFloorSpectating;
+
+			/**
+			 * With fog enabled, normal cross-floor spectating was previously off.
+			 * Return the renderer to the local player's floor after the reveal.
+			 *
+			 * When cross-floor spectating was already active, leave the turn loop
+			 * in control; the next AI/monster turn will select its own viewed floor.
+			 */
+			if (!wasCrossFloorSpectating) {
+				this.cb.applyFloor(this.cb.getLocalUnit().state.floorIndex);
+			}
+		}
 	}
 
 	private async processMonsterTurns(): Promise<void> {
