@@ -2,7 +2,6 @@ import { Container, Graphics, Text } from "pixi.js";
 import type { Scene } from "@/core/scenes/Scene";
 import type { Game } from "@/core/game/Game";
 import { CameraController } from "@/core/cameras/CameraController";
-import { MapRenderer } from "@/rendering/MapRenderer";
 import { EngineCompilerHarness } from "@/rendering/engine/EngineCompilerHarness";
 import {
 	gridToScreen,
@@ -76,8 +75,6 @@ export class MapScene implements Scene, TutorialPort {
 	private grid: RH.Grid;
 	private boardContainer = new Container();
 
-	private lowerFloorTilesContainer = new Container();
-
 	/**
 	 * Engine-owned decorative lower-floor context.
 	 *
@@ -95,7 +92,6 @@ export class MapScene implements Scene, TutorialPort {
 	 * accidentally destroying engine-owned GPU meshes.
 	 */
 	private engineGroundContainer = new Container();
-	private tilesContainer = new Container();
 	private groundOverlayContainer = new Container();
 
 	private worldDepthContainer = new Container();
@@ -119,8 +115,6 @@ export class MapScene implements Scene, TutorialPort {
 
 	// Systems
 	private camera: CameraController;
-	private lowerFloorMapRenderer!: MapRenderer;
-	private mapRenderer!: MapRenderer;
 
 	/**
 	 * The decorative lower-floor underlay is structural presentation.
@@ -132,7 +126,6 @@ export class MapScene implements Scene, TutorialPort {
 	private lowerFloorUnderlaySource: RH.CompiledEdgeMap | null = null;
 	private lowerFloorUnderlayIndex: number | null = null;
 	private lowerFloorUnderlayMapSeed: number | null = null;
-	private lowerFloorUnderlayBackend: "legacy" | "engine" | null = null;
 
 	/**
 
@@ -143,24 +136,6 @@ export class MapScene implements Scene, TutorialPort {
 	 * or an explicit invalidation.
 	 */
 	private readonly engineCompiler = new EngineCompilerHarness();
-
-	/**
-	 * Opt-in migration flag. Use `?engineGround=1` while Phase 2 is being proven.
-	 * Removing the query parameter keeps the known-good legacy ground renderer.
-	 */
-	private readonly useEngineGround =
-		typeof window !== "undefined" &&
-		new URLSearchParams(window.location.search).has("engineGround");
-
-	/**
-	 * Phase 3 migration flag.
-	 *
-	 * `engineWorld` implies engine ground because testing the new static world
-	 * against the legacy tile-top path would create a misleading mixed backend.
-	 */
-	private readonly useEngineWorld =
-		typeof window !== "undefined" &&
-		new URLSearchParams(window.location.search).has("engineWorld");
 
 	/**
 	 * Constructor-time floor setup can run before material preload finishes.
@@ -419,10 +394,7 @@ export class MapScene implements Scene, TutorialPort {
 		this.rebuildMapRenderWithFog();
 	}
 
-	private rebuildLowerFloorUnderlay(
-		viewedFloor: number,
-		engineWorldActive: boolean,
-	): void {
+	private rebuildLowerFloorUnderlay(viewedFloor: number): void {
 		const floors = this.game.session.mapFloors;
 
 		const groundFloorIndex =
@@ -432,9 +404,6 @@ export class MapScene implements Scene, TutorialPort {
 
 		/**
 		 * Ground/basement views do not need a decorative lower-floor underlay.
-		 *
-		 * clearLowerFloorUnderlay() now handles both rendering backends:
-		 * it clears a legacy underlay or detaches the cached engine underlay.
 		 */
 		if (!floors || viewedFloor <= groundFloorIndex) {
 			this.clearLowerFloorUnderlay();
@@ -452,125 +421,69 @@ export class MapScene implements Scene, TutorialPort {
 		const mapSeed = this.game.session.mapSeed ?? 0;
 
 		/**
-		 * The same lower floor can be rendered by two different backends during
-		 * scene startup: legacy before materials are ready, then engine afterward.
-		 *
-		 * Backend is therefore part of the underlay identity.
+		 * Structural inputs define the cached underlay identity.
+		 * Fog and room focus do not participate because the lower floor is always
+		 * rendered as washed decorative context.
 		 */
-		const backend = engineWorldActive ? "engine" : "legacy";
 		const cacheMatches =
 			this.lowerFloorUnderlaySource === lowerFloor &&
 			this.lowerFloorUnderlayIndex === lowerFloorIndex &&
-			this.lowerFloorUnderlayMapSeed === mapSeed &&
-			this.lowerFloorUnderlayBackend === backend;
+			this.lowerFloorUnderlayMapSeed === mapSeed;
+
 		if (cacheMatches) {
 			return;
 		}
-		if (engineWorldActive) {
-			/**
-			 * A legacy underlay may have been built before engine materials finished
-			 * loading. Remove only those legacy-owned resources before switching the
-			 * underlay to the engine renderer.
-			 */
-			this.lowerFloorMapRenderer.clear();
 
-			this.lowerFloorTilesContainer.visible = false;
+		const compiledVisual = this.engineCompiler.compile(lowerFloor, {
+			mapSeed,
+			floorIndex: lowerFloorIndex,
+			wallHeightScale: MapScene.LOWER_FLOOR_WALL_HEIGHT_SCALE,
+		});
 
-			/**
-			 * Compile the decorative lower floor separately because its wall-height
-			 * scale differs from the active floor. EngineCompilerHarness includes
-			 * wallHeightScale in its cache identity.
-			 */
-			const compiledVisual = this.engineCompiler.compile(lowerFloor, {
-				mapSeed,
-				floorIndex: lowerFloorIndex,
-				wallHeightScale: MapScene.LOWER_FLOOR_WALL_HEIGHT_SCALE,
-			});
+		this.lowerFloorRenderer.mount(compiledVisual, {
+			renderWorld: true,
+		});
 
-			/**
-			 * lowerFloorRenderer is a separate FloorRenderer/cache from the active
-			 * floor renderer. Its resources live under the dedicated underlay roots.
-			 */
-			this.lowerFloorRenderer.mount(compiledVisual, {
-				renderWorld: true,
-			});
+		this.lowerFloorRenderer.updatePresentation({
+			fog: null,
+			focusRoom: null,
+			forceWashed: true,
+		});
 
-			/**
-			 * The lower floor is decorative context rather than a live observed floor.
-			 * It therefore receives no fog/focus observer and is always washed.
-			 */
-			this.lowerFloorRenderer.updatePresentation({
-				fog: null,
-				focusRoom: null,
-				forceWashed: true,
-			});
+		this.lowerFloorEngineContainer.visible = true;
+		this.lowerFloorEngineContainer.alpha = MapScene.LOWER_FLOOR_ALPHA;
 
-			this.lowerFloorEngineContainer.visible = true;
-			this.lowerFloorEngineContainer.alpha = MapScene.LOWER_FLOOR_ALPHA;
-			this.lowerFloorEngineContainer.y = MapScene.LOWER_FLOOR_Y_OFFSET;
-		} else {
-			/**
-			 * Engine world rendering is unavailable/disabled, so fall back to the
-			 * existing legacy MapRenderer implementation.
-			 *
-			 * deactivate() only detaches an engine runtime if one was previously
-			 * active; it deliberately keeps that runtime cached.
-			 */
-			this.lowerFloorRenderer.deactivate();
-			this.lowerFloorEngineContainer.visible = false;
-			this.lowerFloorTilesContainer.visible = true;
-			this.lowerFloorMapRenderer.build(
-				lowerFloor,
-				null,
-				null,
-				true,
-				MapScene.LOWER_FLOOR_WALL_HEIGHT_SCALE,
-				{
-					mapSeed,
-					floorIndex: lowerFloorIndex,
-				},
-			);
-			this.lowerFloorTilesContainer.alpha = MapScene.LOWER_FLOOR_ALPHA;
-			this.lowerFloorTilesContainer.y = MapScene.LOWER_FLOOR_Y_OFFSET;
-			perf.incrementCounter("scene.lowerFloorUnderlayBuilds");
-		}
-		/**
-		 * Record exactly which underlay is now being displayed.
-		 *
-		 * Backend matters: the structural inputs could be identical while startup
-		 * transitions from legacy rendering to the engine renderer.
-		 */
+		this.lowerFloorEngineContainer.y = MapScene.LOWER_FLOOR_Y_OFFSET;
+
 		this.lowerFloorUnderlaySource = lowerFloor;
 		this.lowerFloorUnderlayIndex = lowerFloorIndex;
 		this.lowerFloorUnderlayMapSeed = mapSeed;
-		this.lowerFloorUnderlayBackend = backend;
 	}
 
 	/**
 	 * Remove a mounted decorative lower floor and invalidate its cache identity.
 	 */
 	private clearLowerFloorUnderlay(): void {
-		const hasLegacyUnderlay = this.lowerFloorTilesContainer.children.length > 0;
-		if (hasLegacyUnderlay) {
-			this.lowerFloorMapRenderer.clear();
-		}
 		this.lowerFloorRenderer.deactivate();
-		this.lowerFloorTilesContainer.visible = false;
-		this.lowerFloorTilesContainer.alpha = 1;
-		this.lowerFloorTilesContainer.y = 0;
+
 		this.lowerFloorEngineContainer.visible = false;
 		this.lowerFloorEngineContainer.alpha = 1;
 		this.lowerFloorEngineContainer.y = 0;
+
 		this.lowerFloorUnderlaySource = null;
 		this.lowerFloorUnderlayIndex = null;
 		this.lowerFloorUnderlayMapSeed = null;
-		this.lowerFloorUnderlayBackend = null;
 	}
 
 	private rebuildMapRenderWithFog(liveCoordOverride?: RH.GridCoord): void {
 		const endPerf = perf.start("scene.rebuildMapRenderWithFog");
-		const viewedFloor = this.game.session.viewedFloor;
 
+		if (!this.renderMaterialsReady) {
+			endPerf();
+			return;
+		}
+
+		const viewedFloor = this.game.session.viewedFloor;
 		const compiled: RH.CompiledEdgeMap = this.game.session.mapFloors?.[
 			viewedFloor
 		] ?? {
@@ -596,13 +509,9 @@ export class MapScene implements Scene, TutorialPort {
 			floorIndex: viewedFloor,
 		});
 
-		const engineWorldActive = this.renderMaterialsReady && this.useEngineWorld;
-		const engineGroundActive =
-			this.renderMaterialsReady && (this.useEngineGround || engineWorldActive);
-
 		// Keep the floor immediately beneath an upper floor visible as
 		// muted structural context.
-		this.rebuildLowerFloorUnderlay(viewedFloor, engineWorldActive);
+		this.rebuildLowerFloorUnderlay(viewedFloor);
 
 		/**
 		 * If the camera is currently following an AI hunter or monster on
@@ -660,54 +569,15 @@ export class MapScene implements Scene, TutorialPort {
 					}
 				: null;
 
-		this.engineGroundContainer.visible = engineGroundActive;
+		this.floorRenderer.mount(compiledVisual, {
+			renderWorld: true,
+		});
 
-		/**
-		 * Legacy tile Graphics and Reactor ground meshes are alternative owners of
-		 * the active floor's ground. Never leave stale legacy tiles visible behind
-		 * the engine path.
-		 */
-		this.tilesContainer.visible = !engineGroundActive;
-
-		/**
-		 * MapRenderer can already have built the floor before material preload
-		 * finishes. Once Reactor owns the static world, explicitly remove those
-		 * legacy-owned world views instead of merely skipping future builds.
-		 */
-		if (engineWorldActive) {
-			this.mapRenderer.clear();
-		}
-
-		if (engineGroundActive) {
-			this.floorRenderer.mount(compiledVisual, {
-				renderWorld: engineWorldActive,
-			});
-
-			this.floorRenderer.updatePresentation({
-				fog,
-				focusRoom: focus,
-				forceWashed: false,
-			});
-		}
-
-		if (!engineWorldActive) {
-			perf.incrementCounter("scene.legacyPresentationRebuilds");
-			this.mapRenderer.build(
-				compiled,
-				focus,
-				fog,
-				false,
-				1,
-				{
-					mapSeed: this.game.session.mapSeed ?? 0,
-					floorIndex: viewedFloor,
-				},
-				{
-					renderGround: !engineGroundActive,
-					renderWorld: true,
-				},
-			);
-		}
+		this.floorRenderer.updatePresentation({
+			fog,
+			focusRoom: focus,
+			forceWashed: false,
+		});
 
 		endPerf();
 	}
@@ -831,10 +701,8 @@ export class MapScene implements Scene, TutorialPort {
 		this.lowerFloorEngineContainer.visible = false;
 
 		this.boardContainer.addChild(
-			this.lowerFloorTilesContainer,
 			this.lowerFloorEngineContainer,
 			this.engineGroundContainer,
-			this.tilesContainer,
 			this.groundOverlayContainer,
 			this.worldDepthContainer,
 			this.foregroundOverlayContainer,
@@ -939,13 +807,6 @@ export class MapScene implements Scene, TutorialPort {
 					this.rebuildMapRenderWithFog();
 				},
 			},
-		);
-
-		this.lowerFloorMapRenderer = new MapRenderer(this.lowerFloorTilesContainer);
-
-		this.mapRenderer = new MapRenderer(
-			this.tilesContainer,
-			this.worldDepthContainer,
 		);
 
 		this.applyCameraBounds();
@@ -1104,10 +965,10 @@ export class MapScene implements Scene, TutorialPort {
 
 	/** Tear down visuals and input listeners. */
 	onExit(): void {
+		this.clearLowerFloorUnderlay();
 		this.floorRenderer.destroy();
 		this.lowerFloorRenderer.destroy();
 		this.dynamicWorld.clear();
-		this.clearLowerFloorUnderlay();
 		this.moveController.exit();
 		this.hud.closeActionMenu();
 		this.boardContainer.removeChildren();
