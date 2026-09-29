@@ -10,7 +10,7 @@ import {
 import { gridToScreen, TILE_WIDTH, TILE_HEIGHT } from "@/math/isoGridMath";
 import * as RH from "@relic-hunter/shared";
 import { fillForTileCode } from "./tileFills";
-import { WORLD_DEPTH_BIAS } from "./worldDepth";
+import { WORLD_DEPTH_BIAS, worldBoundaryDepth } from "./worldDepth";
 import {
 	barrierRenderProfileFor,
 	connectorPriorityFor,
@@ -876,7 +876,12 @@ export class MapRenderer {
 
 		return {
 			layer: "world",
-			depth: Math.max(a1.y, a2.y, b1.y, b2.y) + WORLD_DEPTH_BIAS.terrainFace,
+
+			depth: worldBoundaryDepth(
+				aCorners.center.y,
+				bCorners.center.y,
+				WORLD_DEPTH_BIAS.terrainFace,
+			),
 
 			draw: () => {
 				const g = new Graphics();
@@ -934,6 +939,13 @@ export class MapRenderer {
 		const foundationElevation =
 			RH.edgeFoundationHeight(compiled, edge) ??
 			Math.min(startElevation, endElevation);
+
+		const supportElevation =
+			RH.edgeSupportHeight(compiled, edge) ??
+			Math.max(startElevation, endElevation);
+
+		const supportBase1 = this.vertexScreenPoint(startVertex, supportElevation);
+		const supportBase2 = this.vertexScreenPoint(endVertex, supportElevation);
 
 		const centerBase1 = this.vertexScreenPoint(startVertex, startElevation);
 		const centerBase2 = this.vertexScreenPoint(endVertex, endElevation);
@@ -1011,7 +1023,7 @@ export class MapRenderer {
 			 * visual skirt must not make the whole wall/fence behave as though its
 			 * ground-contact point were down there.
 			 */
-			depth: Math.max(centerBase1.y, centerBase2.y),
+			depth: worldBoundaryDepth(supportBase1.y, supportBase2.y),
 		};
 	}
 

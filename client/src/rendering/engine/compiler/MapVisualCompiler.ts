@@ -15,7 +15,11 @@ import {
 	tileVariantHash,
 	type VisualMaterialRef,
 } from "../materials/MaterialKey";
-import { WORLD_DEPTH_BIAS, worldDepthKey } from "../world/worldDepthKey";
+import {
+	WORLD_DEPTH_BIAS,
+	worldDepthKey,
+	worldBoundaryDepth,
+} from "../world/worldDepthKey";
 import {
 	renderEdgeIdFor,
 	type CompiledBarrierSurface,
@@ -316,8 +320,20 @@ export class MapVisualCompiler {
 					? [aCorners.right, aCorners.bottom, bCorners.top, bCorners.left]
 					: [aCorners.bottom, aCorners.left, bCorners.right, bCorners.top];
 			const quad: VisualQuad = [a1, a2, b2, b1];
-			const depth =
-				Math.max(a1.y, a2.y, b1.y, b2.y) + WORLD_DEPTH_BIAS.terrainFace;
+			/**
+			 * Sort the vertical terrain face at the logical boundary between the
+			 * two tile ground contacts.
+			 *
+			 * Geometry still spans the complete elevation difference. Painter depth
+			 * answers a different question: when should an actor transition from
+			 * behind this terrain boundary to in front of it?
+			 */
+			const depth = worldBoundaryDepth(
+				aCorners.center.y,
+				bCorners.center.y,
+				WORLD_DEPTH_BIAS.terrainFace,
+			);
+
 			const chunkId = renderChunkIdForTile(a, chunkSize);
 			const surface: CompiledTerrainSurface = {
 				id: `terrain:${a.x},${a.y}:${direction}` as VisualSurfaceId,
@@ -901,6 +917,20 @@ export class MapVisualCompiler {
 			RH.edgeFoundationHeight(compiled, edge) ??
 			Math.min(startElevation, endElevation);
 
+		/**
+		 * Painter ordering belongs to the architectural edge itself.
+		 *
+		 * Junction heights can be influenced by connected walls so their geometry
+		 * joins cleanly. Sorting should instead use the midpoint of THIS edge<s
+		 * support plane.
+		 */
+		const supportElevation =
+			RH.edgeSupportHeight(compiled, edge) ??
+			Math.max(startElevation, endElevation);
+
+		const supportBase1 = this.vertexScreenPoint(startVertex, supportElevation);
+		const supportBase2 = this.vertexScreenPoint(endVertex, supportElevation);
+
 		const centerBase1 = this.vertexScreenPoint(startVertex, startElevation);
 		const centerBase2 = this.vertexScreenPoint(endVertex, endElevation);
 		const foundationCenter1 = this.vertexScreenPoint(
@@ -990,12 +1020,14 @@ export class MapVisualCompiler {
 				Math.abs(foundationCenter2.y - centerBase2.y) > EPSILON,
 
 			/**
-			 * Important:
+			 * Sort at the middle of the structural support edge.
 			 *
-			 * foundation skirts may extend downward, but they must not alter
-			 * the architectural depth of the wall itself.
+			 * On a flat floor this is exactly halfway between the projected ground
+			 * depths of the two tiles separated by the barrier. An actor therefore
+			 * changes sides in painter order when it actually crosses the boundary,
+			 * rather than when it reaches the foreground endpoint<s depth.
 			 */
-			depth: Math.max(centerBase1.y, centerBase2.y),
+			depth: worldBoundaryDepth(supportBase1.y, supportBase2.y),
 		};
 	}
 

@@ -115,7 +115,7 @@ void main() {
  */
 export interface StaticWorldMeshIdentity {
 	depthKey: VisualDepthKey;
-	chunkId: RenderChunkId;
+	chunkIds: readonly RenderChunkId[];
 }
 
 /**
@@ -240,13 +240,13 @@ export function createStaticWorldMesh(
 	mesh.label = [
 		"static-world",
 		identity.depthKey,
-		identity.chunkId,
+		`${identity.chunkIds.length}-chunks`,
 		material.batchKey,
 	].join(":");
 
 	return {
 		depthKey: identity.depthKey,
-		chunkId: identity.chunkId,
+		chunkIds: identity.chunkIds,
 		materialKey: material.batchKey,
 		mesh,
 		geometry,

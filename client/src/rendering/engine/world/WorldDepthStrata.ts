@@ -1,20 +1,17 @@
 import { Container } from "pixi.js";
-import type { RenderChunkId } from "../chunks/ChunkCoord";
 import type { StaticWorldMeshHandle } from "./StaticWorldMeshHandle";
 import { depthFromKey, type VisualDepthKey } from "./worldDepthKey";
 
 interface DepthStratum {
 	root: Container;
-
-	chunks: Map<RenderChunkId, Container>;
 }
 
 /**
- * Owns only the static container hierarchy inserted into the shared world
- * depth root.
+ * Owns only the exact static depth strata inserted into the shared world root.
  *
- * Dynamic actors remain direct children of the same worldDepthRoot. Each
- * static stratum is also a direct child so Pixi can interleave them correctly.
+ * Dynamic actors remain direct children of worldDepthRoot. Each exact static
+ * stratum is also a direct child so Pixi can interleave dynamic objects between
+ * neighboring static depths.
  */
 export class WorldDepthStrata {
 	private readonly strata = new Map<VisualDepthKey, DepthStratum>();
@@ -25,8 +22,7 @@ export class WorldDepthStrata {
 	}
 
 	mount(handle: StaticWorldMeshHandle): void {
-		const chunkRoot = this.chunkRoot(handle.depthKey, handle.chunkId);
-		chunkRoot.addChild(handle.mesh);
+		this.stratumFor(handle.depthKey).root.addChild(handle.mesh);
 	}
 
 	get stratumCount(): number {
@@ -38,18 +34,11 @@ export class WorldDepthStrata {
 	}
 
 	/**
-	 * Remove only containers owned by this static-world hierarchy.
-	 *
-	 * Mesh resources themselves are destroyed by StaticWorldRenderer before
-	 * this method runs.
+	 * Mesh resources are destroyed by StaticWorldRenderer before this runs.
+	 * This method owns only the stratum Containers.
 	 */
 	clear(): void {
 		for (const stratum of this.strata.values()) {
-			for (const chunkRoot of stratum.chunks.values()) {
-				chunkRoot.removeChildren();
-				chunkRoot.removeFromParent();
-				chunkRoot.destroy();
-			}
 			stratum.root.removeChildren();
 			stratum.root.removeFromParent();
 			stratum.root.destroy();
@@ -59,10 +48,10 @@ export class WorldDepthStrata {
 	}
 
 	/**
-	 * Reattach this renderer<s existing depth-stratum roots.
+	 * Reattach exact-depth roots directly beneath worldDepthRoot.
 	 *
-	 * The roots remain direct children of worldDepthRoot so actors can still
-	 * interleave with static strata by zIndex.
+	 * Do not introduce a floor wrapper here: actors, doors and static strata
+	 * must remain siblings at the Pixi sorting boundary.
 	 */
 	attach(): void {
 		if (this.attached) {
@@ -75,8 +64,8 @@ export class WorldDepthStrata {
 	}
 
 	/**
-	 * Remove this renderer<s static hierarchy from the live scene graph while
-	 * retaining every child Mesh and GPU resource for later reuse.
+	 * Remove static strata from the live scene while preserving their child
+	 * Meshes/GPU resources for a later rendered-floor cache hit.
 	 */
 	detach(): void {
 		if (!this.attached) {
@@ -87,25 +76,8 @@ export class WorldDepthStrata {
 		}
 		this.attached = false;
 	}
-
 	destroy(): void {
 		this.clear();
-	}
-
-	private chunkRoot(
-		depthKey: VisualDepthKey,
-		chunkId: RenderChunkId,
-	): Container {
-		const stratum = this.stratumFor(depthKey);
-		const existing = stratum.chunks.get(chunkId);
-		if (existing) {
-			return existing;
-		}
-		const root = new Container();
-		root.label = `static-world-chunk:${chunkId}`;
-		stratum.root.addChild(root);
-		stratum.chunks.set(chunkId, root);
-		return root;
 	}
 
 	private stratumFor(depthKey: VisualDepthKey): DepthStratum {
@@ -118,17 +90,13 @@ export class WorldDepthStrata {
 		root.zIndex = depthFromKey(depthKey);
 
 		/**
-		 * This direct parent relationship is the important part.
-		 *
-		 * Actors/chests/monsters are also direct children of worldDepthRoot,
-		 * so Pixi can sort an actor between two different static strata.
+		 * This direct-parent relationship is the painter-order invariant.
 		 */
 		if (this.attached) {
 			this.worldDepthRoot.addChild(root);
 		}
 		const created: DepthStratum = {
 			root,
-			chunks: new Map(),
 		};
 		this.strata.set(depthKey, created);
 		return created;

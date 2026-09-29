@@ -1,6 +1,9 @@
 import type { Container } from "pixi.js";
 import { DynamicDepthController } from "@/rendering/engine/dynamic/DynamicDepthController";
-export { WORLD_DEPTH_BIAS } from "@/rendering/engine/world/worldDepthKey";
+export {
+	WORLD_DEPTH_BIAS,
+	worldBoundaryDepth,
+} from "@/rendering/engine/world/worldDepthKey";
 
 /**
  * Compatibility shim for existing dynamic entities.

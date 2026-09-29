@@ -32,7 +32,13 @@ export interface StaticWorldBatchData {
  */
 export interface StaticWorldMeshHandle {
 	readonly depthKey: VisualDepthKey;
-	readonly chunkId: RenderChunkId;
+	/**
+	 * Logical chunks contributing geometry to this Mesh.
+	 *
+	 * Chunk membership is retained even though chunks are no longer mandatory
+	 * GPU batch boundaries.
+	 */
+	readonly chunkIds: readonly RenderChunkId[];
 	readonly materialKey: MaterialBatchKey;
 	readonly mesh: Mesh<MeshGeometry, Shader>;
 	readonly geometry: MeshGeometry;

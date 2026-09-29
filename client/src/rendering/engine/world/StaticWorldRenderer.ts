@@ -44,7 +44,13 @@ import type { VisualDepthKey } from "./worldDepthKey";
  */
 interface MutableWorldBatch {
 	depthKey: VisualDepthKey;
-	chunkId: RenderChunkId;
+	/**
+	 * Logical chunks contributing geometry to this GPU batch.
+	 *
+	 * Chunk identity is retained for ownership/diagnostics, but it no longer
+	 * forces another Mesh when depth and material are compatible.
+	 */
+	chunkIds: Set<RenderChunkId>;
 	material: ResolvedStaticWorldGpuMaterial;
 	builder: StaticWorldBatchBuilder;
 	ranges: PendingWorldRange[];
@@ -405,7 +411,7 @@ export class StaticWorldRenderer {
 			const data = batch.builder.freeze();
 			const handle = createStaticWorldMesh(data, batch.material, {
 				depthKey: batch.depthKey,
-				chunkId: batch.chunkId,
+				chunkIds: [...batch.chunkIds].sort(),
 			});
 
 			for (const pending of batch.ranges) {
@@ -564,14 +570,21 @@ export class StaticWorldRenderer {
 		chunkId: RenderChunkId,
 		material: ResolvedStaticWorldGpuMaterial,
 	): MutableWorldBatch {
-		const key = [depthKey, chunkId, material.batchKey].join("|");
+		/**
+		 * GPU batch identity contains only state that genuinely requires another
+		 * draw submission.
+		 *
+		 * chunkId is logical ownership metadata, not a render-state difference.
+		 */
+		const key = [depthKey, material.batchKey].join("|");
 		const existing = batches.get(key);
 		if (existing) {
+			existing.chunkIds.add(chunkId);
 			return existing;
 		}
 		const created: MutableWorldBatch = {
 			depthKey,
-			chunkId,
+			chunkIds: new Set([chunkId]),
 			material,
 			builder: new StaticWorldBatchBuilder(),
 			ranges: [],

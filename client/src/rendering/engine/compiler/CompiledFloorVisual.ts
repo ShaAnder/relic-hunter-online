@@ -89,7 +89,10 @@ export interface CompiledTerrainSurface {
 	uvs: VisualUvs;
 	material: VisualMaterialRef;
 	/**
-	 * Exact legacy-compatible zIndex depth.
+	 * Semantic painter depth of the boundary between the two terrain tiles.
+	 *
+	 * This is intentionally independent of the lowest point of the vertical
+	 * face geometry.
 	 */
 	depth: number;
 	/**
