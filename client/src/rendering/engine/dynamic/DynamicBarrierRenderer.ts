@@ -75,6 +75,33 @@ export class DynamicBarrierRenderer {
 		}
 	}
 
+	/**
+	 * Restore cached DoorViews to the active sortable world root.
+	 */
+	attach(): void {
+		for (const { view } of this.doors.values()) {
+			if (view.view.parent === this.worldDepthRoot) {
+				continue;
+			}
+			view.view.removeFromParent();
+			this.worldDepthRoot.addChild(view.view);
+		}
+	}
+
+	/**
+	 * Hide this entire cached floor structurally by detaching its DoorViews.
+	 * Door state and presentation state remain alive.
+	 */
+	detach(): void {
+		for (const { view } of this.doors.values()) {
+			view.view.removeFromParent();
+		}
+	}
+
+	get doorCount(): number {
+		return this.doors.size;
+	}
+
 	destroy(): void {
 		for (const { view } of this.doors.values()) {
 			view.destroy();

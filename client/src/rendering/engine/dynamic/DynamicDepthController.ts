@@ -25,7 +25,7 @@ export class DynamicDepthController {
 		}
 		this.lastDepth = nextDepth;
 		view.zIndex = nextDepth;
-		perf.incrementCounter("engine.dynamicDepthWrites,");
+		perf.incrementCounter("engine.dynamicDepthWrites");
 		return true;
 	}
 

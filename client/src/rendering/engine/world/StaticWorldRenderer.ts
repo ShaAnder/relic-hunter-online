@@ -160,9 +160,22 @@ export class StaticWorldRenderer {
 	>();
 	private readonly connectorIdsByIncidentEdge = new Map<string, Set<string>>();
 	private readonly focus = new BarrierFocusBuffer();
+	private mountedVertexCount = 0;
 
 	constructor(worldDepthRoot: Container) {
 		this.strata = new WorldDepthStrata(worldDepthRoot);
+	}
+
+	get meshCount(): number {
+		return this.meshes.length;
+	}
+
+	get vertexCount(): number {
+		return this.mountedVertexCount;
+	}
+
+	get depthStrataCount(): number {
+		return this.strata.stratumCount;
 	}
 
 	/**
@@ -426,6 +439,7 @@ export class StaticWorldRenderer {
 			this.strata.mount(handle);
 			vertexCount += data.vertexCount;
 		}
+		this.mountedVertexCount = vertexCount;
 
 		perf.setCounter("engine.staticDepthStrata", this.strata.stratumCount);
 		perf.setCounter("engine.staticWorldMeshCount", this.meshes.length);
@@ -512,6 +526,14 @@ export class StaticWorldRenderer {
 		}
 	}
 
+	attach(): void {
+		this.strata.attach();
+	}
+
+	detach(): void {
+		this.strata.detach();
+	}
+
 	destroy(): void {
 		for (const mesh of this.meshes) {
 			mesh.destroy();
@@ -519,6 +541,7 @@ export class StaticWorldRenderer {
 
 		this.meshes.length = 0;
 		this.ranges.length = 0;
+		this.mountedVertexCount = 0;
 
 		this.barrierRangesByEdge.clear();
 		this.connectorRangesById.clear();

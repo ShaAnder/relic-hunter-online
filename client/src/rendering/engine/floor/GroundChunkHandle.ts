@@ -1,3 +1,4 @@
+import type { Container } from "pixi.js";
 import type { RenderChunkId } from "../chunks/ChunkCoord";
 import { renderChunkIdForTile } from "../chunks/ChunkCoord";
 import type { StaticGroundMeshHandle } from "../gpu/StaticMeshFactory";
@@ -44,10 +45,8 @@ export class GroundChunkHandle {
 			quadIndex++
 		) {
 			const tileIndex = this.batch.data.quadTileIndices[quadIndex];
-
 			const x = tileIndex % mapWidth;
 			const y = Math.floor(tileIndex / mapWidth);
-
 			const chunkId = renderChunkIdForTile(
 				{
 					x,
@@ -59,11 +58,8 @@ export class GroundChunkHandle {
 			if (!dirtyChunkIds.has(chunkId)) {
 				continue;
 			}
-
 			const outsideFocusedRoom =
-				focusCellKeys !== null &&
-				!focusCellKeys.has(`${x},${y}`);
-
+				focusCellKeys !== null && !focusCellKeys.has(`${x},${y}`);
 			const next = resolveGroundPresentationCode(
 				fog.codeAtIndex(tileIndex),
 				outsideFocusedRoom,
@@ -74,16 +70,13 @@ export class GroundChunkHandle {
 
 			for (let localVertex = 0; localVertex < 4; localVertex++) {
 				const vertexIndex = firstVertex + localVertex;
-
 				if (this.batch.data.presentation[vertexIndex] === next) {
 					continue;
 				}
-
 				this.batch.data.presentation[vertexIndex] = next;
 				changed = true;
 			}
 		}
-
 		if (changed) {
 			updateGpuBuffer(this.batch.presentationBuffer);
 		}
@@ -95,6 +88,25 @@ export class GroundChunkHandle {
 
 	get vertexCount(): number {
 		return this.batch.data.vertexCount;
+	}
+
+	/**
+	 * Reinsert the existing ground Mesh into a renderer-owned root.
+	 * This is scene attachment only. GPU/geometry resources already exist.
+	 */
+	attach(root: Container): void {
+		if (this.batch.mesh.parent === root) {
+			return;
+		}
+		this.batch.mesh.removeFromParent();
+		root.addChild(this.batch.mesh);
+	}
+
+	/**
+	 * Stop drawing this ground mesh without releasing its GPU resources.
+	 */
+	detach(): void {
+		this.batch.mesh.removeFromParent();
 	}
 
 	destroy(): void {

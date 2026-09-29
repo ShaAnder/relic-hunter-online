@@ -18,6 +18,7 @@ interface DepthStratum {
  */
 export class WorldDepthStrata {
 	private readonly strata = new Map<VisualDepthKey, DepthStratum>();
+	private attached = true;
 
 	constructor(private readonly worldDepthRoot: Container) {
 		this.worldDepthRoot.sortableChildren = true;
@@ -54,7 +55,39 @@ export class WorldDepthStrata {
 			stratum.root.destroy();
 		}
 		this.strata.clear();
+		this.attached = true;
 	}
+
+	/**
+	 * Reattach this renderer<s existing depth-stratum roots.
+	 *
+	 * The roots remain direct children of worldDepthRoot so actors can still
+	 * interleave with static strata by zIndex.
+	 */
+	attach(): void {
+		if (this.attached) {
+			return;
+		}
+		for (const stratum of this.strata.values()) {
+			this.worldDepthRoot.addChild(stratum.root);
+		}
+		this.attached = true;
+	}
+
+	/**
+	 * Remove this renderer<s static hierarchy from the live scene graph while
+	 * retaining every child Mesh and GPU resource for later reuse.
+	 */
+	detach(): void {
+		if (!this.attached) {
+			return;
+		}
+		for (const stratum of this.strata.values()) {
+			stratum.root.removeFromParent();
+		}
+		this.attached = false;
+	}
+
 	destroy(): void {
 		this.clear();
 	}
@@ -90,7 +123,9 @@ export class WorldDepthStrata {
 		 * Actors/chests/monsters are also direct children of worldDepthRoot,
 		 * so Pixi can sort an actor between two different static strata.
 		 */
-		this.worldDepthRoot.addChild(root);
+		if (this.attached) {
+			this.worldDepthRoot.addChild(root);
+		}
 		const created: DepthStratum = {
 			root,
 			chunks: new Map(),

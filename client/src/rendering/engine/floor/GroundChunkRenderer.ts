@@ -1,28 +1,19 @@
 import type { Container } from "pixi.js";
-
 import { perf } from "@/perf/PerfMonitor";
-
 import { QuadBatchBuilder } from "../batching/QuadBatchBuilder";
-
 import type { RenderChunkId } from "../chunks/ChunkCoord";
-
 import type {
 	CompiledFloorVisual,
 	CompiledTileSurface,
 	VisualUvs,
 } from "../compiler/CompiledFloorVisual";
-
 import {
 	GpuMaterialLibrary,
 	type ResolvedGroundGpuMaterial,
 } from "../gpu/GpuMaterialLibrary";
-
 import { createStaticGroundMesh } from "../gpu/StaticMeshFactory";
-
 import type { FogPresentationBuffer } from "../presentation/FogPresentationBuffer";
-
 import { GroundPresentationCode } from "../presentation/PresentationDiff";
-
 import { GroundChunkHandle } from "./GroundChunkHandle";
 
 interface OrderedTile {
@@ -46,9 +37,7 @@ interface OrderedTile {
  */
 export class GroundChunkRenderer {
 	private readonly materialLibrary = new GpuMaterialLibrary();
-
 	private handle: GroundChunkHandle | null = null;
-
 	private readonly chunkIds = new Set<RenderChunkId>();
 
 	constructor(private readonly root: Container) {
@@ -57,6 +46,18 @@ export class GroundChunkRenderer {
 		 * sorting is unnecessary overhead.
 		 */
 		this.root.sortableChildren = false;
+	}
+
+	get chunkCount(): number {
+		return this.chunkIds.size;
+	}
+
+	get meshCount(): number {
+		return this.handle?.meshCount ?? 0;
+	}
+
+	get vertexCount(): number {
+		return this.handle?.vertexCount ?? 0;
 	}
 
 	mount(compiled: CompiledFloorVisual): void {
@@ -85,18 +86,14 @@ export class GroundChunkRenderer {
 		 * directly into triangle submission order.
 		 */
 		orderedTiles.sort(
-			(a, b) =>
-				a.tile.depth - b.tile.depth ||
-				a.sourceOrder - b.sourceOrder,
+			(a, b) => a.tile.depth - b.tile.depth || a.sourceOrder - b.sourceOrder,
 		);
 
 		const builder = new QuadBatchBuilder();
-
 		let sharedMaterial: ResolvedGroundGpuMaterial | null = null;
 
 		for (const entry of orderedTiles) {
 			const tile = entry.tile;
-
 			const material = this.materialLibrary.resolveGround(tile.material);
 
 			if (!sharedMaterial) {
@@ -125,16 +122,14 @@ export class GroundChunkRenderer {
 		}
 
 		const data = builder.freeze();
-
 		const meshHandle = createStaticGroundMesh(data, sharedMaterial);
 
 		/**
 		 * One mesh means Pixi performs one ground submission while the index
 		 * buffer itself preserves exact tile painter order.
 		 */
-		this.root.addChild(meshHandle.mesh);
-
 		this.handle = new GroundChunkHandle(meshHandle, compiled.chunkSize);
+		this.handle.attach(this.root);
 
 		perf.setCounter("engine.groundChunkCount", this.chunkIds.size);
 		perf.setCounter("engine.groundMeshCount", this.handle.meshCount);
@@ -161,26 +156,17 @@ export class GroundChunkRenderer {
 		return new Set(this.chunkIds);
 	}
 
+	attach(): void {
+		this.handle?.attach(this.root);
+	}
+
+	detach(): void {
+		this.handle?.detach();
+	}
+
 	destroy(): void {
-		this.handle?.destroy();
 		this.handle = null;
-
 		this.chunkIds.clear();
-
-		/**
-		 * engineGroundContainer is exclusively owned by this renderer. This also
-		 * cleans stale depth-strata Containers after switching to this corrected
-		 * batching path and performing a full page reload/remount.
-		 */
-		for (const child of this.root.removeChildren()) {
-			child.destroy({
-				children: true,
-			});
-		}
-
-		perf.setCounter("engine.groundChunkCount", 0);
-		perf.setCounter("engine.groundMeshCount", 0);
-		perf.setCounter("engine.groundVertexCount", 0);
 	}
 }
 
