@@ -54,7 +54,6 @@ export class FloorRenderer {
 		const endActivation = perf.start(this.metric("ActivationMs"));
 		this.active?.detach();
 		let runtime = this.cache.get(compiled.floorIndex);
-
 		if (runtime && !runtime.matches(compiled, options.renderWorld)) {
 			/**
 			 * Same logical floor, new structural compiled object.

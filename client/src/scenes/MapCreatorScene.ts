@@ -302,11 +302,15 @@ export class MapCreatorScene implements Scene {
 		return this.floors[this.currentFloorIndex].elevationSteps;
 	}
 
+	private get groundMaterialOverrides() {
+		return this.floors[this.currentFloorIndex].groundMaterialOverrides;
+	}
+
 	private makeBlankFloor(): MapFloorDefinition {
 		return {
 			blueprint: this.makeBlankGrid(),
-
 			elevationSteps: {},
+			groundMaterialOverrides: {},
 		};
 	}
 
@@ -333,6 +337,7 @@ export class MapCreatorScene implements Scene {
 			{
 				blueprint,
 				elevationSteps: {},
+				groundMaterialOverrides: {},
 			},
 		];
 
@@ -350,10 +355,16 @@ export class MapCreatorScene implements Scene {
 	private loadBundleIntoState(bundle: MapBundle): void {
 		this.floors = bundle.floors.map((floor) => ({
 			blueprint: floor.blueprint.map((row) => [...row]),
+
 			elevationSteps: {
 				...floor.elevationSteps,
 			},
+
+			groundMaterialOverrides: {
+				...floor.groundMaterialOverrides,
+			},
 		}));
+
 		this.groundFloorIndex = bundle.groundFloorIndex;
 		this.currentFloorIndex = bundle.groundFloorIndex;
 	}
@@ -1194,6 +1205,9 @@ export class MapCreatorScene implements Scene {
 
 				elevationSteps: {
 					...floor.elevationSteps,
+				},
+				groundMaterialOverrides: {
+					...floor.groundMaterialOverrides,
 				},
 			})),
 

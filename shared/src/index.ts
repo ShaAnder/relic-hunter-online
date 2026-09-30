@@ -33,3 +33,4 @@ export * from "./world/maps/elevation";
 export * from "./world/movement";
 export * from "./world/placement";
 export * from "./world/doors";
+export * from "./world/maps/groundMaterial";

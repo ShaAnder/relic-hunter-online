@@ -10,6 +10,7 @@ import {
 	elevationHeightForStep,
 	type ElevationStep,
 } from "./elevation";
+import type { GroundMaterialId } from "./groundMaterial";
 
 /**
  * Tile-level codes for the double-resolution format — deliberately a
@@ -134,6 +135,13 @@ export interface CompiledEdgeMap {
 	elevationSteps: Map<string, ElevationStep>;
 	/** Resolved physical height used by rendering/entities. */
 	elevation: Map<string, number>;
+	/**
+	 * Sparse authored visual-material overrides.
+	 *
+	 * The shared map knows stable IDs only. Client-side rendering decides what
+	 * textures or GPU resources those IDs eventually resolve to.
+	 */
+	groundMaterialOverrides: Map<string, GroundMaterialId>;
 }
 
 /**
@@ -152,6 +160,7 @@ export interface CompiledEdgeMap {
 export function compileEdgeMap(
 	blueprint: number[][],
 	elevationOverrides: Record<string, number> = {},
+	groundMaterialOverrides: Record<string, GroundMaterialId> = {},
 ): CompiledEdgeMap {
 	const blueprintHeight = blueprint.length;
 	const blueprintWidth = blueprint[0]?.length ?? 0;
@@ -169,6 +178,9 @@ export function compileEdgeMap(
 	const tileCodes = new Map<string, EdgeMapTileCode>();
 	const elevationSteps = new Map<string, ElevationStep>();
 	const elevation = new Map<string, number>();
+	const compiledGroundMaterialOverrides = new Map<string, GroundMaterialId>(
+		Object.entries(groundMaterialOverrides),
+	);
 
 	// Tile centers: every (2x, 2y) position.
 	for (let y = 0; y < height; y++) {
@@ -189,9 +201,7 @@ export function compileEdgeMap(
 
 			tileCodes.set(key, code);
 			elevationSteps.set(key, step);
-
 			grid.setTileType(coord, walkable ? TileType.Floor : TileType.Wall);
-
 			elevation.set(key, renderable ? elevationHeightForStep(step) : Infinity);
 		}
 	}
@@ -227,5 +237,12 @@ export function compileEdgeMap(
 		}
 	}
 
-	return { grid, edges, tileCodes, elevationSteps, elevation };
+	return {
+		grid,
+		edges,
+		tileCodes,
+		elevationSteps,
+		elevation,
+		groundMaterialOverrides: compiledGroundMaterialOverrides,
+	};
 }

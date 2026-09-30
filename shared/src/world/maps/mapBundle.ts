@@ -7,6 +7,7 @@ import {
 } from "./edgeMapCompiler";
 import { ALLEYWAYS_EDGE_BLUEPRINT } from "./alleywaysEdgeBlueprint";
 import { clampElevationStep, MAX_STAIR_EDGE_DELTA_STEPS } from "./elevation";
+import { isGroundMaterialId, type GroundMaterialId } from "./groundMaterial";
 
 /**
  * One floor's material/structure plus its authored elevation data,
@@ -33,6 +34,13 @@ export interface MapFloorDefinition {
 	 * coordinate ("x,y"). Empty during Stage A.
 	 */
 	elevationSteps: Record<string, number>;
+	/**
+	 * Optional visual-material overrides keyed by logical coordinate ("x,y").
+	 *
+	 * Missing entries deliberately use the renderer<s default material for that
+	 * tile semantic. Keeping this sparse avoids serialising thousands of defaults.
+	 */
+	groundMaterialOverrides: Record<string, GroundMaterialId>;
 }
 
 /**
@@ -84,6 +92,17 @@ function isElevationStepRecord(
 	);
 }
 
+function isGroundMaterialRecord(
+	value: unknown,
+): value is Record<string, GroundMaterialId> {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		Object.values(value as Record<string, unknown>).every(isGroundMaterialId)
+	);
+}
+
 /**
  * Reads both the OLD map shape (floors: number[][][]) and the NEW
  * one (floors: MapFloorDefinition[]) and always returns the new
@@ -110,7 +129,12 @@ export function normalizeMapBundle(value: unknown): MapBundle | null {
 	for (const rawFloor of candidate.floors) {
 		// Legacy floor: a bare blueprint array.
 		if (isBlueprint(rawFloor)) {
-			floors.push({ blueprint: rawFloor, elevationSteps: {} });
+			floors.push({
+				blueprint: rawFloor,
+				elevationSteps: {},
+				groundMaterialOverrides: {},
+			});
+
 			continue;
 		}
 
@@ -123,17 +147,21 @@ export function normalizeMapBundle(value: unknown): MapBundle | null {
 		}
 
 		const floorObject = rawFloor as Record<string, unknown>;
-
 		if (!isBlueprint(floorObject.blueprint)) return null;
-
 		const rawSteps = floorObject.elevationSteps;
 		if (rawSteps !== undefined && !isElevationStepRecord(rawSteps)) {
+			return null;
+		}
+
+		const rawMaterials = floorObject.groundMaterialOverrides;
+		if (rawMaterials !== undefined && !isGroundMaterialRecord(rawMaterials)) {
 			return null;
 		}
 
 		floors.push({
 			blueprint: floorObject.blueprint,
 			elevationSteps: rawSteps === undefined ? {} : rawSteps,
+			groundMaterialOverrides: rawMaterials === undefined ? {} : rawMaterials,
 		});
 	}
 
@@ -490,7 +518,13 @@ export function resolveFloorTransition(
 export function officialAlleywaysBundle(): MapBundle {
 	return {
 		name: "Alleyways",
-		floors: [{ blueprint: ALLEYWAYS_EDGE_BLUEPRINT, elevationSteps: {} }],
+		floors: [
+			{
+				blueprint: ALLEYWAYS_EDGE_BLUEPRINT,
+				elevationSteps: {},
+				groundMaterialOverrides: {},
+			},
+		],
 		groundFloorIndex: 0,
 	};
 }
