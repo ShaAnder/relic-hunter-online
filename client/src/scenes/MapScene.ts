@@ -494,6 +494,7 @@ export class MapScene implements Scene, TutorialPort {
 			tileCodes: new Map(),
 			elevationSteps: new Map(),
 			elevation: this.game.session.mapElevation ?? new Map(),
+			groundMaterialOverrides: new Map(),
 		};
 
 		/**
@@ -3049,6 +3050,7 @@ export class MapScene implements Scene, TutorialPort {
 			elevationSteps: new Map(),
 
 			elevation: this.game.session.mapElevation ?? new Map(),
+			groundMaterialOverrides: new Map(),
 		};
 	}
 
@@ -3267,7 +3269,15 @@ export class MapScene implements Scene, TutorialPort {
 		this.game.session.mapFloors = [compiled];
 		this.game.session.mapBundle = {
 			name: "Alleyways",
-			floors: [{ blueprint: RH.ALLEYWAYS_EDGE_BLUEPRINT, elevationSteps: {} }],
+			floors: [
+				{
+					blueprint: RH.ALLEYWAYS_EDGE_BLUEPRINT,
+
+					elevationSteps: {},
+
+					groundMaterialOverrides: {},
+				},
+			],
 			groundFloorIndex: 0,
 		};
 		this.game.session.mapGroundFloorIndex = 0;

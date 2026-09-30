@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { EdgeMapTileCode, compileEdgeMap } from "../maps/edgeMapCompiler";
 import { clampElevationStep, elevationHeightForStep } from "../maps/elevation";
-import { normalizeMapBundle } from "../maps/mapBundle";
+import { compileMapBundle, normalizeMapBundle } from "../maps/mapBundle";
+import { groundMaterialId } from "../maps/groundMaterial";
 
 describe("elevation model", () => {
 	it("uses the canonical hard step table", () => {
@@ -30,8 +31,29 @@ describe("elevation model", () => {
 			floors: [[[EdgeMapTileCode.Floor]]],
 			groundFloorIndex: 0,
 		});
+
 		expect(normalized).not.toBeNull();
 		expect(normalized!.floors[0].elevationSteps).toEqual({});
+		expect(normalized!.floors[0].groundMaterialOverrides).toEqual({});
 		expect(normalized!.floors[0].blueprint).toEqual([[EdgeMapTileCode.Floor]]);
+	});
+	it("preserves authored ground material overrides through map compilation", () => {
+		const materialId = groundMaterialId("floor.default");
+		const normalized = normalizeMapBundle({
+			name: "Material test",
+			floors: [
+				{
+					blueprint: [[EdgeMapTileCode.Floor]],
+					elevationSteps: {},
+					groundMaterialOverrides: {
+						"0,0": materialId,
+					},
+				},
+			],
+			groundFloorIndex: 0,
+		});
+		expect(normalized).not.toBeNull();
+		const compiled = compileMapBundle(normalized!);
+		expect(compiled[0].groundMaterialOverrides.get("0,0")).toBe(materialId);
 	});
 });

@@ -18,6 +18,7 @@ function makeMap(elevations: Record<string, number>): CompiledEdgeMap {
 		tileCodes: new Map(),
 		elevationSteps: new Map(),
 		elevation: new Map(Object.entries(elevations)),
+		groundMaterialOverrides: new Map(),
 	};
 }
 
