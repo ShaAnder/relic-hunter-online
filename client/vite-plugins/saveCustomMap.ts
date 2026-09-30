@@ -11,6 +11,7 @@ const REGISTRY_PATH = path.join(CUSTOM_MAPS_DIR, "index.ts");
 interface SaveFloorBody {
 	blueprint: number[][];
 	elevationSteps: Record<string, number>;
+	groundMaterialOverrides: Record<string, string>;
 }
 
 interface SaveRequestBody {
@@ -122,12 +123,14 @@ function toMapBundleFileContent(
 				.map((row) => `\t\t\t[${row.join(", ")}],`)
 				.join("\n");
 			const steps = JSON.stringify(floor.elevationSteps ?? {});
+			const materials = JSON.stringify(floor.groundMaterialOverrides ?? {});
 			return `\t{
-		blueprint: [
+	blueprint: [
 ${rows}
-		],
-		elevationSteps: ${steps},
-	}`;
+	],
+	elevationSteps: ${steps},
+	groundMaterialOverrides: ${materials},
+}`;
 		})
 		.join(",\n");
 	return `/**
