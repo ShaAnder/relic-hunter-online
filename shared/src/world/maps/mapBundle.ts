@@ -454,7 +454,11 @@ export function validateMapBundle(bundle: MapBundle): ValidationResult {
  */
 export function compileMapBundle(bundle: MapBundle): CompiledEdgeMap[] {
 	return bundle.floors.map((floor) =>
-		compileEdgeMap(floor.blueprint, floor.elevationSteps),
+		compileEdgeMap(
+			floor.blueprint,
+			floor.elevationSteps,
+			floor.groundMaterialOverrides,
+		),
 	);
 }
 

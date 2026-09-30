@@ -1337,16 +1337,22 @@ export class MapCreatorScene implements Scene {
 	private exportBlueprint(): void {
 		const rows = this.grid.map((row) => `\t\t[${row.join(", ")}],`).join("\n");
 		const elevationSource = JSON.stringify(this.elevationSteps, null, "\t");
+		const materialSource = JSON.stringify(
+			this.groundMaterialOverrides,
+			null,
+			"\t",
+		);
 		const content = `/**
- 				* Map floor drawn with the in-game Map Creator.
- 				*/
-				export const CUSTOM_MAP_FLOOR = {
-					blueprint: [
-						${rows}
-					],
-					elevationSteps: ${elevationSource},
-				};
-			`;
+	 * Map floor drawn with the in-game Map Creator.
+	 */
+	export const CUSTOM_MAP_FLOOR = {
+		blueprint: [
+${rows}
+		],
+		elevationSteps: ${elevationSource},
+		groundMaterialOverrides: ${materialSource},
+	};
+`;
 		const blob = new Blob([content], {
 			type: "text/typescript",
 		});
@@ -1359,7 +1365,6 @@ export class MapCreatorScene implements Scene {
 		document.body.removeChild(a);
 		URL.revokeObjectURL(url);
 	}
-
 	// ---------- Layout ----------
 
 	private layout(width: number, height: number): void {
