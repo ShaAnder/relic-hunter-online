@@ -5,16 +5,12 @@ import {
 	connectorPriorityFor,
 	type BarrierRenderProfile,
 } from "@/rendering/barrierRenderProfile";
-import { fillForTileCode } from "@/rendering/tileFills";
+
 import {
 	DEFAULT_RENDER_CHUNK_SIZE,
 	renderChunkIdForTile,
 	type RenderChunkId,
 } from "../chunks/ChunkCoord";
-import {
-	tileVariantHash,
-	type VisualMaterialRef,
-} from "../materials/MaterialKey";
 import {
 	WORLD_DEPTH_BIAS,
 	worldDepthKey,
@@ -36,6 +32,11 @@ import {
 	type CompiledDynamicBarrierAnchor,
 } from "./CompiledFloorVisual";
 import { compileTileTopology } from "./TileTopologyCompiler";
+import { resolveGroundMaterial } from "../materials/GroundMaterialCatalog";
+import {
+	groundVariantHash,
+	type VisualMaterialRef,
+} from "../materials/MaterialKey";
 
 // Preserve the exact ordinary-tile oversize currently
 // used by MapRenderer to hide coplanar seams.
@@ -44,7 +45,6 @@ const TILE_OVERSIZE = 1.09;
 const WALL_HEIGHT_PX = TILE_HEIGHT;
 // Current room-focus wall-height treatment.
 const FOCUSED_WALL_HEIGHT_FRACTION = 0.2;
-const FLOOR_COLOR = 0xc8c8c8;
 const TERRAIN_SIDE_COLOR = 0x4a4652;
 const EPSILON = 0.000001;
 
@@ -221,15 +221,17 @@ export class MapVisualCompiler {
 
 				const key = RH.coordKey(coord);
 				const elevation = compiled.elevation.get(key) ?? 0;
-
-				/**
-				 * Void/non-renderable tile.
-				 */
 				if (!Number.isFinite(elevation)) {
 					continue;
 				}
-
 				const tileCode = compiled.tileCodes.get(key);
+				if (tileCode === undefined) {
+					throw new Error(`MapVisualCompiler: missing tile code for ${key}`);
+				}
+				const materialDefinition = resolveGroundMaterial(
+					tileCode,
+					compiled.groundMaterialOverrides.get(key),
+				);
 				const trueFootprint = this.tileNeedsTrueFootprint(
 					compiled,
 					coord,
@@ -239,7 +241,7 @@ export class MapVisualCompiler {
 
 				const chunkId = renderChunkIdForTile(coord, chunkSize);
 				const id = `tile:${x},${y}` as VisualSurfaceId;
-				const fallbackColor = fillForTileCode(tileCode) ?? FLOOR_COLOR;
+
 				const quad = this.tileQuad(coord, elevation, trueFootprint);
 
 				/**
@@ -252,6 +254,7 @@ export class MapVisualCompiler {
 				const groundDepth =
 					this.trueTileCorners(coord, elevation * TILE_HEIGHT).bottom.y -
 					100_000;
+
 				const surface: CompiledTileSurface = {
 					id,
 					coord,
@@ -260,17 +263,15 @@ export class MapVisualCompiler {
 					uvs: TILE_UVS,
 					material: {
 						kind: "tile",
-						code: tileCode,
-						variantHash: tileVariantHash(
+						materialId: materialDefinition.id,
+						variantHash: groundVariantHash(
 							options.mapSeed,
 							options.floorIndex,
 							coord,
-							tileCode,
 						),
-						fallbackColor,
 					},
-					depth: groundDepth,
 
+					depth: groundDepth,
 					depthKey: worldDepthKey(groundDepth),
 					/**
 					 * Topology is structural data, so calculate it once while the floor is

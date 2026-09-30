@@ -9,6 +9,12 @@ import { PAVEMENT_TEXTURE_URLS } from "./pavementMaterial";
 import { FLOOR_TEXTURE_URLS } from "./floorMaterial";
 import { GRASS_TEXTURE_URLS } from "./grassMaterial";
 import { WATER_TEXTURE_URLS } from "./waterMaterial";
+import type { GroundMaterialId } from "@relic-hunter/shared";
+import {
+	allGroundMaterials,
+	groundMaterialDefinition,
+} from "./GroundMaterialCatalog";
+import { textureUrlsForGroundMaterial } from "./GroundMaterialAssets";
 
 interface TileTextureFamily {
 	urls: readonly string[];
@@ -103,8 +109,8 @@ export function preloadMapMaterials(): Promise<void> {
 	preLoadPromise ??= (async () => {
 		const urls = [
 			...new Set(
-				Object.values(TILE_TEXTURE_FAMILIES).flatMap(
-					(family) => family?.urls ?? [],
+				allGroundMaterials().flatMap((definition) =>
+					textureUrlsForGroundMaterial(definition),
 				),
 			),
 		];
@@ -162,31 +168,25 @@ export function resolveTileVariant(
  * therefore changes UVs rather than draw-call identity.
  */
 export function resolveGroundAtlasRegion(
-	code: EdgeMapTileCode | undefined,
+	materialId: GroundMaterialId,
 	variantHash: number,
-	fallbackColor: number,
 ): GroundAtlasRegion {
 	if (!groundAtlasTexture) {
 		throw new Error(
 			"resolveGroundAtlasRegion called before preloadMapMaterials completed",
 		);
 	}
-
-	if (code !== undefined) {
-		const family = TILE_TEXTURE_FAMILIES[code];
-
-		if (family && family.urls.length > 0) {
-			const variantIndex = variantHash % family.urls.length;
-			const url = family.urls[variantIndex];
-			const region = atlasRegionsByUrl.get(url);
-
-			if (region) {
-				return region;
-			}
+	const definition = groundMaterialDefinition(materialId);
+	const urls = textureUrlsForGroundMaterial(definition);
+	if (urls.length > 0) {
+		const variantIndex = variantHash % urls.length;
+		const url = urls[variantIndex];
+		const region = atlasRegionsByUrl.get(url);
+		if (region) {
+			return region;
 		}
 	}
-
-	return fallbackAtlasRegion(fallbackColor);
+	return fallbackAtlasRegion(definition.fallbackColor);
 }
 
 export function resolveTileMaterial(

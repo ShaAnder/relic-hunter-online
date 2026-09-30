@@ -63,9 +63,8 @@ export class GpuMaterialLibrary {
 		}
 
 		const region = resolveGroundAtlasRegion(
-			material.code,
+			material.materialId,
 			material.variantHash,
-			material.fallbackColor,
 		);
 
 		return {
@@ -127,8 +126,7 @@ export class GpuMaterialLibrary {
 				: material.surface === "segment-top"
 					? family.segmentTopTexture
 					: material.surface === "connector-face"
-						? (family.connectorFaceTexture ??
-							family.segmentFaceTexture)
+						? (family.connectorFaceTexture ?? family.segmentFaceTexture)
 						: (family.connectorTopTexture ??
 							family.segmentTopTexture ??
 							family.connectorFaceTexture);
@@ -140,9 +138,7 @@ export class GpuMaterialLibrary {
 				"barrier",
 				material.barrier,
 				material.surface,
-				usesTexture
-					? "texture"
-					: `fallback:${material.fallbackColor}`,
+				usesTexture ? "texture" : `fallback:${material.fallbackColor}`,
 				`alpha:${material.alpha}`,
 			].join(":"),
 		);
