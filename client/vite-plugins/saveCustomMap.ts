@@ -123,7 +123,9 @@ function toMapBundleFileContent(
 				.map((row) => `\t\t\t[${row.join(", ")}],`)
 				.join("\n");
 			const steps = JSON.stringify(floor.elevationSteps ?? {});
-			const materials = JSON.stringify(floor.groundMaterialOverrides ?? {});
+			const materials = serializeGroundMaterials(
+				floor.groundMaterialOverrides ?? {},
+			);
 			return `\t{
 	blueprint: [
 ${rows}
@@ -250,4 +252,21 @@ export function saveCustomMapPlugin(): Plugin {
 			});
 		},
 	};
+}
+
+function serializeGroundMaterials(materials: Record<string, string>): string {
+	const entries = Object.entries(materials);
+
+	if (entries.length === 0) {
+		return "{}";
+	}
+
+	return `{
+${entries
+	.map(
+		([key, value]) =>
+			`\t\t${JSON.stringify(key)}: groundMaterialId(${JSON.stringify(value)}),`,
+	)
+	.join("\n")}
+\t}`;
 }

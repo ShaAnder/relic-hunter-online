@@ -16,6 +16,7 @@ import {
 	defaultElevationStepForTileCode,
 	type MapBundle,
 	type MapFloorDefinition,
+	type GroundMaterialId,
 } from "@relic-hunter/shared";
 import {
 	DevFileCustomMapRepo,
@@ -23,6 +24,11 @@ import {
 	LocalCustomMapRepo,
 	type CustomMapRepo,
 } from "@/core/maps/CustomMapRepo";
+import {
+	allGroundMaterials,
+	defaultGroundMaterialId,
+	resolveGroundMaterial,
+} from "@/rendering/engine/materials/GroundMaterialCatalog";
 
 const LOGICAL_SIZE = 40;
 const GRID_SIZE = 2 * LOGICAL_SIZE - 1; // 79 — double-resolution: tiles on even, edges on odd
@@ -50,16 +56,20 @@ const FLOOR_LIST_MARGIN = 20;
 const MAX_FLOORS_ABOVE_GROUND = 5;
 const MAX_BASEMENTS = 2;
 
-type PaletteKind = "tile" | "edge" | "elevation";
+type PaletteKind = "tile" | "edge" | "elevation" | "material";
 
 interface PaletteEntry {
 	label: string;
 	color: number;
 	kind: PaletteKind;
 	code?: number;
+
 	elevationDelta?: -1 | 1;
 	setElevationStep?: number;
 	clearElevationOverride?: boolean;
+
+	materialId?: GroundMaterialId;
+	clearGroundMaterialOverride?: boolean;
 }
 
 const TILE_PALETTE: PaletteEntry[] = [
@@ -177,15 +187,33 @@ const ELEVATION_PALETTE: PaletteEntry[] = [
 		setElevationStep: 0,
 	},
 	{
-		label: "Material Default",
+		label: "Elevation Default",
 		color: 0x4a4a4a,
 		kind: "elevation",
 		clearElevationOverride: true,
 	},
 ];
 
+const MATERIAL_PALETTE: PaletteEntry[] = [
+	{
+		label: "Material Default",
+		color: 0x4a4a4a,
+		kind: "material",
+		clearGroundMaterialOverride: true,
+	},
+	...allGroundMaterials().map(
+		(definition): PaletteEntry => ({
+			label: definition.label,
+			color: definition.fallbackColor,
+			kind: "material",
+			materialId: definition.id,
+		}),
+	),
+];
+
 const PALETTE: PaletteEntry[] = [
 	...TILE_PALETTE,
+	...MATERIAL_PALETTE,
 	...EDGE_PALETTE,
 	...ELEVATION_PALETTE,
 ];
@@ -497,6 +525,8 @@ export class MapCreatorScene implements Scene {
 		cursorY += 50;
 		cursorY = this.buildPaletteSection("Tiles", TILE_PALETTE, cursorY);
 		cursorY += 20;
+		cursorY = this.buildPaletteSection("Materials", MATERIAL_PALETTE, cursorY);
+		cursorY += 20;
 		cursorY = this.buildPaletteSection("Edges (walls)", EDGE_PALETTE, cursorY);
 		cursorY += 20;
 		cursorY = this.buildPaletteSection("Elevation", ELEVATION_PALETTE, cursorY);
@@ -608,7 +638,9 @@ export class MapCreatorScene implements Scene {
 				? "tile"
 				: entry.kind === "edge"
 					? "edge/wall"
-					: "elevation";
+					: entry.kind === "material"
+						? "material"
+						: "elevation";
 
 		this.statusText.text = `Painting: ${entry.label} (${kindLabel})${mapLabel}`;
 	}
@@ -823,9 +855,7 @@ export class MapCreatorScene implements Scene {
 
 	private paintAtEvent(event: FederatedPointerEvent): void {
 		const local = this.gridContainer.toLocal(event.global);
-
 		const bx = Math.floor(local.x / SUB_CELL_PX);
-
 		const by = Math.floor(local.y / SUB_CELL_PX);
 
 		if (bx < 0 || by < 0 || bx >= GRID_SIZE || by >= GRID_SIZE) {
@@ -833,16 +863,12 @@ export class MapCreatorScene implements Scene {
 		}
 
 		const isEvenX = bx % 2 === 0;
-
 		const isEvenY = by % 2 === 0;
-
 		const entry = PALETTE[this.selectedIndex];
 
 		if (isEvenX && isEvenY && entry.kind === "elevation") {
 			const logicalX = bx / 2;
-
 			const logicalY = by / 2;
-
 			const key = `${logicalX},${logicalY}`;
 
 			if (this.elevationPaintedThisStroke.has(key)) {
@@ -862,9 +888,7 @@ export class MapCreatorScene implements Scene {
 
 			if (entry.clearElevationOverride) {
 				delete this.elevationSteps[key];
-
 				this.redrawGrid();
-
 				return;
 			}
 
@@ -877,9 +901,51 @@ export class MapCreatorScene implements Scene {
 					: clampElevationStep(current + (entry.elevationDelta ?? 0));
 
 			this.elevationSteps[key] = next;
-
 			this.redrawGrid();
 
+			return;
+		}
+		if (isEvenX && isEvenY && entry.kind === "material") {
+			const logicalX = bx / 2;
+			const logicalY = by / 2;
+			const key = `${logicalX},${logicalY}`;
+			const tileCode = this.grid[by][bx] as EdgeMapTileCode;
+
+			/**
+			 * Void has no rendered ground surface, therefore it has no ground
+			 * material to author.
+			 */
+			if (tileCode === EdgeMapTileCode.Void) {
+				return;
+			}
+			if (entry.clearGroundMaterialOverride) {
+				delete this.groundMaterialOverrides[key];
+				this.redrawGrid();
+				return;
+			}
+			if (!entry.materialId) {
+				return;
+			}
+			/**
+			 * The compiler independently validates imported maps. This check exists
+			 * here so normal editor interaction cannot author an invalid pairing.
+			 *
+			 * An incompatible palette choice is simply ignored in this first authoring
+			 * pass; richer UI feedback can be added later without changing data rules.
+			 */
+			try {
+				resolveGroundMaterial(tileCode, entry.materialId);
+			} catch {
+				return;
+			}
+			const defaultId = defaultGroundMaterialId(tileCode);
+			if (entry.materialId === defaultId) {
+				// Defaults are implicit; keep the serialized map sparse.
+				delete this.groundMaterialOverrides[key];
+			} else {
+				this.groundMaterialOverrides[key] = entry.materialId;
+			}
+			this.redrawGrid();
 			return;
 		}
 
@@ -905,6 +971,32 @@ export class MapCreatorScene implements Scene {
 		}
 
 		this.grid[by][bx] = value;
+
+		if (isEvenX && isEvenY && entry.kind === "tile") {
+			const logicalX = bx / 2;
+			const logicalY = by / 2;
+			const key = `${logicalX},${logicalY}`;
+			const existingMaterial = this.groundMaterialOverrides[key];
+
+			if (existingMaterial) {
+				const nextTileCode = value as EdgeMapTileCode;
+
+				if (nextTileCode === EdgeMapTileCode.Void) {
+					delete this.groundMaterialOverrides[key];
+				} else {
+					try {
+						resolveGroundMaterial(nextTileCode, existingMaterial);
+					} catch {
+						/**
+						 * A visual override is subordinate to tile semantics.
+						 * If the semantic repaint makes it invalid, drop the stale
+						 * appearance rather than leaving the map uncompilable.
+						 */
+						delete this.groundMaterialOverrides[key];
+					}
+				}
+			}
+		}
 
 		this.redrawGrid();
 	}
@@ -966,8 +1058,20 @@ export class MapCreatorScene implements Scene {
 	}
 
 	private drawTile(x: number, y: number): void {
-		const value = this.grid[y][x];
-		const color = this.tileColor(value);
+		const tileCode = this.grid[y][x] as EdgeMapTileCode;
+		const logicalX = x / 2;
+		const logicalY = y / 2;
+		const key = `${logicalX},${logicalY}`;
+
+		/**
+		 * Void deliberately has no ground material definition because there is no
+		 * rendered ground surface there.
+		 */
+		const color =
+			tileCode === EdgeMapTileCode.Void
+				? this.tileColor(tileCode)
+				: resolveGroundMaterial(tileCode, this.groundMaterialOverrides[key])
+						.fallbackColor;
 		const centerX = x * SUB_CELL_PX + SUB_CELL_PX / 2;
 		const centerY = y * SUB_CELL_PX + SUB_CELL_PX / 2;
 		const half = TILE_RENDER_PX / 2;
