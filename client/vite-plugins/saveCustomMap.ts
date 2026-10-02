@@ -139,6 +139,8 @@ ${rows}
  * Custom map saved from the in-game Map Creator.
  */
 import type { MapFloorDefinition } from "../mapBundle";
+import { groundMaterialId } from "../groundMaterial";
+
 export const ${safeId}_NAME = ${JSON.stringify(displayName)};
 export const ${safeId}_FLOORS: MapFloorDefinition[] = [
 ${floorsSource}
