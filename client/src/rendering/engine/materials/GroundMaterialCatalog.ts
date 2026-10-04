@@ -3,6 +3,7 @@ import {
 	groundMaterialId,
 	type GroundMaterialId,
 } from "@relic-hunter/shared";
+import { RHO_MATERIAL_PALETTE } from "./RhoMaterialPalette";
 
 export interface GroundMaterialDefinition {
 	id: GroundMaterialId;
@@ -99,6 +100,34 @@ const defs: readonly GroundMaterialDefinition[] = [
 		textureFolder: null,
 		fallbackColor: 0x6a5a4a,
 		compatibleTileCodes: [EdgeMapTileCode.LadderTop],
+	},
+	{
+		id: groundMaterialId("floor.stone.warm"),
+		label: "Warm Stone",
+		textureFolder: "style-lock/stone-warm",
+		fallbackColor: RHO_MATERIAL_PALETTE.stoneMid,
+		compatibleTileCodes: [EdgeMapTileCode.Floor, EdgeMapTileCode.Pavement],
+	},
+	{
+		id: groundMaterialId("road.earth.warm"),
+		label: "Warm Earth Road",
+		textureFolder: "style-lock/earth-road-warm",
+		fallbackColor: RHO_MATERIAL_PALETTE.earthBase,
+		compatibleTileCodes: [EdgeMapTileCode.Road],
+	},
+	{
+		id: groundMaterialId("nature.grass.warm"),
+		label: "Warm Grass",
+		textureFolder: "style-lock/grass-warm",
+		fallbackColor: RHO_MATERIAL_PALETTE.grassBase,
+		compatibleTileCodes: [EdgeMapTileCode.Nature],
+	},
+	{
+		id: groundMaterialId("river.water.cool"),
+		label: "Cool Water",
+		textureFolder: "style-lock/water-cool",
+		fallbackColor: RHO_MATERIAL_PALETTE.waterBase,
+		compatibleTileCodes: [EdgeMapTileCode.River],
 	},
 ];
 

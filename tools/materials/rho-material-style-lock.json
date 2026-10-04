@@ -1,0 +1,191 @@
+{
+  "version": 1,
+  "tileSize": {
+    "width": 80,
+    "height": 40
+  },
+  "artDirection": {
+    "name": "RHO Warm Material Style Lock",
+    "intent": "Warm, stylized surfaces with broad hue variation, restrained detail, cool-plum shadows and warm highlights.",
+    "rules": [
+      "Prefer broad colour masses over high-frequency noise.",
+      "Keep most variation inside the tile interior so adjacent variants do not create harsh seams.",
+      "Use 3-5 related colours inside one tile rather than one flat fill.",
+      "Reserve the strongest accent colour for very small coverage.",
+      "Ground stays lower contrast than characters, props and barriers.",
+      "Automatic variants communicate natural diversity, not authored gameplay state."
+    ]
+  },
+  "palette": {
+    "ink": "#2c1b2b",
+    "shadowPlum": "#43273d",
+    "shadowWine": "#522c3e",
+    "mossDark": "#506248",
+    "mossMid": "#6c8253",
+    "grassBase": "#748752",
+    "grassLight": "#869057",
+    "grassSun": "#a2a176",
+    "earthDark": "#71454b",
+    "earthBase": "#926e52",
+    "earthLight": "#b8986e",
+    "terracotta": "#a54039",
+    "stoneShadow": "#776e79",
+    "stoneMid": "#959b9c",
+    "stoneLight": "#aba4b0",
+    "warmHighlight": "#bfb168",
+    "waterDeep": "#454e91",
+    "waterBase": "#515c99",
+    "waterLift": "#6e627c"
+  },
+  "materials": [
+    {
+      "id": "nature.grass.warm",
+      "label": "Warm Grass",
+      "folder": "style-lock/grass-warm",
+      "fallback": "#748752",
+      "base": "#748752",
+      "shades": [
+        "#506248",
+        "#6c8253",
+        "#869057",
+        "#a2a176"
+      ],
+      "accents": [
+        "#bfb168"
+      ],
+      "variantCount": 5,
+      "patchCount": [
+        5,
+        8
+      ],
+      "patchOpacity": [
+        0.28,
+        0.52
+      ],
+      "accentCount": [
+        1,
+        4
+      ],
+      "accentRadius": [
+        1.2,
+        2.4
+      ],
+      "innerMargin": 0.12,
+      "compatibleTileCodes": [
+        "Nature"
+      ]
+    },
+    {
+      "id": "floor.stone.warm",
+      "label": "Warm Stone",
+      "folder": "style-lock/stone-warm",
+      "fallback": "#959b9c",
+      "base": "#959b9c",
+      "shades": [
+        "#776e79",
+        "#8c8f7c",
+        "#9d9b85",
+        "#aba4b0"
+      ],
+      "accents": [
+        "#bfb168"
+      ],
+      "variantCount": 5,
+      "patchCount": [
+        4,
+        7
+      ],
+      "patchOpacity": [
+        0.22,
+        0.42
+      ],
+      "accentCount": [
+        0,
+        2
+      ],
+      "accentRadius": [
+        0.8,
+        1.8
+      ],
+      "innerMargin": 0.14,
+      "compatibleTileCodes": [
+        "Floor",
+        "Pavement"
+      ]
+    },
+    {
+      "id": "road.earth.warm",
+      "label": "Warm Earth Road",
+      "folder": "style-lock/earth-road-warm",
+      "fallback": "#926e52",
+      "base": "#926e52",
+      "shades": [
+        "#5a3f49",
+        "#71454b",
+        "#935d52",
+        "#b8986e"
+      ],
+      "accents": [
+        "#bfb168"
+      ],
+      "variantCount": 5,
+      "patchCount": [
+        4,
+        7
+      ],
+      "patchOpacity": [
+        0.24,
+        0.46
+      ],
+      "accentCount": [
+        0,
+        3
+      ],
+      "accentRadius": [
+        0.8,
+        1.7
+      ],
+      "innerMargin": 0.13,
+      "compatibleTileCodes": [
+        "Road"
+      ]
+    },
+    {
+      "id": "river.water.cool",
+      "label": "Cool Water",
+      "folder": "style-lock/water-cool",
+      "fallback": "#515c99",
+      "base": "#515c99",
+      "shades": [
+        "#454e91",
+        "#53548c",
+        "#6e627c",
+        "#776e79"
+      ],
+      "accents": [
+        "#9d9b85"
+      ],
+      "variantCount": 5,
+      "patchCount": [
+        4,
+        6
+      ],
+      "patchOpacity": [
+        0.18,
+        0.34
+      ],
+      "accentCount": [
+        1,
+        3
+      ],
+      "accentRadius": [
+        0.7,
+        1.4
+      ],
+      "innerMargin": 0.1,
+      "compatibleTileCodes": [
+        "River"
+      ]
+    }
+  ]
+}
