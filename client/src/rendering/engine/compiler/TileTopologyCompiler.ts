@@ -3,7 +3,9 @@ import {
 	type CompiledEdgeMap,
 	type EdgeMapTileCode,
 	type GridCoord,
+	type GroundMaterialId,
 } from "@relic-hunter/shared";
+import { resolveGroundMaterial } from "../materials/GroundMaterialCatalog";
 
 /**
  * TOPOLOGY DIRECTION BITMASKS
@@ -76,13 +78,12 @@ export const TOPOLOGY_W = 1 << 3;
 const ELEVATION_EPSILON = 0.000001;
 
 export interface CompiledTileTopology {
-	// Neighbours with the same tile/material code.
+	sameSemanticMask: number;
 	sameMaterialMask: number;
-	// Neighbours that are in bounds and have finite render elevation.
+	sameSurfaceMask: number;
+
 	renderableMask: number;
-	//Renderable neighbours physically higher than this tile.
 	higherMask: number;
-	// Renderable neighbours physically lower than this tile.
 	lowerMask: number;
 }
 
@@ -124,15 +125,17 @@ const DIRECTIONS: readonly Direction[] = [
 export function compileTileTopology(
 	compiled: CompiledEdgeMap,
 	coord: GridCoord,
+	currentMaterialId: GroundMaterialId,
 ): CompiledTileTopology {
 	const currentKey = coordKey(coord);
-
 	const currentElevation = compiled.elevation.get(currentKey);
-
 	const currentCode: EdgeMapTileCode | undefined =
 		compiled.tileCodes.get(currentKey);
 
+	let sameSemanticMask = 0;
 	let sameMaterialMask = 0;
+	let sameSurfaceMask = 0;
+
 	let renderableMask = 0;
 	let higherMask = 0;
 	let lowerMask = 0;
@@ -143,7 +146,14 @@ export function compileTileTopology(
 	 * harmless empty topology instead of misleading neighbour relations.
 	 */
 	if (currentElevation === undefined || !Number.isFinite(currentElevation)) {
-		return { sameMaterialMask, renderableMask, higherMask, lowerMask };
+		return {
+			sameSemanticMask,
+			sameMaterialMask,
+			sameSurfaceMask,
+			renderableMask,
+			higherMask,
+			lowerMask,
+		};
 	}
 
 	for (const direction of DIRECTIONS) {
@@ -161,7 +171,6 @@ export function compileTileTopology(
 			continue;
 		}
 		const neighbourKey = coordKey(neighbour);
-
 		const neighbourElevation = compiled.elevation.get(neighbourKey);
 
 		if (
@@ -172,11 +181,25 @@ export function compileTileTopology(
 		}
 
 		renderableMask |= direction.bit;
-
 		const neighbourCode = compiled.tileCodes.get(neighbourKey);
 
 		if (neighbourCode === currentCode) {
-			sameMaterialMask |= direction.bit;
+			sameSemanticMask |= direction.bit;
+		}
+
+		if (neighbourCode !== undefined) {
+			const neighbourMaterial = resolveGroundMaterial(
+				neighbourCode,
+				compiled.groundMaterialOverrides.get(neighbourKey),
+			);
+			if (neighbourMaterial.id === currentMaterialId) {
+				sameMaterialMask |= direction.bit;
+				if (
+					Math.abs(neighbourElevation - currentElevation) <= ELEVATION_EPSILON
+				) {
+					sameSurfaceMask |= direction.bit;
+				}
+			}
 		}
 
 		if (neighbourElevation > currentElevation + ELEVATION_EPSILON) {
@@ -187,7 +210,9 @@ export function compileTileTopology(
 	}
 
 	return {
+		sameSemanticMask,
 		sameMaterialMask,
+		sameSurfaceMask,
 		renderableMask,
 		higherMask,
 		lowerMask,

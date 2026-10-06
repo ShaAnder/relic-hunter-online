@@ -147,7 +147,7 @@ const defs: readonly GroundMaterialDefinition[] = [
 	{
 		id: groundMaterialId("pavement.flagstone.warm"),
 		label: "Warm Flagstone",
-		textureFolder: "phase12/pavement/flagstone-warm/base",
+		textureFolder: "pavement/flagstone-warm/base",
 		fallbackColor: RHO_MATERIAL_PALETTE.stoneMid,
 		compatibleTileCodes: [EdgeMapTileCode.Floor, EdgeMapTileCode.Pavement],
 		sampling: {
@@ -157,7 +157,7 @@ const defs: readonly GroundMaterialDefinition[] = [
 		},
 		edgeTreatment: {
 			kind: "overlay",
-			textureFolder: "phase12/pavement/flagstone-warm/topology",
+			textureFolder: "pavement/flagstone-warm/topology",
 		},
 	},
 	{
@@ -170,7 +170,7 @@ const defs: readonly GroundMaterialDefinition[] = [
 	{
 		id: groundMaterialId("nature.soil.warm"),
 		label: "Warm Soil",
-		textureFolder: "phase12/nature/soil-warm/base",
+		textureFolder: "nature/soil-warm/base",
 		fallbackColor: RHO_MATERIAL_PALETTE.earthBase,
 		compatibleTileCodes: [EdgeMapTileCode.Nature],
 		sampling: {
@@ -182,7 +182,7 @@ const defs: readonly GroundMaterialDefinition[] = [
 	{
 		id: groundMaterialId("nature.grass.warm"),
 		label: "Warm Grass",
-		textureFolder: "phase12/nature/grass-warm/base",
+		textureFolder: "nature/grass-warm/base",
 		fallbackColor: RHO_MATERIAL_PALETTE.grassBase,
 		compatibleTileCodes: [EdgeMapTileCode.Nature],
 		sampling: {
@@ -192,14 +192,14 @@ const defs: readonly GroundMaterialDefinition[] = [
 		},
 		edgeTreatment: {
 			kind: "coverage",
-			maskFolder: "phase12/nature/grass-warm/coverage-masks",
+			maskFolder: "nature/grass-warm/coverage-masks",
 			underlayMaterialId: groundMaterialId("nature.soil.warm"),
 		},
 	},
 	{
 		id: groundMaterialId("river.water.cool"),
 		label: "Cool Water",
-		textureFolder: "phase12/water/cool/base",
+		textureFolder: "water/cool/base",
 		fallbackColor: RHO_MATERIAL_PALETTE.waterBase,
 		compatibleTileCodes: [EdgeMapTileCode.River],
 		sampling: {

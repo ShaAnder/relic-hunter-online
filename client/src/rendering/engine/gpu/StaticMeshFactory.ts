@@ -14,9 +14,29 @@ const WASH_ALPHA = 0.72;
 const GROUND_VERTEX_SHADER = `
 in vec2 aPosition;
 in vec2 aUV;
+in vec2 aSurfaceUV;
+
+in vec4 aPrimaryAtlasRect;
+in vec4 aUnderlayAtlasRect;
+in vec4 aEdgeAtlasRect;
+
+in vec4 aPrimaryParams;
+in vec4 aUnderlayParams;
+in vec4 aAnimationParams;
+
 in float aPresentation;
 
-out vec2 vUV;
+out vec2 vLocalUV;
+out vec2 vSurfaceUV;
+
+out vec4 vPrimaryAtlasRect;
+out vec4 vUnderlayAtlasRect;
+out vec4 vEdgeAtlasRect;
+
+out vec4 vPrimaryParams;
+out vec4 vUnderlayParams;
+out vec4 vAnimationParams;
+
 out float vPresentation;
 
 uniform mat3 uProjectionMatrix;
@@ -35,8 +55,20 @@ void main() {
 		1.0
 	);
 
-	vUV = aUV;
+	vLocalUV = aUV;
+	vSurfaceUV = aSurfaceUV;
+
+	vPrimaryAtlasRect = aPrimaryAtlasRect;
+	vUnderlayAtlasRect = aUnderlayAtlasRect;
+	vEdgeAtlasRect = aEdgeAtlasRect;
+
+	vPrimaryParams = aPrimaryParams;
+	vUnderlayParams = aUnderlayParams;
+	vAnimationParams = aAnimationParams;
+
 	vPresentation = aPresentation;
+}
+
 }
 `;
 
@@ -48,14 +80,72 @@ void main() {
 const GROUND_FRAGMENT_SHADER = `
 precision mediump float;
 
-in vec2 vUV;
+in vec2 vLocalUV;
+in vec2 vSurfaceUV;
+
+in vec4 vPrimaryAtlasRect;
+in vec4 vUnderlayAtlasRect;
+in vec4 vEdgeAtlasRect;
+
+in vec4 vPrimaryParams;
+in vec4 vUnderlayParams;
+in vec4 vAnimationParams;
+
 in float vPresentation;
 
 uniform sampler2D uSampler;
-uniform float uUseTexture;
-uniform vec3 uFallbackColor;
 uniform vec3 uWashColor;
 uniform float uWashAlpha;
+
+vec2 atlasUv(
+	vec2 logicalUv,
+	vec4 rect
+) {
+	return mix(
+		rect.xy,
+		rect.zw,
+		logicalUv
+	);
+}
+
+vec2 materialLogicalUv(
+	vec2 localUv,
+	vec2 surfaceUv,
+	float samplingMode,
+	vec2 repeatTiles
+) {
+	if (samplingMode > 0.5) {
+		return fract(
+			surfaceUv /
+			max(repeatTiles, vec2(0.0001))
+		);
+	}
+
+	return localUv;
+}
+
+vec4 sampleMaterialLayer(
+	vec2 localUv,
+	vec2 surfaceUv,
+	vec4 rect,
+	vec4 params
+) {
+	vec2 logicalUv =
+		materialLogicalUv(
+			localUv,
+			surfaceUv,
+			params.x,
+			params.yz
+		);
+
+	return texture2D(
+		uSampler,
+		atlasUv(
+			logicalUv,
+			rect
+		)
+	);
+}
 
 void main() {
 	if (vPresentation < 0.5) {
@@ -63,16 +153,74 @@ void main() {
 	}
 
 	vec4 baseColor =
-		uUseTexture > 0.5
-			? texture2D(uSampler, vUV)
-			: vec4(uFallbackColor, 1.0);
+		sampleMaterialLayer(
+			vLocalUV,
+			vSurfaceUV,
+			vPrimaryAtlasRect,
+			vPrimaryParams
+		);
+
+	float edgeMode =
+		vPrimaryParams.w;
+
+	if (edgeMode > 0.5 && edgeMode < 1.5) {
+		vec4 overlay =
+			texture2D(
+				uSampler,
+				atlasUv(
+					vLocalUV,
+					vEdgeAtlasRect
+				)
+			);
+
+		baseColor.rgb =
+			mix(
+				baseColor.rgb,
+				overlay.rgb,
+				overlay.a
+			);
+
+		baseColor.a =
+			max(
+				baseColor.a,
+				overlay.a
+			);
+	} else if (edgeMode > 1.5) {
+		vec4 underlay =
+			sampleMaterialLayer(
+				vLocalUV,
+				vSurfaceUV,
+				vUnderlayAtlasRect,
+				vUnderlayParams
+			);
+
+		vec4 coverageSample =
+			texture2D(
+				uSampler,
+				atlasUv(
+					vLocalUV,
+					vEdgeAtlasRect
+				)
+			);
+
+		float coverage =
+			coverageSample.r;
+
+		baseColor =
+			mix(
+				underlay,
+				baseColor,
+				coverage
+			);
+	}
 
 	if (vPresentation < 1.5) {
-		baseColor.rgb = mix(
-			baseColor.rgb,
-			uWashColor,
-			uWashAlpha
-		);
+		baseColor.rgb =
+			mix(
+				baseColor.rgb,
+				uWashColor,
+				uWashAlpha
+			);
 	}
 
 	gl_FragColor = baseColor;
@@ -120,10 +268,52 @@ export function createStaticGroundMesh(
 		buffer: data.presentation,
 		format: "float32",
 	});
+	geometry.addAttribute("aSurfaceUV", {
+		buffer: data.surfaceUvs,
+		format: "float32x2",
+	});
+
+	geometry.addAttribute("aPrimaryAtlasRect", {
+		buffer: data.primaryAtlasRects,
+		format: "float32x4",
+	});
+
+	geometry.addAttribute("aUnderlayAtlasRect", {
+		buffer: data.underlayAtlasRects,
+		format: "float32x4",
+	});
+
+	geometry.addAttribute("aEdgeAtlasRect", {
+		buffer: data.edgeAtlasRects,
+		format: "float32x4",
+	});
+
+	geometry.addAttribute("aPrimaryParams", {
+		buffer: data.primaryParams,
+		format: "float32x4",
+	});
+
+	geometry.addAttribute("aUnderlayParams", {
+		buffer: data.underlayParams,
+		format: "float32x4",
+	});
+
+	geometry.addAttribute("aAnimationParams", {
+		buffer: data.animationParams,
+		format: "float32x4",
+	});
 
 	// Ground structure rarely changes, so tell Pixi these buffers are effectively immutable.
 	geometry.getBuffer("aPosition").static = true;
 	geometry.getBuffer("aUV").static = true;
+	geometry.getBuffer("aSurfaceUV").static = true;
+	geometry.getBuffer("aPrimaryAtlasRect").static = true;
+	geometry.getBuffer("aUnderlayAtlasRect").static = true;
+	geometry.getBuffer("aEdgeAtlasRect").static = true;
+	geometry.getBuffer("aPrimaryParams").static = true;
+	geometry.getBuffer("aUnderlayParams").static = true;
+	geometry.getBuffer("aAnimationParams").static = true;
+
 	geometry.getIndex().static = true;
 
 	// Keep a direct reference to the presentation buffer because fog/focus can update it later.

@@ -4,7 +4,11 @@ import {
 	allGroundMaterials,
 	groundMaterialDefinition,
 } from "./GroundMaterialCatalog";
-import { textureUrlsForGroundMaterial } from "./GroundMaterialAssets";
+import {
+	allAssetsForGroundMaterial,
+	baseAssetsForGroundMaterial,
+	edgeAssetsForGroundMaterial,
+} from "./GroundMaterialAssets";
 
 /**
  * UV rectangle occupied by one tile image inside the shared ground atlas.
@@ -49,7 +53,7 @@ export function preloadMapMaterials(): Promise<void> {
 		const urls = [
 			...new Set(
 				allGroundMaterials().flatMap((definition) =>
-					textureUrlsForGroundMaterial(definition),
+					allAssetsForGroundMaterial(definition).map((asset) => asset.url),
 				),
 			),
 		];
@@ -83,16 +87,62 @@ export function resolveGroundAtlasRegion(
 		);
 	}
 	const definition = groundMaterialDefinition(materialId);
-	const urls = textureUrlsForGroundMaterial(definition);
-	if (urls.length > 0) {
-		const variantIndex = variantHash % urls.length;
-		const url = urls[variantIndex];
-		const region = atlasRegionsByUrl.get(url);
+	const assets = baseAssetsForGroundMaterial(definition);
+
+	if (definition.sampling?.kind === "surface-repeat" && assets.length > 1) {
+		throw new Error(
+			`Ground material ${definition.id} uses surface-repeat but has ${assets.length} base textures; Phase 12 continuous materials currently require one base texture`,
+		);
+	}
+
+	if (assets.length > 0) {
+		const variantIndex = selectWeightedVariantIndex(
+			variantHash,
+			assets.length,
+			definition.variation?.weights,
+		);
+
+		const asset = assets[variantIndex];
+		const region = atlasRegionsByUrl.get(asset.url);
+
 		if (region) {
 			return region;
 		}
 	}
+
 	return fallbackAtlasRegion(definition.fallbackColor);
+}
+
+export function resolveGroundEdgeAtlasRegion(
+	materialId: GroundMaterialId,
+	sameSurfaceMask: number,
+): GroundAtlasRegion | null {
+	if (!groundAtlasTexture) {
+		throw new Error(
+			"resolveGroundEdgeAtlasRegion called before preloadMapMaterials completed",
+		);
+	}
+
+	const definition = groundMaterialDefinition(materialId);
+	const assets = edgeAssetsForGroundMaterial(definition);
+
+	if (assets.length === 0) {
+		return null;
+	}
+
+	const expectedSuffix = `/${sameSurfaceMask.toString().padStart(2, "0")}.png`;
+
+	const asset = assets.find(({ sourcePath }) =>
+		sourcePath.endsWith(expectedSuffix),
+	);
+
+	if (!asset) {
+		throw new Error(
+			`Ground material ${materialId} is missing edge asset ${expectedSuffix}`,
+		);
+	}
+
+	return atlasRegionsByUrl.get(asset.url) ?? null;
 }
 
 /**
@@ -310,4 +360,42 @@ function atlasSlotOrigin(slotIndex: number): {
 		x: (slotIndex % atlasColumns) * atlasCellWidth,
 		y: Math.floor(slotIndex / atlasColumns) * atlasCellHeight,
 	};
+}
+
+function selectWeightedVariantIndex(
+	hash: number,
+	count: number,
+	weights: readonly number[] | undefined,
+): number {
+	if (count <= 0) {
+		return -1;
+	}
+	if (!weights) {
+		return hash % count;
+	}
+	if (weights.length !== count) {
+		throw new Error(
+			`Ground variant weight count ${weights.length} does not match texture count ${count}`,
+		);
+	}
+
+	let total = 0;
+
+	for (const weight of weights) {
+		if (!Number.isFinite(weight) || weight <= 0) {
+			throw new Error("Ground variant weights must be finite and > 0");
+		}
+		total += weight;
+	}
+
+	const unit = hash / 0x1_0000_0000;
+	let cursor = unit * total;
+
+	for (let index = 0; index < weights.length; index++) {
+		cursor -= weights[index];
+		if (cursor < 0) {
+			return index;
+		}
+	}
+	return weights.length - 1;
 }

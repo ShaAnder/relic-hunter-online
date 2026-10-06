@@ -94,7 +94,10 @@ export class GroundChunkRenderer {
 
 		for (const entry of orderedTiles) {
 			const tile = entry.tile;
-			const material = this.materialLibrary.resolveGround(tile.material);
+			const material = this.materialLibrary.resolveGround(
+				tile.material,
+				tile.topology.sameSurfaceMask,
+			);
 
 			if (!sharedMaterial) {
 				sharedMaterial = material;
@@ -109,11 +112,45 @@ export class GroundChunkRenderer {
 
 			const tileIndex = tile.coord.y * compiled.width + tile.coord.x;
 
+			const surfaceUvs = surfaceUvsForTile(tile);
+
 			builder.addQuad(
 				tile.quad,
-				remapUvs(tile.uvs, material),
+				tile.uvs,
 				tileIndex,
 				GroundPresentationCode.Normal,
+				{
+					surfaceUvs,
+
+					primaryAtlasRect: material.primary.atlasRect,
+
+					underlayAtlasRect: material.underlay?.atlasRect ?? [0, 0, 0, 0],
+
+					edgeAtlasRect: material.edgeAtlasRect ?? [0, 0, 0, 0],
+
+					primaryParams: [
+						material.primary.samplingMode,
+						material.primary.repeatTilesX,
+						material.primary.repeatTilesY,
+						material.edgeMode,
+					],
+
+					underlayParams: material.underlay
+						? [
+								material.underlay.samplingMode,
+								material.underlay.repeatTilesX,
+								material.underlay.repeatTilesY,
+								1,
+							]
+						: [0, 1, 1, 0],
+
+					animationParams: [
+						material.animationSpeed,
+						material.windInfluence,
+						0,
+						0,
+					],
+				},
 			);
 		}
 
@@ -174,27 +211,21 @@ export class GroundChunkRenderer {
  * Remap the compiler's ordinary 0..1 tile UVs into one region of the shared
  * texture atlas.
  */
-function remapUvs(
-	uvs: VisualUvs,
-	material: ResolvedGroundGpuMaterial,
-): VisualUvs {
-	const { u0, v0, u1, v1 } = material.uvRect;
-
-	const width = u1 - u0;
-	const height = v1 - v0;
+function surfaceUvsForTile(tile: CompiledTileSurface): VisualUvs {
+	const [u0, v0, u1, v1, u2, v2, u3, v3] = tile.uvs;
 
 	return [
-		u0 + uvs[0] * width,
-		v0 + uvs[1] * height,
+		tile.coord.x + u0,
+		tile.coord.y + v0,
 
-		u0 + uvs[2] * width,
-		v0 + uvs[3] * height,
+		tile.coord.x + u1,
+		tile.coord.y + v1,
 
-		u0 + uvs[4] * width,
-		v0 + uvs[5] * height,
+		tile.coord.x + u2,
+		tile.coord.y + v2,
 
-		u0 + uvs[6] * width,
-		v0 + uvs[7] * height,
+		tile.coord.x + u3,
+		tile.coord.y + v3,
 	];
 }
 

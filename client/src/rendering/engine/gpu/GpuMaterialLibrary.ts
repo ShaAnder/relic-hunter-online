@@ -3,27 +3,48 @@ import type { Texture as PixiTexture } from "pixi.js";
 import type { VisualMaterialRef } from "../materials/MaterialKey";
 import {
 	resolveGroundAtlasRegion,
-	type GroundAtlasRegion,
+	resolveGroundEdgeAtlasRegion,
 } from "../materials/mapMaterialFactory";
 import {
 	materialBatchKey,
 	type MaterialBatchKey,
 } from "../batching/MaterialBatchKey";
 import { resolveBarrierMaterial } from "../materials/barrierMaterialFactory";
+import {
+	groundAnimation,
+	groundEdgeTreatment,
+	groundMaterialDefinition,
+	groundSampling,
+} from "../materials/GroundMaterialCatalog";
+import {
+	GROUND_EDGE_COVERAGE,
+	GROUND_EDGE_NONE,
+	GROUND_EDGE_OVERLAY,
+	GROUND_SAMPLING_SURFACE_REPEAT,
+	GROUND_SAMPLING_TILE,
+} from "../materials/GroundMaterialGpuCodes";
+
+export interface GroundGpuLayer {
+	atlasRect: readonly [number, number, number, number];
+	samplingMode: number;
+	repeatTilesX: number;
+	repeatTilesY: number;
+}
 
 export interface ResolvedGroundGpuMaterial {
 	batchKey: MaterialBatchKey;
 	texture: PixiTexture;
-	usesTexture: boolean;
+	usesTexture: true;
 	fallbackColor: number;
 
-	/**
-	 * Per-tile atlas region.
-	 *
-	 * All ground materials share one TextureSource; only this UV rectangle
-	 * changes from tile to tile.
-	 */
-	uvRect: Pick<GroundAtlasRegion, "u0" | "v0" | "u1" | "v1">;
+	primary: GroundGpuLayer;
+	underlay: GroundGpuLayer | null;
+
+	edgeAtlasRect: readonly [number, number, number, number] | null;
+	edgeMode: number;
+
+	animationSpeed: number;
+	windInfluence: number;
 }
 
 export interface ResolvedStaticWorldGpuMaterial {
@@ -55,35 +76,86 @@ export class GpuMaterialLibrary {
 		ResolvedStaticWorldGpuMaterial
 	>();
 
-	resolveGround(material: VisualMaterialRef): ResolvedGroundGpuMaterial {
+	private resolveGroundLayer(
+		materialId: import("@relic-hunter/shared").GroundMaterialId,
+		variantHash: number,
+	): GroundGpuLayer {
+		const definition = groundMaterialDefinition(materialId);
+		const sampling = groundSampling(definition);
+		const region = resolveGroundAtlasRegion(materialId, variantHash);
+
+		return {
+			atlasRect: [region.u0, region.v0, region.u1, region.v1],
+
+			samplingMode:
+				sampling.kind === "surface-repeat"
+					? GROUND_SAMPLING_SURFACE_REPEAT
+					: GROUND_SAMPLING_TILE,
+
+			repeatTilesX:
+				sampling.kind === "surface-repeat" ? sampling.repeatTilesX : 1,
+
+			repeatTilesY:
+				sampling.kind === "surface-repeat" ? sampling.repeatTilesY : 1,
+		};
+	}
+
+	resolveGround(
+		material: VisualMaterialRef,
+		sameSurfaceMask: number,
+	): ResolvedGroundGpuMaterial {
 		if (material.kind !== "tile") {
 			throw new Error(
 				`GpuMaterialLibrary.resolveGround: expected tile material, received ${material.kind}`,
 			);
 		}
 
-		const region = resolveGroundAtlasRegion(
+		const definition = groundMaterialDefinition(material.materialId);
+		const treatment = groundEdgeTreatment(definition);
+		const animation = groundAnimation(definition);
+
+		const primary = this.resolveGroundLayer(
 			material.materialId,
 			material.variantHash,
 		);
 
+		let underlay: GroundGpuLayer | null = null;
+
+		if (treatment?.kind === "coverage") {
+			underlay = this.resolveGroundLayer(treatment.underlayMaterialId, 0);
+		}
+
+		const edgeRegion = treatment
+			? resolveGroundEdgeAtlasRegion(material.materialId, sameSurfaceMask)
+			: null;
+
+		const edgeMode =
+			treatment?.kind === "overlay"
+				? GROUND_EDGE_OVERLAY
+				: treatment?.kind === "coverage"
+					? GROUND_EDGE_COVERAGE
+					: GROUND_EDGE_NONE;
+
 		return {
 			batchKey: this.groundAtlasBatchKey,
-			texture: region.texture,
+			texture: resolveGroundAtlasRegion(
+				material.materialId,
+				material.variantHash,
+			).texture,
 			usesTexture: true,
-
-			/**
-			 * Fallback colours are painted into atlas slots too, so the shader
-			 * always follows its texture path for the floor-wide ground mesh.
-			 */
 			fallbackColor: 0xffffff,
 
-			uvRect: {
-				u0: region.u0,
-				v0: region.v0,
-				u1: region.u1,
-				v1: region.v1,
-			},
+			primary,
+			underlay,
+
+			edgeAtlasRect: edgeRegion
+				? [edgeRegion.u0, edgeRegion.v0, edgeRegion.u1, edgeRegion.v1]
+				: null,
+
+			edgeMode,
+
+			animationSpeed: animation?.speed ?? 0,
+			windInfluence: animation?.windInfluence ?? 0,
 		};
 	}
 

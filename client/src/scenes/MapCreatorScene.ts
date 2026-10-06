@@ -19,7 +19,7 @@ import {
 	type MapCreatorPaletteUiItem,
 } from "@/rendering/editor/MapCreatorEditorUi";
 import { MapCreatorEnginePreview } from "@/rendering/editor/MapCreatorEnginePreview";
-import { textureUrlsForGroundMaterial } from "@/rendering/engine/materials/GroundMaterialAssets";
+import { baseAssetsForGroundMaterial } from "@/rendering/engine/materials/GroundMaterialAssets";
 import {
 	allGroundMaterials,
 	defaultGroundMaterialId,
@@ -230,15 +230,16 @@ const MATERIAL_PALETTE: PaletteEntry[] = [
 		searchText: "default inherited semantic material",
 	},
 	...allGroundMaterials().map((definition): PaletteEntry => {
-		const textureUrls = textureUrlsForGroundMaterial(definition);
+		const baseAssets = baseAssetsForGroundMaterial(definition);
+
 		return {
 			label: definition.label,
 			color: definition.fallbackColor,
 			kind: "material",
 			materialId: definition.id,
 			uiGroup: materialGroupLabel(definition),
-			thumbnailUrl: textureUrls[0],
-			variantCount: textureUrls.length,
+			thumbnailUrl: baseAssets[0]?.url,
+			variantCount: baseAssets.length,
 			searchText: `${definition.id} ${definition.textureFolder ?? "fallback colour"}`,
 		};
 	}),

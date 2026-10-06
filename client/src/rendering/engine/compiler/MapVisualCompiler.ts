@@ -277,7 +277,7 @@ export class MapVisualCompiler {
 					 * Topology is structural data, so calculate it once while the floor is
 					 * compiled instead of repeatedly asking the same neighbour questions later.
 					 */
-					topology: compileTileTopology(compiled, coord),
+					topology: compileTileTopology(compiled, coord, materialDefinition.id),
 					visibilityCoords: [coord],
 				};
 				pushTile(surface);

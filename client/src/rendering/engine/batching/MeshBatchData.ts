@@ -7,6 +7,16 @@
 export interface MeshBatchData {
 	positions: Float32Array;
 	uvs: Float32Array;
+	surfaceUvs: Float32Array;
+
+	primaryAtlasRects: Float32Array;
+	underlayAtlasRects: Float32Array;
+	edgeAtlasRects: Float32Array;
+
+	primaryParams: Float32Array;
+	underlayParams: Float32Array;
+	animationParams: Float32Array;
+
 	indices: Uint32Array;
 
 	/**
