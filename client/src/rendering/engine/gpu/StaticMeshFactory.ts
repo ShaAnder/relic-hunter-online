@@ -642,23 +642,11 @@ export function createStaticGroundMesh(
 		resources: {
 			uSampler: material.texture.source,
 
-			// Convert the TypeScript boolean into the numeric 1/0 value expected by the shader.
 			groundUniforms: {
-				uUseTexture: {
-					value: material.usesTexture ? 1 : 0,
-					type: "f32",
-				},
-				// Supply the material's fallback RGB colour for ground that has no actual texture.
-				uFallbackColor: {
-					value: colorToVec3(material.fallbackColor),
-					type: "vec3<f32>",
-				},
-				// Control how strongly the normal ground colour is blended toward the wash colour.
 				uWashColor: {
 					value: colorToVec3(WASH_COLOR),
 					type: "vec3<f32>",
 				},
-				// Supply the material's fallback RGB colour for ground that has no actual texture.
 				uWashAlpha: {
 					value: WASH_ALPHA,
 					type: "f32",

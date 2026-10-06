@@ -1,6 +1,7 @@
 import {
 	EdgeMapTileCode,
 	groundMaterialId,
+	type GridCoord,
 	type GroundMaterialId,
 } from "@relic-hunter/shared";
 import { RHO_MATERIAL_PALETTE } from "./RhoMaterialPalette";
@@ -20,42 +21,78 @@ export interface GroundMaterialDefinition {
 
 export type GroundSurfaceWrapMode = "repeat" | "mirror";
 
+export type GroundSurfaceVariantTransform =
+	| "none"
+	| "mirror"
+	| "rotate90"
+	| "rotate180"
+	| "rotate270";
+
 export type GroundSamplingDefinition =
 	| {
 			kind: "tile";
 	  }
 	| {
 			kind: "surface-repeat";
-
-			/**
-			 * Number of logical cells covered by one full source texture.
-			 */
 			repeatTilesX: number;
 			repeatTilesY: number;
-			/**
-			 * `repeat`
-			 *     ordinary wrapping:
-			 *         A A A A
-			 *
-			 * `mirror`
-			 *     alternate repeat blocks are mirrored:
-			 *         A Ax A Ax
-			 *
-			 * Mirror wrapping reduces obvious wallpaper seams without changing
-			 * logical tile geometry or creating additional Mesh objects.
-			 */
 			wrap?: GroundSurfaceWrapMode;
+
+			/**
+			 * Optional atlas variants for this structured material.
+			 * Example:
+			 *     flagstone_a.png
+			 *     flagstone_b.png
+			 *     flagstone_c.png
+			 *     flagstone_d.png
+			 */
+			variantCount?: number;
+
+			/**
+			 * Logical size of one stable selection region.
+			 * All logical cells inside the same domain choose the same base variant.
+			 */
+			variantDomainTilesX?: number;
+			variantDomainTilesY?: number;
+
+			/**
+			 * Allowed orientation transforms for the chosen variant.
+			 * Keep this conservative. Structured contained-stone tiles can safely
+			 * allow rotations and mirrors; other materials may opt out.
+			 */
+			allowMirrorX?: boolean;
+			allowMirrorY?: boolean;
+			allowRotate90?: boolean;
 	  };
+
+export interface GroundStableVariantDomainDefinition {
+	/**
+	 * Logical size of one deterministic variant-selection region.
+	 *
+	 * A 1x1 domain means every logical tile may choose a different variant.
+	 * Larger domains keep one variant across a wider continuous area.
+	 */
+	tilesX: number;
+	tilesY: number;
+}
 
 export interface GroundVariationDefinition {
 	/**
 	 * Optional weight per lexically sorted base texture.
 	 *
-	 * Tile-reset materials may use weighted whole-texture variants.
-	 * Continuous materials should normally use one base texture first so
-	 * pattern continuity is not broken at cell boundaries.
+	 * With no weights, all discovered variants have equal probability.
 	 */
 	weights?: readonly number[];
+
+	/**
+	 * Stable coordinate domain used when choosing a base variant.
+	 *
+	 * Variant choice remains deterministic from:
+	 *     map seed + floor + domain coordinate
+	 *
+	 * rather than depending on runtime order or frame state.
+	 */
+	stableDomain?: GroundStableVariantDomainDefinition;
 }
 
 export type GroundEdgeTreatmentDefinition =
@@ -169,26 +206,34 @@ const defs: readonly GroundMaterialDefinition[] = [
 		textureFolder: "pavement/flagstone-warm/base",
 		fallbackColor: RHO_MATERIAL_PALETTE.stoneMid,
 		compatibleTileCodes: [EdgeMapTileCode.Floor, EdgeMapTileCode.Pavement],
-
+		/**
+		 * Each of the new flagstone_warm_0x assets is one complete,
+		 * self-contained logical repeat.
+		 */
 		sampling: {
 			kind: "surface-repeat",
-			repeatTilesX: 4,
-			repeatTilesY: 4,
+			repeatTilesX: 1,
+			repeatTilesY: 1,
 
 			/**
-			 * Alternate whole repeat domains are mirrored.
-			 *
-			 * This is NOT per-logical-tile flipping.
+			 * Keep the existing cheap reflected repetition in addition
+			 * to choosing among the four source variants.
 			 */
 			wrap: "mirror",
 		},
-
-		edgeTreatment: {
-			kind: "border",
-			textureFolder: "pavement/flagstone-warm/border",
+		variation: {
+			/**
+			 * One stable selection domain per logical tile.
+			 *
+			 * This is safe for this asset family because stones are authored
+			 * completely inside each square and terminate at grout boundaries.
+			 */
+			stableDomain: {
+				tilesX: 1,
+				tilesY: 1,
+			},
 		},
 	},
-
 	{
 		id: groundMaterialId("road.earth.warm"),
 		label: "Warm Earth Road",
@@ -264,6 +309,48 @@ function validateGroundMaterialDefinition(
 			);
 		}
 	}
+
+	const stableDomain = definition.variation?.stableDomain;
+
+	if (stableDomain) {
+		if (
+			!Number.isInteger(stableDomain.tilesX) ||
+			!Number.isInteger(stableDomain.tilesY) ||
+			stableDomain.tilesX <= 0 ||
+			stableDomain.tilesY <= 0
+		) {
+			throw new Error(
+				`Ground material ${definition.id} has an invalid stable variant domain`,
+			);
+		}
+
+		if (sampling.kind !== "surface-repeat") {
+			throw new Error(
+				`Ground material ${definition.id} uses a stable variant domain but is not surface-repeat`,
+			);
+		}
+
+		/**
+		 * Variant boundaries must land on complete texture repeats.
+		 *
+		 * Otherwise a variant could change halfway through one continuous repeat,
+		 * producing exactly the kind of visual seam this system exists to avoid.
+		 */
+		const repeatsPerDomainX = stableDomain.tilesX / sampling.repeatTilesX;
+		const repeatsPerDomainY = stableDomain.tilesY / sampling.repeatTilesY;
+
+		if (
+			!Number.isInteger(repeatsPerDomainX) ||
+			!Number.isInteger(repeatsPerDomainY) ||
+			repeatsPerDomainX < 1 ||
+			repeatsPerDomainY < 1
+		) {
+			throw new Error(
+				`Ground material ${definition.id} stable variant domain must contain whole texture repeats`,
+			);
+		}
+	}
+
 	if (definition.variation?.weights) {
 		for (const weight of definition.variation.weights) {
 			if (!Number.isFinite(weight) || weight <= 0) {
@@ -363,6 +450,29 @@ export function groundMaterialDefinition(
 		throw new Error(`Unknown ground material: ${id}`);
 	}
 	return definition;
+}
+
+/**
+ * Return the coordinate used to seed deterministic material variation.
+ *
+ * Materials without a stable domain retain the original per-tile behaviour.
+ * Structured surfaces can group logical tiles into larger domains without
+ * introducing a material-specific renderer algorithm.
+ */
+export function groundVariantDomainCoord(
+	definition: GroundMaterialDefinition,
+	coord: GridCoord,
+): GridCoord {
+	const domain = definition.variation?.stableDomain;
+
+	if (!domain) {
+		return coord;
+	}
+
+	return {
+		x: Math.floor(coord.x / domain.tilesX),
+		y: Math.floor(coord.y / domain.tilesY),
+	};
 }
 
 export function defaultGroundMaterialId(

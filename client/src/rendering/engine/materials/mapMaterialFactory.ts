@@ -72,10 +72,13 @@ export function preloadMapMaterials(): Promise<void> {
 }
 
 /**
- * Resolve one compiled tile to a region of the single shared ground atlas.
+ * Resolve one ground material to one base image inside the shared atlas.
  *
- * Every returned region references the same TextureSource. Texture variation
- * therefore changes UVs rather than draw-call identity.
+ * `variantHash` may represent either:
+ * - one logical tile, or
+ * - one stable material-variation domain.
+ *
+ * The renderer does not care which. It only consumes a deterministic hash.
  */
 export function resolveGroundAtlasRegion(
 	materialId: GroundMaterialId,
@@ -88,28 +91,18 @@ export function resolveGroundAtlasRegion(
 	}
 	const definition = groundMaterialDefinition(materialId);
 	const assets = baseAssetsForGroundMaterial(definition);
-
-	if (definition.sampling?.kind === "surface-repeat" && assets.length > 1) {
-		throw new Error(
-			`Ground material ${definition.id} uses surface-repeat but has ${assets.length} base textures; Phase 12 continuous materials currently require one base texture`,
-		);
-	}
-
 	if (assets.length > 0) {
 		const variantIndex = selectWeightedVariantIndex(
 			variantHash,
 			assets.length,
 			definition.variation?.weights,
 		);
-
 		const asset = assets[variantIndex];
 		const region = atlasRegionsByUrl.get(asset.url);
-
 		if (region) {
 			return region;
 		}
 	}
-
 	return fallbackAtlasRegion(definition.fallbackColor);
 }
 

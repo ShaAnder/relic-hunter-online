@@ -32,7 +32,10 @@ import {
 	type CompiledDynamicBarrierAnchor,
 } from "./CompiledFloorVisual";
 import { compileTileTopology } from "./TileTopologyCompiler";
-import { resolveGroundMaterial } from "../materials/GroundMaterialCatalog";
+import {
+	groundVariantDomainCoord,
+	resolveGroundMaterial,
+} from "../materials/GroundMaterialCatalog";
 import {
 	groundVariantHash,
 	type VisualMaterialRef,
@@ -267,7 +270,7 @@ export class MapVisualCompiler {
 						variantHash: groundVariantHash(
 							options.mapSeed,
 							options.floorIndex,
-							coord,
+							groundVariantDomainCoord(materialDefinition, coord),
 						),
 					},
 
