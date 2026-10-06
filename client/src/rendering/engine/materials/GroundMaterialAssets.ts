@@ -5,7 +5,7 @@ export interface GroundAssetRef {
 	url: string;
 }
 
-const groundModules = import.meta.glob("../../assets/map/tiles/**/*.png", {
+const groundModules = import.meta.glob("../../../assets/map/tiles/**/*.png", {
 	eager: true,
 	import: "default",
 }) as Record<string, string>;
@@ -44,7 +44,7 @@ export function edgeAssetsForGroundMaterial(
 	}
 
 	return groundAssetsForFolder(
-		treatment.kind === "overlay"
+		treatment.kind === "border"
 			? treatment.textureFolder
 			: treatment.maskFolder,
 	);

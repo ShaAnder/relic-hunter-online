@@ -18,19 +18,33 @@ export interface GroundMaterialDefinition {
 	animation?: GroundAnimationDefinition;
 }
 
+export type GroundSurfaceWrapMode = "repeat" | "mirror";
+
 export type GroundSamplingDefinition =
 	| {
 			kind: "tile";
 	  }
 	| {
 			kind: "surface-repeat";
+
 			/**
-			 * Number of logical cells covered by one complete texture repeat.
-			 * means the pattern repeats every 4x4 logical cells rather than
-			 * restarting inside every cell.
+			 * Number of logical cells covered by one full source texture.
 			 */
 			repeatTilesX: number;
 			repeatTilesY: number;
+			/**
+			 * `repeat`
+			 *     ordinary wrapping:
+			 *         A A A A
+			 *
+			 * `mirror`
+			 *     alternate repeat blocks are mirrored:
+			 *         A Ax A Ax
+			 *
+			 * Mirror wrapping reduces obvious wallpaper seams without changing
+			 * logical tile geometry or creating additional Mesh objects.
+			 */
+			wrap?: GroundSurfaceWrapMode;
 	  };
 
 export interface GroundVariationDefinition {
@@ -46,15 +60,20 @@ export interface GroundVariationDefinition {
 
 export type GroundEdgeTreatmentDefinition =
 	| {
-			kind: "overlay";
-			// Transparent RGBA overlays named by same-surface topology mask
+			/**
+			 * Structured border assembled from one canonical directional edge.
+			 *
+			 * The shader rotates the primitive based on exposed N/E/S/W sides.
+			 */
+			kind: "border";
 			textureFolder: string;
 	  }
 	| {
+			/**
+			 * Organic coverage remains a fully authored 4-bit mask set.
+			 */
 			kind: "coverage";
-			// Greyscale/RGBA coverage masks named:
 			maskFolder: string;
-			// Renderer-neutral material rendered below the primary material.
 			underlayMaterialId: GroundMaterialId;
 	  };
 
@@ -150,16 +169,26 @@ const defs: readonly GroundMaterialDefinition[] = [
 		textureFolder: "pavement/flagstone-warm/base",
 		fallbackColor: RHO_MATERIAL_PALETTE.stoneMid,
 		compatibleTileCodes: [EdgeMapTileCode.Floor, EdgeMapTileCode.Pavement],
+
 		sampling: {
 			kind: "surface-repeat",
 			repeatTilesX: 4,
 			repeatTilesY: 4,
+
+			/**
+			 * Alternate whole repeat domains are mirrored.
+			 *
+			 * This is NOT per-logical-tile flipping.
+			 */
+			wrap: "mirror",
 		},
+
 		edgeTreatment: {
-			kind: "overlay",
-			textureFolder: "pavement/flagstone-warm/topology",
+			kind: "border",
+			textureFolder: "pavement/flagstone-warm/border",
 		},
 	},
+
 	{
 		id: groundMaterialId("road.earth.warm"),
 		label: "Warm Earth Road",

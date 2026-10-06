@@ -17,11 +17,13 @@ import {
 	groundSampling,
 } from "../materials/GroundMaterialCatalog";
 import {
+	GROUND_EDGE_BORDER,
 	GROUND_EDGE_COVERAGE,
 	GROUND_EDGE_NONE,
-	GROUND_EDGE_OVERLAY,
 	GROUND_SAMPLING_SURFACE_REPEAT,
 	GROUND_SAMPLING_TILE,
+	GROUND_WRAP_MIRROR,
+	GROUND_WRAP_REPEAT,
 } from "../materials/GroundMaterialGpuCodes";
 
 export interface GroundGpuLayer {
@@ -29,6 +31,7 @@ export interface GroundGpuLayer {
 	samplingMode: number;
 	repeatTilesX: number;
 	repeatTilesY: number;
+	wrapMode: number;
 }
 
 export interface ResolvedGroundGpuMaterial {
@@ -83,10 +86,13 @@ export class GpuMaterialLibrary {
 		const definition = groundMaterialDefinition(materialId);
 		const sampling = groundSampling(definition);
 		const region = resolveGroundAtlasRegion(materialId, variantHash);
+		const wrapMode =
+			sampling.kind === "surface-repeat" && sampling.wrap === "mirror"
+				? GROUND_WRAP_MIRROR
+				: GROUND_WRAP_REPEAT;
 
 		return {
 			atlasRect: [region.u0, region.v0, region.u1, region.v1],
-
 			samplingMode:
 				sampling.kind === "surface-repeat"
 					? GROUND_SAMPLING_SURFACE_REPEAT
@@ -94,9 +100,9 @@ export class GpuMaterialLibrary {
 
 			repeatTilesX:
 				sampling.kind === "surface-repeat" ? sampling.repeatTilesX : 1,
-
 			repeatTilesY:
 				sampling.kind === "surface-repeat" ? sampling.repeatTilesY : 1,
+			wrapMode,
 		};
 	}
 
@@ -130,8 +136,8 @@ export class GpuMaterialLibrary {
 			: null;
 
 		const edgeMode =
-			treatment?.kind === "overlay"
-				? GROUND_EDGE_OVERLAY
+			treatment?.kind === "border"
+				? GROUND_EDGE_BORDER
 				: treatment?.kind === "coverage"
 					? GROUND_EDGE_COVERAGE
 					: GROUND_EDGE_NONE;

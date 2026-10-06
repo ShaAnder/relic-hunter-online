@@ -15,6 +15,7 @@ export interface MeshBatchData {
 
 	primaryParams: Float32Array;
 	underlayParams: Float32Array;
+	edgeParams: Float32Array;
 	animationParams: Float32Array;
 
 	indices: Uint32Array;

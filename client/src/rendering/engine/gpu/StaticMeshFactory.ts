@@ -21,6 +21,7 @@ in vec4 aUnderlayAtlasRect;
 in vec4 aEdgeAtlasRect;
 
 in vec4 aPrimaryParams;
+in vec4 aEdgeParams;
 in vec4 aUnderlayParams;
 in vec4 aAnimationParams;
 
@@ -34,6 +35,7 @@ out vec4 vUnderlayAtlasRect;
 out vec4 vEdgeAtlasRect;
 
 out vec4 vPrimaryParams;
+out vec4 vEdgeParams;
 out vec4 vUnderlayParams;
 out vec4 vAnimationParams;
 
@@ -63,20 +65,14 @@ void main() {
 	vEdgeAtlasRect = aEdgeAtlasRect;
 
 	vPrimaryParams = aPrimaryParams;
+	vEdgeParams =	aEdgeParams;
 	vUnderlayParams = aUnderlayParams;
 	vAnimationParams = aAnimationParams;
 
 	vPresentation = aPresentation;
 }
-
-}
 `;
 
-/**
- * Runs for the pixels produced by the ground triangles: hidden presentation is
- * discarded, washed presentation is darkened, and normal presentation is drawn
- * unchanged using either the tile texture or its fallback colour.
- */
 const GROUND_FRAGMENT_SHADER = `
 precision mediump float;
 
@@ -89,6 +85,7 @@ in vec4 vEdgeAtlasRect;
 
 in vec4 vPrimaryParams;
 in vec4 vUnderlayParams;
+in vec4 vEdgeParams;
 in vec4 vAnimationParams;
 
 in float vPresentation;
@@ -97,6 +94,10 @@ uniform sampler2D uSampler;
 uniform vec3 uWashColor;
 uniform float uWashAlpha;
 
+/**
+ * Convert normalized 0..1 coordinates inside one material image into the
+ * corresponding region of the shared ground texture atlas.
+ */
 vec2 atlasUv(
 	vec2 logicalUv,
 	vec4 rect
@@ -108,22 +109,96 @@ vec2 atlasUv(
 	);
 }
 
+/**
+ * Alternate complete texture-repeat domains by mirroring them.
+ *
+ * This reduces obvious wallpaper repetition without independently flipping
+ * individual logical map cells.
+ */
+vec2 mirrorRepeatUv(
+	vec2 repeatUv
+) {
+	vec2 repeatCell =
+		floor(repeatUv);
+
+	vec2 uv =
+		fract(repeatUv);
+
+	if (
+		mod(
+			repeatCell.x,
+			2.0
+		) > 0.5
+	) {
+		uv.x =
+			1.0 - uv.x;
+	}
+
+	if (
+		mod(
+			repeatCell.y,
+			2.0
+		) > 0.5
+	) {
+		uv.y =
+			1.0 - uv.y;
+	}
+
+	return uv;
+}
+
+/**
+ * Resolve the logical UV used by a material layer.
+ *
+ * params:
+ *     x = sampling mode
+ *     y = repeatTilesX
+ *     z = repeatTilesY
+ *     w = wrap mode
+ */
 vec2 materialLogicalUv(
 	vec2 localUv,
 	vec2 surfaceUv,
-	float samplingMode,
-	vec2 repeatTiles
+	vec4 params
 ) {
-	if (samplingMode > 0.5) {
-		return fract(
+	float samplingMode =
+		params.x;
+
+	vec2 repeatTiles =
+		params.yz;
+
+	float wrapMode =
+		params.w;
+
+	if (
+		samplingMode > 0.5
+	) {
+		vec2 repeatUv =
 			surfaceUv /
-			max(repeatTiles, vec2(0.0001))
+			max(
+				repeatTiles,
+				vec2(0.0001)
+			);
+
+		if (
+			wrapMode > 0.5
+		) {
+			return mirrorRepeatUv(
+				repeatUv
+			);
+		}
+
+		return fract(
+			repeatUv
 		);
 	}
 
 	return localUv;
 }
 
+/**
+ * Sample one base-material layer.
+ */
 vec4 sampleMaterialLayer(
 	vec2 localUv,
 	vec2 surfaceUv,
@@ -134,8 +209,7 @@ vec4 sampleMaterialLayer(
 		materialLogicalUv(
 			localUv,
 			surfaceUv,
-			params.x,
-			params.yz
+			params
 		);
 
 	return texture2D(
@@ -147,11 +221,146 @@ vec4 sampleMaterialLayer(
 	);
 }
 
+/**
+ * The compiler's ordinary ground UVs describe a diamond:
+ *
+ *     top    = 0.5, 0.0
+ *     right  = 1.0, 0.5
+ *     bottom = 0.5, 1.0
+ *     left   = 0.0, 0.5
+ *
+ * Our reusable edge.png is authored as a square image, so convert that
+ * diamond-local coordinate system back into normal square-local UVs before
+ * rotating and sampling the edge primitive.
+ */
+vec2 diamondToSquareUv(
+	vec2 uv
+) {
+	vec2 squareUv =
+		vec2(
+			uv.x + uv.y - 0.5,
+			uv.y - uv.x + 0.5
+		);
+
+	return clamp(
+		squareUv,
+		0.0,
+		1.0
+	);
+}
+
+/**
+ * Test one bit of the four-cardinal same-surface topology mask.
+ *
+ * N = 1
+ * E = 2
+ * S = 4
+ * W = 8
+ *
+ * Bit SET   = connected.
+ * Bit CLEAR = exposed border.
+ */
+bool maskHasBit(
+	float mask,
+	float bit
+) {
+	return
+		mod(
+			floor(
+				mask / bit
+			),
+			2.0
+		) > 0.5;
+}
+
+/**
+ * edge.png is authored with its border on the NORTH side.
+ *
+ * Reorient that same primitive for the other three cardinal directions.
+ */
+vec2 edgeUvNorth(
+	vec2 uv
+) {
+	return uv;
+}
+
+vec2 edgeUvEast(
+	vec2 uv
+) {
+	return vec2(
+		uv.y,
+		1.0 - uv.x
+	);
+}
+
+vec2 edgeUvSouth(
+	vec2 uv
+) {
+	return vec2(
+		1.0 - uv.x,
+		1.0 - uv.y
+	);
+}
+
+vec2 edgeUvWest(
+	vec2 uv
+) {
+	return vec2(
+		1.0 - uv.y,
+		uv.x
+	);
+}
+
+/**
+ * Sample the reusable structured-border primitive.
+ */
+vec4 sampleBorderPrimitive(
+	vec2 localUv,
+	vec4 rect
+) {
+	return texture2D(
+		uSampler,
+		atlasUv(
+			localUv,
+			rect
+		)
+	);
+}
+
+/**
+ * The border replaces the base appearance only where the border primitive has
+ * alpha. Transparent areas leave the continuous base material unchanged.
+ */
+vec4 applyBorderSample(
+	vec4 baseColor,
+	vec4 border
+) {
+	baseColor.rgb =
+		mix(
+			baseColor.rgb,
+			border.rgb,
+			border.a
+		);
+
+	baseColor.a =
+		max(
+			baseColor.a,
+			border.a
+		);
+
+	return baseColor;
+}
+
 void main() {
-	if (vPresentation < 0.5) {
+	if (
+		vPresentation < 0.5
+	) {
 		discard;
 	}
 
+	/**
+	 * Start with the primary continuous/tile material.
+	 */
 	vec4 baseColor =
 		sampleMaterialLayer(
 			vLocalUV,
@@ -160,32 +369,120 @@ void main() {
 			vPrimaryParams
 		);
 
+	/**
+	 * edgeParams:
+	 *     x = edge mode
+	 *     y = sameSurfaceMask
+	 *     z = reserved
+	 *     w = reserved
+	 */
 	float edgeMode =
-		vPrimaryParams.w;
+		vEdgeParams.x;
 
-	if (edgeMode > 0.5 && edgeMode < 1.5) {
-		vec4 overlay =
-			texture2D(
-				uSampler,
-				atlasUv(
-					vLocalUV,
-					vEdgeAtlasRect
-				)
+	float sameSurfaceMask =
+		vEdgeParams.y;
+
+	/**
+	 * Structured border materials such as Warm Flagstone.
+	 *
+	 * The topology mask tells us which sides are exposed. One square edge
+	 * primitive is converted from diamond-local UV space, rotated, and composed
+	 * once for each exposed side.
+	 */
+	if (
+		edgeMode > 0.5 &&
+		edgeMode < 1.5
+	) {
+		vec2 edgeLocalUv =
+			diamondToSquareUv(
+				vLocalUV
 			);
 
-		baseColor.rgb =
-			mix(
-				baseColor.rgb,
-				overlay.rgb,
-				overlay.a
-			);
+		// North exposed.
+		if (
+			!maskHasBit(
+				sameSurfaceMask,
+				1.0
+			)
+		) {
+			baseColor =
+				applyBorderSample(
+					baseColor,
+					sampleBorderPrimitive(
+						edgeUvNorth(
+							edgeLocalUv
+						),
+						vEdgeAtlasRect
+					)
+				);
+		}
 
-		baseColor.a =
-			max(
-				baseColor.a,
-				overlay.a
-			);
-	} else if (edgeMode > 1.5) {
+		// East exposed.
+		if (
+			!maskHasBit(
+				sameSurfaceMask,
+				2.0
+			)
+		) {
+			baseColor =
+				applyBorderSample(
+					baseColor,
+					sampleBorderPrimitive(
+						edgeUvEast(
+							edgeLocalUv
+						),
+						vEdgeAtlasRect
+					)
+				);
+		}
+
+		// South exposed.
+		if (
+			!maskHasBit(
+				sameSurfaceMask,
+				4.0
+			)
+		) {
+			baseColor =
+				applyBorderSample(
+					baseColor,
+					sampleBorderPrimitive(
+						edgeUvSouth(
+							edgeLocalUv
+						),
+						vEdgeAtlasRect
+					)
+				);
+		}
+
+		// West exposed.
+		if (
+			!maskHasBit(
+				sameSurfaceMask,
+				8.0
+			)
+		) {
+			baseColor =
+				applyBorderSample(
+					baseColor,
+					sampleBorderPrimitive(
+						edgeUvWest(
+							edgeLocalUv
+						),
+						vEdgeAtlasRect
+					)
+				);
+		}
+	}
+
+	/**
+	 * Organic coverage materials such as Warm Grass keep their complete
+	 * topology-mask images because irregular combined silhouettes are useful
+	 * there.
+	 */
+	else if (
+		edgeMode > 1.5
+	) {
 		vec4 underlay =
 			sampleMaterialLayer(
 				vLocalUV,
@@ -214,7 +511,12 @@ void main() {
 			);
 	}
 
-	if (vPresentation < 1.5) {
+	/**
+	 * Fog/focus presentation remains independent from surface construction.
+	 */
+	if (
+		vPresentation < 1.5
+	) {
 		baseColor.rgb =
 			mix(
 				baseColor.rgb,
@@ -223,7 +525,8 @@ void main() {
 			);
 	}
 
-	gl_FragColor = baseColor;
+	gl_FragColor =
+		baseColor;
 }
 `;
 
@@ -293,6 +596,11 @@ export function createStaticGroundMesh(
 		format: "float32x4",
 	});
 
+	geometry.addAttribute("aEdgeParams", {
+		buffer: data.edgeParams,
+		format: "float32x4",
+	});
+
 	geometry.addAttribute("aUnderlayParams", {
 		buffer: data.underlayParams,
 		format: "float32x4",
@@ -311,6 +619,7 @@ export function createStaticGroundMesh(
 	geometry.getBuffer("aUnderlayAtlasRect").static = true;
 	geometry.getBuffer("aEdgeAtlasRect").static = true;
 	geometry.getBuffer("aPrimaryParams").static = true;
+	geometry.getBuffer("aEdgeParams").static = true;
 	geometry.getBuffer("aUnderlayParams").static = true;
 	geometry.getBuffer("aAnimationParams").static = true;
 

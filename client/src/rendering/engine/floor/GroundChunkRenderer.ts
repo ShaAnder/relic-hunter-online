@@ -132,7 +132,7 @@ export class GroundChunkRenderer {
 						material.primary.samplingMode,
 						material.primary.repeatTilesX,
 						material.primary.repeatTilesY,
-						material.edgeMode,
+						material.primary.wrapMode,
 					],
 
 					underlayParams: material.underlay
@@ -140,9 +140,11 @@ export class GroundChunkRenderer {
 								material.underlay.samplingMode,
 								material.underlay.repeatTilesX,
 								material.underlay.repeatTilesY,
-								1,
+								material.underlay.wrapMode,
 							]
 						: [0, 1, 1, 0],
+
+					edgeParams: [material.edgeMode, tile.topology.sameSurfaceMask, 0, 0],
 
 					animationParams: [
 						material.animationSpeed,
@@ -212,21 +214,10 @@ export class GroundChunkRenderer {
  * texture atlas.
  */
 function surfaceUvsForTile(tile: CompiledTileSurface): VisualUvs {
-	const [u0, v0, u1, v1, u2, v2, u3, v3] = tile.uvs;
+	const x = tile.coord.x;
+	const y = tile.coord.y;
 
-	return [
-		tile.coord.x + u0,
-		tile.coord.y + v0,
-
-		tile.coord.x + u1,
-		tile.coord.y + v1,
-
-		tile.coord.x + u2,
-		tile.coord.y + v2,
-
-		tile.coord.x + u3,
-		tile.coord.y + v3,
-	];
+	return [x, y, x + 1, y, x + 1, y + 1, x, y + 1];
 }
 
 /**

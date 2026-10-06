@@ -124,24 +124,41 @@ export function resolveGroundEdgeAtlasRegion(
 	}
 
 	const definition = groundMaterialDefinition(materialId);
+	const treatment = definition.edgeTreatment;
+
+	if (!treatment) {
+		return null;
+	}
+
 	const assets = edgeAssetsForGroundMaterial(definition);
 
 	if (assets.length === 0) {
 		return null;
 	}
 
-	const expectedSuffix = `/${sameSurfaceMask.toString().padStart(2, "0")}.png`;
+	if (treatment.kind === "border") {
+		const asset = assets.find(({ sourcePath }) =>
+			sourcePath.endsWith("/edge.png"),
+		);
 
+		if (!asset) {
+			throw new Error(
+				`Ground material ${materialId} is missing border primitive /edge.png`,
+			);
+		}
+		return atlasRegionsByUrl.get(asset.url) ?? null;
+	}
+
+	const expectedSuffix = `/${sameSurfaceMask.toString().padStart(2, "0")}.png`;
 	const asset = assets.find(({ sourcePath }) =>
 		sourcePath.endsWith(expectedSuffix),
 	);
 
 	if (!asset) {
 		throw new Error(
-			`Ground material ${materialId} is missing edge asset ${expectedSuffix}`,
+			`Ground material ${materialId} is missing coverage asset ${expectedSuffix}`,
 		);
 	}
-
 	return atlasRegionsByUrl.get(asset.url) ?? null;
 }
 

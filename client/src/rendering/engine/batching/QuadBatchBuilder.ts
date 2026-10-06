@@ -12,6 +12,7 @@ export interface GroundQuadGpuData {
 
 	primaryParams: GpuVec4;
 	underlayParams: GpuVec4;
+	edgeParams: GpuVec4;
 	animationParams: GpuVec4;
 }
 
@@ -37,6 +38,7 @@ export class QuadBatchBuilder {
 	private readonly indices: number[] = [];
 	private readonly presentation: number[] = [];
 	private readonly quadTileIndices: number[] = [];
+	private readonly edgeParams: number[] = [];
 
 	addQuad(
 		quad: VisualQuad,
@@ -61,6 +63,7 @@ export class QuadBatchBuilder {
 
 			this.primaryParams.push(...gpu.primaryParams);
 			this.underlayParams.push(...gpu.underlayParams);
+			this.edgeParams.push(...gpu.edgeParams);
 			this.animationParams.push(...gpu.animationParams);
 		}
 
@@ -98,6 +101,7 @@ export class QuadBatchBuilder {
 			primaryParams: new Float32Array(this.primaryParams),
 			underlayParams: new Float32Array(this.underlayParams),
 			animationParams: new Float32Array(this.animationParams),
+			edgeParams: new Float32Array(this.edgeParams),
 
 			indices: new Uint32Array(this.indices),
 			presentation: new Float32Array(this.presentation),
