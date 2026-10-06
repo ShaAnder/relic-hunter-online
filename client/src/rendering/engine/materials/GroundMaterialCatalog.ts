@@ -192,7 +192,7 @@ const defs: readonly GroundMaterialDefinition[] = [
 		},
 		edgeTreatment: {
 			kind: "coverage",
-			maskFolder: "phase12/nature/grass-warm/coverage",
+			maskFolder: "phase12/nature/grass-warm/coverage-masks",
 			underlayMaterialId: groundMaterialId("nature.soil.warm"),
 		},
 	},
