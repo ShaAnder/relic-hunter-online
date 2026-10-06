@@ -8,19 +8,62 @@ import { RHO_MATERIAL_PALETTE } from "./RhoMaterialPalette";
 export interface GroundMaterialDefinition {
 	id: GroundMaterialId;
 	label: string;
-	/**
-	 * Directory under assets/map/tiles used by the current asset set.
-	 * Null means this material intentionally uses only its fallback colour.
-	 */
 	textureFolder: string | null;
 	fallbackColor: number;
-	/**
-	 * Authoring constraint, not gameplay behaviour.
-	 *
-	 * It prevents obviously misleading combinations while still allowing more
-	 * than one visual material for the same gameplay tile semantic.
-	 */
 	compatibleTileCodes: readonly EdgeMapTileCode[];
+
+	sampling?: GroundSamplingDefinition;
+	variation?: GroundVariationDefinition;
+	edgeTreatment?: GroundEdgeTreatmentDefinition;
+	animation?: GroundAnimationDefinition;
+}
+
+export type GroundSamplingDefinition =
+	| {
+			kind: "tile";
+	  }
+	| {
+			kind: "surface-repeat";
+			/**
+			 * Number of logical cells covered by one complete texture repeat.
+			 * means the pattern repeats every 4x4 logical cells rather than
+			 * restarting inside every cell.
+			 */
+			repeatTilesX: number;
+			repeatTilesY: number;
+	  };
+
+export interface GroundVariationDefinition {
+	/**
+	 * Optional weight per lexically sorted base texture.
+	 *
+	 * Tile-reset materials may use weighted whole-texture variants.
+	 * Continuous materials should normally use one base texture first so
+	 * pattern continuity is not broken at cell boundaries.
+	 */
+	weights?: readonly number[];
+}
+
+export type GroundEdgeTreatmentDefinition =
+	| {
+			kind: "overlay";
+			// Transparent RGBA overlays named by same-surface topology mask
+			textureFolder: string;
+	  }
+	| {
+			kind: "coverage";
+			// Greyscale/RGBA coverage masks named:
+			maskFolder: string;
+			// Renderer-neutral material rendered below the primary material.
+			underlayMaterialId: GroundMaterialId;
+	  };
+
+export interface GroundAnimationDefinition {
+	kind: "flow";
+	/** Texture-repeat cycles per second at unit authored flow. */
+	speed: number;
+	/** Environmental wind contribution to UV movement. */
+	windInfluence: number;
 }
 
 const defs: readonly GroundMaterialDefinition[] = [
@@ -102,11 +145,20 @@ const defs: readonly GroundMaterialDefinition[] = [
 		compatibleTileCodes: [EdgeMapTileCode.LadderTop],
 	},
 	{
-		id: groundMaterialId("floor.stone.warm"),
-		label: "Warm Stone",
-		textureFolder: "style-lock/stone-warm",
+		id: groundMaterialId("pavement.flagstone.warm"),
+		label: "Warm Flagstone",
+		textureFolder: "phase12/pavement/flagstone-warm/base",
 		fallbackColor: RHO_MATERIAL_PALETTE.stoneMid,
 		compatibleTileCodes: [EdgeMapTileCode.Floor, EdgeMapTileCode.Pavement],
+		sampling: {
+			kind: "surface-repeat",
+			repeatTilesX: 4,
+			repeatTilesY: 4,
+		},
+		edgeTreatment: {
+			kind: "overlay",
+			textureFolder: "phase12/pavement/flagstone-warm/topology",
+		},
 	},
 	{
 		id: groundMaterialId("road.earth.warm"),
@@ -116,24 +168,123 @@ const defs: readonly GroundMaterialDefinition[] = [
 		compatibleTileCodes: [EdgeMapTileCode.Road],
 	},
 	{
+		id: groundMaterialId("nature.soil.warm"),
+		label: "Warm Soil",
+		textureFolder: "phase12/nature/soil-warm/base",
+		fallbackColor: RHO_MATERIAL_PALETTE.earthBase,
+		compatibleTileCodes: [EdgeMapTileCode.Nature],
+		sampling: {
+			kind: "surface-repeat",
+			repeatTilesX: 4,
+			repeatTilesY: 4,
+		},
+	},
+	{
 		id: groundMaterialId("nature.grass.warm"),
 		label: "Warm Grass",
-		textureFolder: "style-lock/grass-warm",
+		textureFolder: "phase12/nature/grass-warm/base",
 		fallbackColor: RHO_MATERIAL_PALETTE.grassBase,
 		compatibleTileCodes: [EdgeMapTileCode.Nature],
+		sampling: {
+			kind: "surface-repeat",
+			repeatTilesX: 4,
+			repeatTilesY: 4,
+		},
+		edgeTreatment: {
+			kind: "coverage",
+			maskFolder: "phase12/nature/grass-warm/coverage",
+			underlayMaterialId: groundMaterialId("nature.soil.warm"),
+		},
 	},
 	{
 		id: groundMaterialId("river.water.cool"),
 		label: "Cool Water",
-		textureFolder: "style-lock/water-cool",
+		textureFolder: "phase12/water/cool/base",
 		fallbackColor: RHO_MATERIAL_PALETTE.waterBase,
 		compatibleTileCodes: [EdgeMapTileCode.River],
+		sampling: {
+			kind: "surface-repeat",
+			repeatTilesX: 4,
+			repeatTilesY: 4,
+		},
+		animation: {
+			kind: "flow",
+			speed: 0.08,
+			windInfluence: 0.2,
+		},
 	},
 ];
 
 const byId = new Map<GroundMaterialId, GroundMaterialDefinition>(
 	defs.map((def) => [def.id, def]),
 );
+
+function validateGroundMaterialDefinition(
+	definition: GroundMaterialDefinition,
+): void {
+	const sampling = groundSampling(definition);
+	if (sampling.kind === "surface-repeat") {
+		if (
+			!Number.isFinite(sampling.repeatTilesX) ||
+			!Number.isFinite(sampling.repeatTilesY) ||
+			sampling.repeatTilesX <= 0 ||
+			sampling.repeatTilesY <= 0
+		) {
+			throw new Error(
+				`Ground material ${definition.id} has invalid surface-repeat scale`,
+			);
+		}
+	}
+	if (definition.variation?.weights) {
+		for (const weight of definition.variation.weights) {
+			if (!Number.isFinite(weight) || weight <= 0) {
+				throw new Error(
+					`Ground material ${definition.id} has an invalid variant weight`,
+				);
+			}
+		}
+	}
+	if (definition.animation) {
+		if (
+			!Number.isFinite(definition.animation.speed) ||
+			!Number.isFinite(definition.animation.windInfluence)
+		) {
+			throw new Error(
+				`Ground material ${definition.id} has invalid animation values`,
+			);
+		}
+	}
+	if (
+		definition.edgeTreatment?.kind === "coverage" &&
+		definition.edgeTreatment.underlayMaterialId === definition.id
+	) {
+		throw new Error(
+			`Ground material ${definition.id} cannot use itself as a coverage underlay`,
+		);
+	}
+}
+
+for (const definition of defs) {
+	validateGroundMaterialDefinition(definition);
+}
+
+for (const definition of defs) {
+	const treatment = definition.edgeTreatment;
+	if (treatment?.kind !== "coverage") {
+		continue;
+	}
+	const underlay = byId.get(treatment.underlayMaterialId);
+	if (!underlay) {
+		throw new Error(
+			`Ground material ${definition.id} references unknown underlay ${treatment.underlayMaterialId}`,
+		);
+	}
+	if (underlay.edgeTreatment?.kind === "coverage") {
+		throw new Error(
+			`Coverage underlay ${underlay.id} must not itself use coverage in Phase 12`,
+		);
+	}
+}
 
 const defaultByTileCode = new Map<EdgeMapTileCode, GroundMaterialId>([
 	[EdgeMapTileCode.Floor, groundMaterialId("floor.default")],
@@ -151,6 +302,28 @@ const defaultByTileCode = new Map<EdgeMapTileCode, GroundMaterialId>([
 
 export function allGroundMaterials(): readonly GroundMaterialDefinition[] {
 	return defs;
+}
+
+export function groundSampling(
+	definition: GroundMaterialDefinition,
+): GroundSamplingDefinition {
+	return (
+		definition.sampling ?? {
+			kind: "tile",
+		}
+	);
+}
+
+export function groundAnimation(
+	definition: GroundMaterialDefinition,
+): GroundAnimationDefinition | null {
+	return definition.animation ?? null;
+}
+
+export function groundEdgeTreatment(
+	definition: GroundMaterialDefinition,
+): GroundEdgeTreatmentDefinition | null {
+	return definition.edgeTreatment ?? null;
 }
 
 export function groundMaterialDefinition(
