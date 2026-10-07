@@ -214,12 +214,7 @@ const defs: readonly GroundMaterialDefinition[] = [
 			kind: "surface-repeat",
 			repeatTilesX: 1,
 			repeatTilesY: 1,
-
-			/**
-			 * Keep the existing cheap reflected repetition in addition
-			 * to choosing among the four source variants.
-			 */
-			wrap: "mirror",
+			wrap: "repeat",
 		},
 		variation: {
 			/**

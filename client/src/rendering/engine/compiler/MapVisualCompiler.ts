@@ -33,6 +33,7 @@ import {
 } from "./CompiledFloorVisual";
 import { compileTileTopology } from "./TileTopologyCompiler";
 import {
+	groundSampling,
 	groundVariantDomainCoord,
 	resolveGroundMaterial,
 } from "../materials/GroundMaterialCatalog";
@@ -235,12 +236,18 @@ export class MapVisualCompiler {
 					tileCode,
 					compiled.groundMaterialOverrides.get(key),
 				);
-				const trueFootprint = this.tileNeedsTrueFootprint(
-					compiled,
-					coord,
-					elevation,
-					tileCode,
-				);
+				/**
+				 * Continuous/material-domain surfaces need their exact logical footprint.
+				 *
+				 * The legacy 1.09 quad oversize is safe only for old tile-reset rendering.
+				 * Once neighbouring cells may resolve to different atlas variants, overlap
+				 * causes one tile's texture to paint over another.
+				 *
+				 * Exact geometry also keeps vSurfaceUV aligned with logical cell boundaries.
+				 */
+				const trueFootprint =
+					groundSampling(materialDefinition).kind === "surface-repeat" ||
+					this.tileNeedsTrueFootprint(compiled, coord, elevation, tileCode);
 
 				const chunkId = renderChunkIdForTile(coord, chunkSize);
 				const id = `tile:${x},${y}` as VisualSurfaceId;
